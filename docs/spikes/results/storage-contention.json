@@ -1,0 +1,3690 @@
+{
+  "spike": "#607",
+  "generatedAt": "2026-09-23T17:22:17.629Z",
+  "environment": {
+    "browser": "chromium 147.0.7727.15",
+    "cpu": "Intel(R) Core(TM) i5-4300U CPU @ 1.90GHz",
+    "cores": 4,
+    "totalMemGB": 11.6,
+    "platform": "linux 7.0.0-31-generic"
+  },
+  "params": {
+    "durationMs": 15000,
+    "saturateMs": 6000
+  },
+  "scenarios": [
+    {
+      "name": "idb/per-write/default",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "indexeddb",
+        "backendOptions": {},
+        "buffer": false,
+        "topology": "direct",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 15085,
+      "totalCommitted": 7500,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 497,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15001,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 1.96,
+            "p50": 1.43,
+            "p95": 3.92,
+            "p99": 17.82,
+            "max": 30.1
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.52,
+              "p50": 1.05,
+              "p95": 3.11,
+              "p99": 16.31,
+              "max": 28.37
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 1.94,
+              "p50": 1.41,
+              "p95": 3.85,
+              "p99": 17.8,
+              "max": 30.09
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 1.96,
+                "p50": 1.43,
+                "p95": 3.92,
+                "p99": 17.82,
+                "max": 30.1
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15008,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 2.02,
+            "p50": 1.5,
+            "p95": 3.88,
+            "p99": 16.83,
+            "max": 27.25
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.58,
+              "p50": 1.12,
+              "p95": 3.2,
+              "p99": 15.64,
+              "max": 26.75
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 2,
+              "p50": 1.48,
+              "p95": 3.85,
+              "p99": 16.82,
+              "max": 27.24
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 2.02,
+                "p50": 1.5,
+                "p95": 3.88,
+                "p99": 16.83,
+                "max": 27.25
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 2,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15005,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 1.97,
+            "p50": 1.41,
+            "p95": 4.11,
+            "p99": 17.86,
+            "max": 28.73
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.51,
+              "p50": 1.02,
+              "p95": 3.4,
+              "p99": 16.53,
+              "max": 28.42
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 1.96,
+              "p50": 1.39,
+              "p95": 4.1,
+              "p99": 17.84,
+              "max": 28.71
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 1.97,
+                "p50": 1.41,
+                "p95": 4.11,
+                "p99": 17.86,
+                "max": 28.73
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 3,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15004,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 1.94,
+            "p50": 1.39,
+            "p95": 3.83,
+            "p99": 16.66,
+            "max": 38.1
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.52,
+              "p50": 1.02,
+              "p95": 3.12,
+              "p99": 15.39,
+              "max": 33.95
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 1.93,
+              "p50": 1.38,
+              "p95": 3.82,
+              "p99": 16.56,
+              "max": 38.07
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 1.94,
+                "p50": 1.39,
+                "p95": 3.83,
+                "p99": 16.66,
+                "max": 38.1
+              }
+            }
+          }
+        }
+      ],
+      "owner": null,
+      "reader": {
+        "reads": 152,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 152,
+          "mean": 0.71,
+          "p50": 0.59,
+          "p95": 1.35,
+          "p99": 2.99,
+          "max": 6.16
+        }
+      },
+      "frames": {
+        "frames": 887,
+        "frameGapMs": {
+          "n": 887,
+          "mean": 17.07,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 373.74
+        },
+        "framesOver50ms": 1,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 680017757,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 680017757,
+          "usage": 798946,
+          "usageDetails": {
+            "indexedDB": 798946
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 798946,
+        "bytesPerRecord": 107
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "idb/per-write/strict",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "indexeddb",
+        "backendOptions": {
+          "durability": "strict"
+        },
+        "buffer": false,
+        "topology": "direct",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 15067,
+      "totalCommitted": 7500,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 498,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15005,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 2.09,
+            "p50": 1.45,
+            "p95": 4.95,
+            "p99": 13.85,
+            "max": 35.63
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.62,
+              "p50": 1.06,
+              "p95": 4.03,
+              "p99": 13.45,
+              "max": 34.27
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 2.08,
+              "p50": 1.44,
+              "p95": 4.93,
+              "p99": 13.83,
+              "max": 35.6
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 2.09,
+                "p50": 1.45,
+                "p95": 4.95,
+                "p99": 13.85,
+                "max": 35.63
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15004,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 2.02,
+            "p50": 1.36,
+            "p95": 5.14,
+            "p99": 14.7,
+            "max": 34.82
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.53,
+              "p50": 0.92,
+              "p95": 4.13,
+              "p99": 14.2,
+              "max": 33.4
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 2.01,
+              "p50": 1.34,
+              "p95": 5.13,
+              "p99": 14.68,
+              "max": 34.79
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 2.02,
+                "p50": 1.36,
+                "p95": 5.14,
+                "p99": 14.7,
+                "max": 34.82
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 2,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15005,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 2.05,
+            "p50": 1.39,
+            "p95": 5.11,
+            "p99": 14.79,
+            "max": 37.88
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.59,
+              "p50": 1,
+              "p95": 3.93,
+              "p99": 12.93,
+              "max": 36.41
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 2.04,
+              "p50": 1.38,
+              "p95": 5.09,
+              "p99": 14.76,
+              "max": 37.84
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 2.05,
+                "p50": 1.39,
+                "p95": 5.11,
+                "p99": 14.79,
+                "max": 37.88
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 3,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15006,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 2.07,
+            "p50": 1.43,
+            "p95": 4.98,
+            "p99": 14.34,
+            "max": 33.95
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 1875,
+            "txnLockWaitMs": {
+              "n": 1875,
+              "mean": 1.58,
+              "p50": 1.03,
+              "p95": 4.09,
+              "p99": 12.61,
+              "max": 31.53
+            },
+            "txnCommitMs": {
+              "n": 1875,
+              "mean": 2.05,
+              "p50": 1.42,
+              "p95": 4.96,
+              "p99": 14.34,
+              "max": 33.91
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 1875,
+              "failed": 0,
+              "latencyMs": {
+                "n": 1875,
+                "mean": 2.07,
+                "p50": 1.43,
+                "p95": 4.98,
+                "p99": 14.34,
+                "max": 33.95
+              }
+            }
+          }
+        }
+      ],
+      "owner": null,
+      "reader": {
+        "reads": 152,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 152,
+          "mean": 0.86,
+          "p50": 0.6,
+          "p95": 2.43,
+          "p99": 5.16,
+          "max": 6.79
+        }
+      },
+      "frames": {
+        "frames": 909,
+        "frameGapMs": {
+          "n": 909,
+          "mean": 16.66,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 738330742,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 738330742,
+          "usage": 802407,
+          "usageDetails": {
+            "indexedDB": 802407
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 802407,
+        "bytesPerRecord": 107
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "idb/batched/relaxed",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "indexeddb",
+        "backendOptions": {
+          "durability": "relaxed"
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "direct",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 15062,
+      "totalCommitted": 7500,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 498,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15008,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 31.7,
+            "p50": 33.86,
+            "p95": 60.1,
+            "p99": 63.24,
+            "max": 68.21
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 230,
+            "txnLockWaitMs": {
+              "n": 230,
+              "mean": 1.26,
+              "p50": 0.69,
+              "p95": 3.66,
+              "p99": 8.51,
+              "max": 10.4
+            },
+            "txnCommitMs": {
+              "n": 230,
+              "mean": 2.98,
+              "p50": 2.35,
+              "p95": 6.97,
+              "p99": 9.55,
+              "max": 13.43
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 230,
+              "avgBatch": 8.2,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.69,
+                "p50": 25.96,
+                "p95": 57.35,
+                "p99": 57.76,
+                "max": 58.32
+              },
+              "commitMs": {
+                "n": 230,
+                "mean": 3.01,
+                "p50": 2.37,
+                "p95": 7,
+                "p99": 9.58,
+                "max": 13.44
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15004,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 31.15,
+            "p50": 30.33,
+            "p95": 59.86,
+            "p99": 61.74,
+            "max": 64.07
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 231,
+            "txnLockWaitMs": {
+              "n": 231,
+              "mean": 0.99,
+              "p50": 0.72,
+              "p95": 2.32,
+              "p99": 4.99,
+              "max": 9.44
+            },
+            "txnCommitMs": {
+              "n": 231,
+              "mean": 2.64,
+              "p50": 2.28,
+              "p95": 4.99,
+              "p99": 6.55,
+              "max": 11.57
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 231,
+              "avgBatch": 8.1,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.49,
+                "p50": 25.56,
+                "p95": 57.3,
+                "p99": 57.67,
+                "max": 58.27
+              },
+              "commitMs": {
+                "n": 231,
+                "mean": 2.66,
+                "p50": 2.3,
+                "p95": 5.04,
+                "p99": 6.58,
+                "max": 11.59
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 2,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15009,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 31.4,
+            "p50": 32.13,
+            "p95": 59.93,
+            "p99": 62.49,
+            "max": 73.85
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 231,
+            "txnLockWaitMs": {
+              "n": 231,
+              "mean": 1.21,
+              "p50": 0.79,
+              "p95": 3.4,
+              "p99": 9.25,
+              "max": 13.45
+            },
+            "txnCommitMs": {
+              "n": 231,
+              "mean": 2.93,
+              "p50": 2.32,
+              "p95": 5.73,
+              "p99": 10.21,
+              "max": 16.18
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 231,
+              "avgBatch": 8.1,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.45,
+                "p50": 25.18,
+                "p95": 57.29,
+                "p99": 57.68,
+                "max": 58.26
+              },
+              "commitMs": {
+                "n": 231,
+                "mean": 2.95,
+                "p50": 2.34,
+                "p95": 5.77,
+                "p99": 10.23,
+                "max": 16.21
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 3,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15007,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 31.59,
+            "p50": 33.79,
+            "p95": 60.06,
+            "p99": 62.77,
+            "max": 70.08
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 231,
+            "txnLockWaitMs": {
+              "n": 231,
+              "mean": 1.15,
+              "p50": 0.71,
+              "p95": 3.64,
+              "p99": 6.05,
+              "max": 11.5
+            },
+            "txnCommitMs": {
+              "n": 231,
+              "mean": 2.97,
+              "p50": 2.22,
+              "p95": 6.95,
+              "p99": 10.95,
+              "max": 15.45
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 231,
+              "avgBatch": 8.1,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.59,
+                "p50": 25.87,
+                "p95": 57.3,
+                "p99": 57.7,
+                "max": 58.54
+              },
+              "commitMs": {
+                "n": 231,
+                "mean": 2.99,
+                "p50": 2.25,
+                "p95": 6.97,
+                "p99": 10.98,
+                "max": 15.49
+              }
+            },
+            "direct": null
+          }
+        }
+      ],
+      "owner": null,
+      "reader": {
+        "reads": 152,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 152,
+          "mean": 0.98,
+          "p50": 0.66,
+          "p95": 2.64,
+          "p99": 3.86,
+          "max": 5.75
+        }
+      },
+      "frames": {
+        "frames": 910,
+        "frameGapMs": {
+          "n": 910,
+          "mean": 16.65,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 640454650,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 640454650,
+          "usage": 806368,
+          "usageDetails": {
+            "indexedDB": 806368
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 806368,
+        "bytesPerRecord": 108
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "idb/batched/strict",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "indexeddb",
+        "backendOptions": {
+          "durability": "strict"
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "direct",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 15069,
+      "totalCommitted": 7500,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 498,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15007,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 32.03,
+            "p50": 33.89,
+            "p95": 60.6,
+            "p99": 64.12,
+            "max": 70.74
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 230,
+            "txnLockWaitMs": {
+              "n": 230,
+              "mean": 1.71,
+              "p50": 1.14,
+              "p95": 5.04,
+              "p99": 6.27,
+              "max": 8.09
+            },
+            "txnCommitMs": {
+              "n": 230,
+              "mean": 3.37,
+              "p50": 2.68,
+              "p95": 7.46,
+              "p99": 11.77,
+              "max": 11.87
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 230,
+              "avgBatch": 8.2,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.63,
+                "p50": 26.43,
+                "p95": 57.32,
+                "p99": 57.77,
+                "max": 59.01
+              },
+              "commitMs": {
+                "n": 230,
+                "mean": 3.39,
+                "p50": 2.7,
+                "p95": 7.48,
+                "p99": 11.81,
+                "max": 11.89
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15004,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 32.13,
+            "p50": 33.85,
+            "p95": 60.23,
+            "p99": 64.63,
+            "max": 72.52
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 230,
+            "txnLockWaitMs": {
+              "n": 230,
+              "mean": 2.06,
+              "p50": 1.54,
+              "p95": 5.87,
+              "p99": 8.37,
+              "max": 13.68
+            },
+            "txnCommitMs": {
+              "n": 230,
+              "mean": 3.46,
+              "p50": 2.71,
+              "p95": 7.74,
+              "p99": 9.8,
+              "max": 14.8
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 230,
+              "avgBatch": 8.2,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.64,
+                "p50": 26.49,
+                "p95": 57.29,
+                "p99": 57.91,
+                "max": 59.8
+              },
+              "commitMs": {
+                "n": 230,
+                "mean": 3.49,
+                "p50": 2.74,
+                "p95": 7.77,
+                "p99": 9.82,
+                "max": 14.82
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 2,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15006,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 32.07,
+            "p50": 33.93,
+            "p95": 60.57,
+            "p99": 64.51,
+            "max": 71.06
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 230,
+            "txnLockWaitMs": {
+              "n": 230,
+              "mean": 1.63,
+              "p50": 1.05,
+              "p95": 4.74,
+              "p99": 7.09,
+              "max": 11.36
+            },
+            "txnCommitMs": {
+              "n": 230,
+              "mean": 3.37,
+              "p50": 2.81,
+              "p95": 7.58,
+              "p99": 10.19,
+              "max": 13.17
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 230,
+              "avgBatch": 8.2,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.66,
+                "p50": 25.99,
+                "p95": 57.28,
+                "p99": 57.79,
+                "max": 59.41
+              },
+              "commitMs": {
+                "n": 230,
+                "mean": 3.4,
+                "p50": 2.86,
+                "p95": 7.61,
+                "p99": 10.22,
+                "max": 13.22
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 3,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15004,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 31.57,
+            "p50": 33.87,
+            "p95": 60.02,
+            "p99": 62.65,
+            "max": 73.89
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 230,
+            "txnLockWaitMs": {
+              "n": 230,
+              "mean": 1.2,
+              "p50": 0.79,
+              "p95": 3.35,
+              "p99": 5.23,
+              "max": 9.43
+            },
+            "txnCommitMs": {
+              "n": 230,
+              "mean": 2.89,
+              "p50": 2.37,
+              "p95": 5.87,
+              "p99": 9.39,
+              "max": 11.18
+            },
+            "buffer": {
+              "enqueued": 1875,
+              "committed": 1875,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 230,
+              "avgBatch": 8.2,
+              "queueWaitMs": {
+                "n": 1875,
+                "mean": 28.64,
+                "p50": 29,
+                "p95": 57.3,
+                "p99": 57.73,
+                "max": 62.7
+              },
+              "commitMs": {
+                "n": 230,
+                "mean": 2.91,
+                "p50": 2.39,
+                "p95": 5.89,
+                "p99": 9.41,
+                "max": 11.2
+              }
+            },
+            "direct": null
+          }
+        }
+      ],
+      "owner": null,
+      "reader": {
+        "reads": 152,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 152,
+          "mean": 0.87,
+          "p50": 0.61,
+          "p95": 1.69,
+          "p99": 6.45,
+          "max": 7.23
+        }
+      },
+      "frames": {
+        "frames": 910,
+        "frameGapMs": {
+          "n": 910,
+          "mean": 16.66,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 811469639,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 811469639,
+          "usage": 813812,
+          "usageDetails": {
+            "indexedDB": 813812
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 813812,
+        "bytesPerRecord": 109
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "sqlite-opfs/direct/per-write",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "opfs-sqlite",
+        "backendOptions": {
+          "vfs": "opfs",
+          "journalMode": "wal",
+          "exclusive": false
+        },
+        "buffer": false,
+        "topology": "direct",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": 64
+      },
+      "wallMs": 35534,
+      "totalCommitted": 1301,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 2449,
+      "throughputPerSec": 37,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 650,
+          "committed": 650,
+          "shed": 1225,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 16795,
+          "achievedPerSec": 39,
+          "writeLatencyMs": {
+            "n": 650,
+            "mean": 803.02,
+            "p50": 788.37,
+            "p95": 1578.26,
+            "p99": 1764.41,
+            "max": 1898.62
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "sqlite-opfs",
+            "journalMode": "delete",
+            "busyRetries": 0,
+            "transactions": 650,
+            "txnLockWaitMs": {
+              "n": 650,
+              "mean": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "max": 0
+            },
+            "txnCommitMs": {
+              "n": 650,
+              "mean": 25.66,
+              "p50": 23.6,
+              "p95": 37.54,
+              "p99": 55.48,
+              "max": 118.07
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 650,
+              "failed": 0,
+              "latencyMs": {
+                "n": 650,
+                "mean": 803.02,
+                "p50": 788.37,
+                "p95": 1578.26,
+                "p99": 1764.41,
+                "max": 1898.62
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 651,
+          "committed": 651,
+          "shed": 1224,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 17235,
+          "achievedPerSec": 38,
+          "writeLatencyMs": {
+            "n": 651,
+            "mean": 832.53,
+            "p50": 828.84,
+            "p95": 1583.17,
+            "p99": 1764.63,
+            "max": 1849.17
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "sqlite-opfs",
+            "journalMode": "delete",
+            "busyRetries": 0,
+            "transactions": 651,
+            "txnLockWaitMs": {
+              "n": 651,
+              "mean": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "max": 0
+            },
+            "txnCommitMs": {
+              "n": 651,
+              "mean": 26.3,
+              "p50": 23.99,
+              "p95": 33.91,
+              "p99": 46.57,
+              "max": 335.4
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 651,
+              "failed": 0,
+              "latencyMs": {
+                "n": 651,
+                "mean": 832.53,
+                "p50": 828.84,
+                "p95": 1583.17,
+                "p99": 1764.63,
+                "max": 1849.17
+              }
+            }
+          }
+        },
+        {
+          "worker": 2,
+          "error": "SQLITE_BUSY: sqlite3 result code 5: database is locked"
+        },
+        {
+          "worker": 3,
+          "error": "SQLITE_BUSY: sqlite3 result code 5: database is locked"
+        }
+      ],
+      "owner": {
+        "type": "result",
+        "role": "owner",
+        "engine": {
+          "backend": "sqlite-opfs",
+          "journalMode": "delete",
+          "busyRetries": 0,
+          "transactions": 0,
+          "txnLockWaitMs": {
+            "n": 0
+          },
+          "txnCommitMs": {
+            "n": 0
+          },
+          "buffer": null,
+          "direct": {
+            "committed": 0,
+            "failed": 0,
+            "latencyMs": {
+              "n": 0
+            }
+          }
+        },
+        "counts": {
+          "telemetry": 1301
+        },
+        "storage": {
+          "quota": 721432054,
+          "usage": 229570,
+          "usageDetails": {
+            "fileSystem": 229570
+          },
+          "persisted": false
+        }
+      },
+      "reader": {
+        "reads": 20,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 20,
+          "mean": 1766.75,
+          "p50": 8.72,
+          "p95": 18034.07,
+          "p99": 18034.07,
+          "max": 18034.07
+        }
+      },
+      "frames": {
+        "frames": 2207,
+        "frameGapMs": {
+          "n": 2207,
+          "mean": 16.65,
+          "p50": 16.67,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 721432054,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 721432054,
+          "usage": 229570,
+          "usageDetails": {
+            "fileSystem": 229570
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 229570,
+        "bytesPerRecord": 176
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "sqlite-opfs-wl/direct/per-write",
+      "error": "page.evaluate: Execution context was destroyed, most likely because of a navigation.",
+      "note": "The page crashed (execution context destroyed) under 4 contending opfs-wl connections."
+    },
+    {
+      "name": "sqlite-opfs-wl/direct/batched",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "opfs-sqlite",
+        "backendOptions": {
+          "vfs": "opfs-wl",
+          "journalMode": "wal",
+          "exclusive": false
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "direct",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": 64
+      },
+      "wallMs": 21677,
+      "totalCommitted": 1428,
+      "totalErrors": 955,
+      "totalUnfinished": 0,
+      "totalShed": 5117,
+      "throughputPerSec": 66,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 622,
+          "committed": 430,
+          "shed": 1253,
+          "unfinished": 0,
+          "errors": 192,
+          "quotaError": null,
+          "elapsedMs": 17331,
+          "achievedPerSec": 25,
+          "writeLatencyMs": {
+            "n": 430,
+            "mean": 1543.36,
+            "p50": 1883.93,
+            "p95": 2200.77,
+            "p99": 2200.86,
+            "max": 2200.88
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "sqlite-opfs-wl",
+            "journalMode": "delete",
+            "busyRetries": 0,
+            "transactions": 9,
+            "txnLockWaitMs": {
+              "n": 9,
+              "mean": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "max": 0
+            },
+            "txnCommitMs": {
+              "n": 9,
+              "mean": 1209.91,
+              "p50": 1328.53,
+              "p95": 2143.09,
+              "p99": 2143.09,
+              "max": 2143.09
+            },
+            "buffer": {
+              "enqueued": 622,
+              "committed": 430,
+              "dropped": 0,
+              "failed": 192,
+              "batches": 9,
+              "avgBatch": 47.8,
+              "queueWaitMs": {
+                "n": 430,
+                "mean": 45.77,
+                "p50": 57.16,
+                "p95": 58.04,
+                "p99": 58.22,
+                "max": 58.31
+              },
+              "commitMs": {
+                "n": 9,
+                "mean": 1210,
+                "p50": 1328.58,
+                "p95": 2143.17,
+                "p99": 2143.17,
+                "max": 2143.17
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 515,
+          "committed": 136,
+          "shed": 1360,
+          "unfinished": 0,
+          "errors": 379,
+          "quotaError": null,
+          "elapsedMs": 18766,
+          "achievedPerSec": 7,
+          "writeLatencyMs": {
+            "n": 136,
+            "mean": 2124.9,
+            "p50": 2367.95,
+            "p95": 2838.02,
+            "p99": 2879.37,
+            "max": 2887.71
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "sqlite-opfs-wl",
+            "journalMode": "delete",
+            "busyRetries": 0,
+            "transactions": 3,
+            "txnLockWaitMs": {
+              "n": 3,
+              "mean": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "max": 0
+            },
+            "txnCommitMs": {
+              "n": 3,
+              "mean": 2290.32,
+              "p50": 2310.79,
+              "p95": 2827.39,
+              "p99": 2827.39,
+              "max": 2827.39
+            },
+            "buffer": {
+              "enqueued": 515,
+              "committed": 136,
+              "dropped": 0,
+              "failed": 379,
+              "batches": 3,
+              "avgBatch": 45.3,
+              "queueWaitMs": {
+                "n": 136,
+                "mean": 55.62,
+                "p50": 57.18,
+                "p95": 57.39,
+                "p99": 57.44,
+                "max": 59.4
+              },
+              "commitMs": {
+                "n": 3,
+                "mean": 2290.66,
+                "p50": 2310.85,
+                "p95": 2828.31,
+                "p99": 2828.31,
+                "max": 2828.31
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 2,
+          "produced": 584,
+          "committed": 456,
+          "shed": 1291,
+          "unfinished": 0,
+          "errors": 128,
+          "quotaError": null,
+          "elapsedMs": 16320,
+          "achievedPerSec": 28,
+          "writeLatencyMs": {
+            "n": 456,
+            "mean": 1346.79,
+            "p50": 1140.32,
+            "p95": 1879.55,
+            "p99": 2888.12,
+            "max": 2921.16
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "sqlite-opfs-wl",
+            "journalMode": "delete",
+            "busyRetries": 0,
+            "transactions": 8,
+            "txnLockWaitMs": {
+              "n": 8,
+              "mean": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "max": 0
+            },
+            "txnCommitMs": {
+              "n": 8,
+              "mean": 1469.78,
+              "p50": 1393.74,
+              "p95": 2862.72,
+              "p99": 2862.72,
+              "max": 2862.72
+            },
+            "buffer": {
+              "enqueued": 584,
+              "committed": 456,
+              "dropped": 0,
+              "failed": 128,
+              "batches": 8,
+              "avgBatch": 57,
+              "queueWaitMs": {
+                "n": 456,
+                "mean": 48.01,
+                "p50": 57.1,
+                "p95": 58.19,
+                "p99": 58.32,
+                "max": 58.38
+              },
+              "commitMs": {
+                "n": 8,
+                "mean": 1469.88,
+                "p50": 1393.79,
+                "p95": 2863.07,
+                "p99": 2863.07,
+                "max": 2863.07
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 3,
+          "produced": 662,
+          "committed": 406,
+          "shed": 1213,
+          "unfinished": 0,
+          "errors": 256,
+          "quotaError": null,
+          "elapsedMs": 15260,
+          "achievedPerSec": 27,
+          "writeLatencyMs": {
+            "n": 406,
+            "mean": 933.45,
+            "p50": 498.8,
+            "p95": 1909.02,
+            "p99": 1909.13,
+            "max": 1909.18
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "sqlite-opfs-wl",
+            "journalMode": "delete",
+            "busyRetries": 0,
+            "transactions": 10,
+            "txnLockWaitMs": {
+              "n": 10,
+              "mean": 0,
+              "p50": 0,
+              "p95": 0,
+              "p99": 0,
+              "max": 0
+            },
+            "txnCommitMs": {
+              "n": 10,
+              "mean": 718.73,
+              "p50": 440.93,
+              "p95": 1851.56,
+              "p99": 1851.56,
+              "max": 1851.56
+            },
+            "buffer": {
+              "enqueued": 662,
+              "committed": 406,
+              "dropped": 0,
+              "failed": 256,
+              "batches": 10,
+              "avgBatch": 40.6,
+              "queueWaitMs": {
+                "n": 406,
+                "mean": 53.69,
+                "p50": 57.49,
+                "p95": 57.96,
+                "p99": 58.2,
+                "max": 58.52
+              },
+              "commitMs": {
+                "n": 10,
+                "mean": 718.82,
+                "p50": 441,
+                "p95": 1851.63,
+                "p99": 1851.63,
+                "max": 1851.63
+              }
+            },
+            "direct": null
+          }
+        }
+      ],
+      "owner": {
+        "type": "result",
+        "role": "owner",
+        "engine": {
+          "backend": "sqlite-opfs-wl",
+          "journalMode": "delete",
+          "busyRetries": 0,
+          "transactions": 0,
+          "txnLockWaitMs": {
+            "n": 0
+          },
+          "txnCommitMs": {
+            "n": 0
+          },
+          "buffer": null,
+          "direct": {
+            "committed": 0,
+            "failed": 0,
+            "latencyMs": {
+              "n": 0
+            }
+          }
+        },
+        "counts": {
+          "telemetry": 1428
+        },
+        "storage": {
+          "quota": 707931085,
+          "usage": 245954,
+          "usageDetails": {
+            "fileSystem": 245954
+          },
+          "persisted": false
+        }
+      },
+      "reader": {
+        "reads": 58,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 58,
+          "mean": 338.24,
+          "p50": 180.96,
+          "p95": 1276.47,
+          "p99": 1686.98,
+          "max": 1686.98
+        }
+      },
+      "frames": {
+        "frames": 1311,
+        "frameGapMs": {
+          "n": 1311,
+          "mean": 16.65,
+          "p50": 16.67,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 707931085,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 707931085,
+          "usage": 245954,
+          "usageDetails": {
+            "fileSystem": 245954
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 245954,
+        "bytesPerRecord": 172
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "sqlite-sahpool/owner/batched/wal",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "opfs-sqlite",
+        "backendOptions": {
+          "vfs": "opfs-sahpool",
+          "journalMode": "wal",
+          "exclusive": true
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "owner",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 15100,
+      "totalCommitted": 7500,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 497,
+      "writers": [
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 0,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15035,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 44.24,
+            "p50": 42.96,
+            "p95": 76.41,
+            "p99": 122.14,
+            "max": 166.06
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 1,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15045,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 44.5,
+            "p50": 43.36,
+            "p95": 76.96,
+            "p99": 124.52,
+            "max": 166.93
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 2,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15028,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 44.2,
+            "p50": 43.08,
+            "p95": 76.39,
+            "p99": 123.02,
+            "max": 166.13
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 3,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15033,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 44.27,
+            "p50": 42.92,
+            "p95": 77.12,
+            "p99": 124.09,
+            "max": 167.56
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        }
+      ],
+      "owner": {
+        "type": "result",
+        "role": "owner",
+        "engine": {
+          "backend": "sqlite-opfs-sahpool",
+          "journalMode": "wal",
+          "busyRetries": 0,
+          "transactions": 241,
+          "txnLockWaitMs": {
+            "n": 241,
+            "mean": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "txnCommitMs": {
+            "n": 241,
+            "mean": 11.63,
+            "p50": 9.39,
+            "p95": 22.89,
+            "p99": 46.73,
+            "max": 72.46
+          },
+          "buffer": {
+            "enqueued": 7500,
+            "committed": 7500,
+            "dropped": 0,
+            "failed": 0,
+            "batches": 241,
+            "avgBatch": 31.1,
+            "queueWaitMs": {
+              "n": 7500,
+              "mean": 29.75,
+              "p50": 30.89,
+              "p95": 50.13,
+              "p99": 50.51,
+              "max": 55.95
+            },
+            "commitMs": {
+              "n": 241,
+              "mean": 11.66,
+              "p50": 9.42,
+              "p95": 22.95,
+              "p99": 46.75,
+              "max": 72.5
+            }
+          },
+          "direct": null
+        },
+        "counts": {
+          "telemetry": 7500
+        },
+        "storage": {
+          "quota": 733777504,
+          "usage": 1123644,
+          "usageDetails": {
+            "fileSystem": 1123644
+          },
+          "persisted": false
+        }
+      },
+      "reader": {
+        "reads": 152,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 152,
+          "mean": 4.52,
+          "p50": 2.77,
+          "p95": 14.77,
+          "p99": 33.47,
+          "max": 34.84
+        }
+      },
+      "frames": {
+        "frames": 911,
+        "frameGapMs": {
+          "n": 911,
+          "mean": 16.63,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 733777504,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 733777504,
+          "usage": 1123644,
+          "usageDetails": {
+            "fileSystem": 1123644
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 1123644,
+        "bytesPerRecord": 150
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "sqlite-sahpool/owner/batched/delete",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "opfs-sqlite",
+        "backendOptions": {
+          "vfs": "opfs-sahpool",
+          "journalMode": "delete",
+          "exclusive": true
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "owner",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 15112,
+      "totalCommitted": 7500,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 496,
+      "writers": [
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 0,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15060,
+          "achievedPerSec": 124,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 55.12,
+            "p50": 54.41,
+            "p95": 90.21,
+            "p99": 115.41,
+            "max": 158.3
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 1,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15063,
+          "achievedPerSec": 124,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 55.31,
+            "p50": 54.34,
+            "p95": 90.26,
+            "p99": 117.34,
+            "max": 163.32
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 2,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15053,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 55.26,
+            "p50": 54.29,
+            "p95": 90.14,
+            "p99": 119.54,
+            "max": 160.84
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 3,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15053,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 55.37,
+            "p50": 54.74,
+            "p95": 90.02,
+            "p99": 119.75,
+            "max": 163.05
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        }
+      ],
+      "owner": {
+        "type": "result",
+        "role": "owner",
+        "engine": {
+          "backend": "sqlite-opfs-sahpool",
+          "journalMode": "delete",
+          "busyRetries": 0,
+          "transactions": 216,
+          "txnLockWaitMs": {
+            "n": 216,
+            "mean": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "txnCommitMs": {
+            "n": 216,
+            "mean": 19.12,
+            "p50": 17.9,
+            "p95": 32.67,
+            "p99": 47.85,
+            "max": 95.63
+          },
+          "buffer": {
+            "enqueued": 7500,
+            "committed": 7500,
+            "dropped": 0,
+            "failed": 0,
+            "batches": 216,
+            "avgBatch": 34.7,
+            "queueWaitMs": {
+              "n": 7500,
+              "mean": 32.17,
+              "p50": 35.29,
+              "p95": 50.14,
+              "p99": 50.26,
+              "max": 57.5
+            },
+            "commitMs": {
+              "n": 216,
+              "mean": 19.15,
+              "p50": 17.94,
+              "p95": 32.69,
+              "p99": 47.89,
+              "max": 95.67
+            }
+          },
+          "direct": null
+        },
+        "counts": {
+          "telemetry": 7500
+        },
+        "storage": {
+          "quota": 758662258,
+          "usage": 1123644,
+          "usageDetails": {
+            "fileSystem": 1123644
+          },
+          "persisted": false
+        }
+      },
+      "reader": {
+        "reads": 152,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 152,
+          "mean": 5.75,
+          "p50": 2.47,
+          "p95": 16.87,
+          "p99": 41.61,
+          "max": 41.77
+        }
+      },
+      "frames": {
+        "frames": 911,
+        "frameGapMs": {
+          "n": 911,
+          "mean": 16.63,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 758662258,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 758662258,
+          "usage": 1123644,
+          "usageDetails": {
+            "fileSystem": 1123644
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 1123644,
+        "bytesPerRecord": 150
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "sqlite-opfs/owner/batched/wal",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 15000,
+        "backend": "opfs-sqlite",
+        "backendOptions": {
+          "vfs": "opfs",
+          "journalMode": "wal",
+          "exclusive": true
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "owner",
+        "saturate": false,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 15131,
+      "totalCommitted": 7500,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 496,
+      "writers": [
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 0,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15072,
+          "achievedPerSec": 124,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 51.88,
+            "p50": 51.52,
+            "p95": 85.41,
+            "p99": 103.55,
+            "max": 145.26
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 1,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15071,
+          "achievedPerSec": 124,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 52.16,
+            "p50": 51.68,
+            "p95": 86.16,
+            "p99": 103.69,
+            "max": 148.87
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 2,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15059,
+          "achievedPerSec": 125,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 52.32,
+            "p50": 51.89,
+            "p95": 86.05,
+            "p99": 106.35,
+            "max": 148.88
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 3,
+          "produced": 1875,
+          "committed": 1875,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 15063,
+          "achievedPerSec": 124,
+          "writeLatencyMs": {
+            "n": 1875,
+            "mean": 51.94,
+            "p50": 51.37,
+            "p95": 85.44,
+            "p99": 104.37,
+            "max": 148.83
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 1875
+          }
+        }
+      ],
+      "owner": {
+        "type": "result",
+        "role": "owner",
+        "engine": {
+          "backend": "sqlite-opfs",
+          "journalMode": "wal",
+          "busyRetries": 0,
+          "transactions": 222,
+          "txnLockWaitMs": {
+            "n": 222,
+            "mean": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "txnCommitMs": {
+            "n": 222,
+            "mean": 17.17,
+            "p50": 16.6,
+            "p95": 30.16,
+            "p99": 48.58,
+            "max": 62.05
+          },
+          "buffer": {
+            "enqueued": 7500,
+            "committed": 7500,
+            "dropped": 0,
+            "failed": 0,
+            "batches": 222,
+            "avgBatch": 33.8,
+            "queueWaitMs": {
+              "n": 7500,
+              "mean": 31.55,
+              "p50": 33.94,
+              "p95": 50.15,
+              "p99": 50.52,
+              "max": 57.3
+            },
+            "commitMs": {
+              "n": 222,
+              "mean": 17.19,
+              "p50": 16.64,
+              "p95": 30.18,
+              "p99": 48.61,
+              "max": 62.07
+            }
+          },
+          "direct": null
+        },
+        "counts": {
+          "telemetry": 7500
+        },
+        "storage": {
+          "quota": 826019387,
+          "usage": 1097922,
+          "usageDetails": {
+            "fileSystem": 1097922
+          },
+          "persisted": false
+        }
+      },
+      "reader": {
+        "reads": 152,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 152,
+          "mean": 4.87,
+          "p50": 2.42,
+          "p95": 16.27,
+          "p99": 26.41,
+          "max": 51.02
+        }
+      },
+      "frames": {
+        "frames": 910,
+        "frameGapMs": {
+          "n": 910,
+          "mean": 16.64,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 826019387,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 826019387,
+          "usage": 1097922,
+          "usageDetails": {
+            "fileSystem": 1097922
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 1097922,
+        "bytesPerRecord": 146
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "saturate/idb/per-write",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 6000,
+        "backend": "indexeddb",
+        "backendOptions": {},
+        "buffer": false,
+        "topology": "direct",
+        "saturate": true,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 6081,
+      "totalCommitted": 8997,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 1479,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 2243,
+          "committed": 2243,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6002,
+          "achievedPerSec": 374,
+          "writeLatencyMs": {
+            "n": 2243,
+            "mean": 2.66,
+            "p50": 2.18,
+            "p95": 5.34,
+            "p99": 9.51,
+            "max": 42.91
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 2243,
+            "txnLockWaitMs": {
+              "n": 2243,
+              "mean": 2.22,
+              "p50": 1.8,
+              "p95": 4.59,
+              "p99": 7.96,
+              "max": 42.66
+            },
+            "txnCommitMs": {
+              "n": 2243,
+              "mean": 2.65,
+              "p50": 2.16,
+              "p95": 5.34,
+              "p99": 9.49,
+              "max": 42.89
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 2243,
+              "failed": 0,
+              "latencyMs": {
+                "n": 2243,
+                "mean": 2.66,
+                "p50": 2.18,
+                "p95": 5.34,
+                "p99": 9.51,
+                "max": 42.91
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 2246,
+          "committed": 2246,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6002,
+          "achievedPerSec": 374,
+          "writeLatencyMs": {
+            "n": 2246,
+            "mean": 2.66,
+            "p50": 2.17,
+            "p95": 5.2,
+            "p99": 9.51,
+            "max": 41.85
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 2246,
+            "txnLockWaitMs": {
+              "n": 2246,
+              "mean": 2.21,
+              "p50": 1.82,
+              "p95": 4.46,
+              "p99": 8.07,
+              "max": 41.59
+            },
+            "txnCommitMs": {
+              "n": 2246,
+              "mean": 2.64,
+              "p50": 2.16,
+              "p95": 5.2,
+              "p99": 9.48,
+              "max": 41.84
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 2246,
+              "failed": 0,
+              "latencyMs": {
+                "n": 2246,
+                "mean": 2.66,
+                "p50": 2.17,
+                "p95": 5.2,
+                "p99": 9.51,
+                "max": 41.85
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 2,
+          "produced": 2256,
+          "committed": 2256,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6001,
+          "achievedPerSec": 376,
+          "writeLatencyMs": {
+            "n": 2256,
+            "mean": 2.64,
+            "p50": 2.15,
+            "p95": 5.27,
+            "p99": 9.48,
+            "max": 35.32
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 2256,
+            "txnLockWaitMs": {
+              "n": 2256,
+              "mean": 2.2,
+              "p50": 1.79,
+              "p95": 4.42,
+              "p99": 7.59,
+              "max": 20.05
+            },
+            "txnCommitMs": {
+              "n": 2256,
+              "mean": 2.63,
+              "p50": 2.14,
+              "p95": 5.26,
+              "p99": 9.46,
+              "max": 35.3
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 2256,
+              "failed": 0,
+              "latencyMs": {
+                "n": 2256,
+                "mean": 2.64,
+                "p50": 2.15,
+                "p95": 5.27,
+                "p99": 9.48,
+                "max": 35.32
+              }
+            }
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 3,
+          "produced": 2252,
+          "committed": 2252,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6001,
+          "achievedPerSec": 375,
+          "writeLatencyMs": {
+            "n": 2252,
+            "mean": 2.65,
+            "p50": 2.16,
+            "p95": 5.36,
+            "p99": 9.66,
+            "max": 28.58
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 2252,
+            "txnLockWaitMs": {
+              "n": 2252,
+              "mean": 2.21,
+              "p50": 1.81,
+              "p95": 4.61,
+              "p99": 7.57,
+              "max": 28.28
+            },
+            "txnCommitMs": {
+              "n": 2252,
+              "mean": 2.64,
+              "p50": 2.14,
+              "p95": 5.36,
+              "p99": 9.65,
+              "max": 28.57
+            },
+            "buffer": null,
+            "direct": {
+              "committed": 2252,
+              "failed": 0,
+              "latencyMs": {
+                "n": 2252,
+                "mean": 2.65,
+                "p50": 2.16,
+                "p95": 5.36,
+                "p99": 9.66,
+                "max": 28.58
+              }
+            }
+          }
+        }
+      ],
+      "owner": null,
+      "reader": {
+        "reads": 61,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 61,
+          "mean": 1.19,
+          "p50": 0.88,
+          "p95": 2.39,
+          "p99": 6.46,
+          "max": 6.46
+        }
+      },
+      "frames": {
+        "frames": 365,
+        "frameGapMs": {
+          "n": 365,
+          "mean": 16.65,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 771504060,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 771504060,
+          "usage": 1453374,
+          "usageDetails": {
+            "indexedDB": 1453374
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 1453374,
+        "bytesPerRecord": 162
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "saturate/idb/batched",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 6000,
+        "backend": "indexeddb",
+        "backendOptions": {
+          "durability": "relaxed"
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "direct",
+        "saturate": true,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 7000,
+      "totalCommitted": 20992,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 2999,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 5120,
+          "committed": 5120,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6167,
+          "achievedPerSec": 830,
+          "writeLatencyMs": {
+            "n": 5120,
+            "mean": 612.58,
+            "p50": 723.45,
+            "p95": 1112.5,
+            "p99": 1114.12,
+            "max": 1114.27
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 10,
+            "txnLockWaitMs": {
+              "n": 10,
+              "mean": 448.53,
+              "p50": 519.27,
+              "p95": 863.23,
+              "p99": 863.23,
+              "max": 863.23
+            },
+            "txnCommitMs": {
+              "n": 10,
+              "mean": 607.29,
+              "p50": 722.44,
+              "p95": 1108.98,
+              "p99": 1108.98,
+              "max": 1108.98
+            },
+            "buffer": {
+              "enqueued": 5120,
+              "committed": 5120,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 10,
+              "avgBatch": 512,
+              "queueWaitMs": {
+                "n": 5120,
+                "mean": 4.77,
+                "p50": 3.84,
+                "p95": 16.64,
+                "p99": 25.4,
+                "max": 26.21
+              },
+              "commitMs": {
+                "n": 10,
+                "mean": 607.81,
+                "p50": 722.52,
+                "p95": 1109.57,
+                "p99": 1109.57,
+                "max": 1109.57
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 1,
+          "produced": 5632,
+          "committed": 5632,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6946,
+          "achievedPerSec": 811,
+          "writeLatencyMs": {
+            "n": 5632,
+            "mean": 627.57,
+            "p50": 617.36,
+            "p95": 1083.73,
+            "p99": 1085.05,
+            "max": 1085.2
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 11,
+            "txnLockWaitMs": {
+              "n": 11,
+              "mean": 438.55,
+              "p50": 404.12,
+              "p95": 758.94,
+              "p99": 758.94,
+              "max": 758.94
+            },
+            "txnCommitMs": {
+              "n": 11,
+              "mean": 622.18,
+              "p50": 615,
+              "p95": 1081.25,
+              "p99": 1081.25,
+              "max": 1081.25
+            },
+            "buffer": {
+              "enqueued": 5632,
+              "committed": 5632,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 11,
+              "avgBatch": 512,
+              "queueWaitMs": {
+                "n": 5632,
+                "mean": 5.28,
+                "p50": 3.97,
+                "p95": 15.11,
+                "p99": 30.15,
+                "max": 30.93
+              },
+              "commitMs": {
+                "n": 11,
+                "mean": 622.29,
+                "p50": 615.02,
+                "p95": 1081.35,
+                "p99": 1081.35,
+                "max": 1081.35
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 2,
+          "produced": 5120,
+          "committed": 5120,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6351,
+          "achievedPerSec": 806,
+          "writeLatencyMs": {
+            "n": 5120,
+            "mean": 631.73,
+            "p50": 740.47,
+            "p95": 1057.92,
+            "p99": 1058.86,
+            "max": 1059.02
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 10,
+            "txnLockWaitMs": {
+              "n": 10,
+              "mean": 466.95,
+              "p50": 540.97,
+              "p95": 843.66,
+              "p99": 843.66,
+              "max": 843.66
+            },
+            "txnCommitMs": {
+              "n": 10,
+              "mean": 627.05,
+              "p50": 739.54,
+              "p95": 1053.86,
+              "p99": 1053.86,
+              "max": 1053.86
+            },
+            "buffer": {
+              "enqueued": 5120,
+              "committed": 5120,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 10,
+              "avgBatch": 512,
+              "queueWaitMs": {
+                "n": 5120,
+                "mean": 4.52,
+                "p50": 3.74,
+                "p95": 13.55,
+                "p99": 16.43,
+                "max": 17.22
+              },
+              "commitMs": {
+                "n": 10,
+                "mean": 627.2,
+                "p50": 739.6,
+                "p95": 1054,
+                "p99": 1054,
+                "max": 1054
+              }
+            },
+            "direct": null
+          }
+        },
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 3,
+          "produced": 5120,
+          "committed": 5120,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6624,
+          "achievedPerSec": 773,
+          "writeLatencyMs": {
+            "n": 5120,
+            "mean": 658.47,
+            "p50": 676.2,
+            "p95": 1083.37,
+            "p99": 1084.86,
+            "max": 1085
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 10,
+            "txnLockWaitMs": {
+              "n": 10,
+              "mean": 496.05,
+              "p50": 526.2,
+              "p95": 861.01,
+              "p99": 861.01,
+              "max": 861.01
+            },
+            "txnCommitMs": {
+              "n": 10,
+              "mean": 653.55,
+              "p50": 675.16,
+              "p95": 1080.93,
+              "p99": 1080.93,
+              "max": 1080.93
+            },
+            "buffer": {
+              "enqueued": 5120,
+              "committed": 5120,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 10,
+              "avgBatch": 512,
+              "queueWaitMs": {
+                "n": 5120,
+                "mean": 4.8,
+                "p50": 4,
+                "p95": 13.33,
+                "p99": 18.88,
+                "max": 19.67
+              },
+              "commitMs": {
+                "n": 10,
+                "mean": 653.67,
+                "p50": 675.25,
+                "p95": 1081.13,
+                "p99": 1081.13,
+                "max": 1081.13
+              }
+            },
+            "direct": null
+          }
+        }
+      ],
+      "owner": null,
+      "reader": {
+        "reads": 40,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 40,
+          "mean": 168.64,
+          "p50": 150.46,
+          "p95": 291.66,
+          "p99": 645.64,
+          "max": 645.64
+        }
+      },
+      "frames": {
+        "frames": 426,
+        "frameGapMs": {
+          "n": 426,
+          "mean": 16.63,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 744861648,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 744861648,
+          "usage": 4808929,
+          "usageDetails": {
+            "indexedDB": 4808929
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 4808929,
+        "bytesPerRecord": 229
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "saturate/sqlite-sahpool/owner/wal",
+      "config": {
+        "workers": 4,
+        "rateHz": 125,
+        "durationMs": 6000,
+        "backend": "opfs-sqlite",
+        "backendOptions": {
+          "vfs": "opfs-sahpool",
+          "journalMode": "wal",
+          "exclusive": true
+        },
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "owner",
+        "saturate": true,
+        "payloadBytes": 96,
+        "maxPending": null
+      },
+      "wallMs": 6302,
+      "totalCommitted": 29749,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 4721,
+      "writers": [
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 0,
+          "produced": 7511,
+          "committed": 7511,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6247,
+          "achievedPerSec": 1202,
+          "writeLatencyMs": {
+            "n": 7511,
+            "mean": 418.04,
+            "p50": 406.56,
+            "p95": 621.32,
+            "p99": 764.11,
+            "max": 773.21
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 7511
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 1,
+          "produced": 7324,
+          "committed": 7324,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6234,
+          "achievedPerSec": 1175,
+          "writeLatencyMs": {
+            "n": 7324,
+            "mean": 427.07,
+            "p50": 409.8,
+            "p95": 611.07,
+            "p99": 772.76,
+            "max": 782.38
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 7324
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 2,
+          "produced": 7480,
+          "committed": 7480,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6224,
+          "achievedPerSec": 1202,
+          "writeLatencyMs": {
+            "n": 7480,
+            "mean": 419.35,
+            "p50": 400.27,
+            "p95": 592.17,
+            "p99": 793.88,
+            "max": 826.23
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 7480
+          }
+        },
+        {
+          "type": "result",
+          "role": "forward",
+          "worker": 3,
+          "produced": 7434,
+          "committed": 7434,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 6219,
+          "achievedPerSec": 1195,
+          "writeLatencyMs": {
+            "n": 7434,
+            "mean": 419.26,
+            "p50": 407.56,
+            "p95": 619.24,
+            "p99": 772.61,
+            "max": 790.05
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "forward",
+            "forwarded": 7434
+          }
+        }
+      ],
+      "owner": {
+        "type": "result",
+        "role": "owner",
+        "engine": {
+          "backend": "sqlite-opfs-sahpool",
+          "journalMode": "wal",
+          "busyRetries": 0,
+          "transactions": 26,
+          "txnLockWaitMs": {
+            "n": 26,
+            "mean": 0,
+            "p50": 0,
+            "p95": 0,
+            "p99": 0,
+            "max": 0
+          },
+          "txnCommitMs": {
+            "n": 26,
+            "mean": 176.68,
+            "p50": 153.74,
+            "p95": 260.95,
+            "p99": 412.54,
+            "max": 412.54
+          },
+          "buffer": {
+            "enqueued": 29749,
+            "committed": 29749,
+            "dropped": 0,
+            "failed": 0,
+            "batches": 26,
+            "avgBatch": 1144.2,
+            "queueWaitMs": {
+              "n": 29749,
+              "mean": 27.12,
+              "p50": 24.14,
+              "p95": 63.36,
+              "p99": 85.64,
+              "max": 100.36
+            },
+            "commitMs": {
+              "n": 26,
+              "mean": 176.85,
+              "p50": 153.86,
+              "p95": 261.04,
+              "p99": 412.69,
+              "max": 412.69
+            }
+          },
+          "direct": null
+        },
+        "counts": {
+          "telemetry": 29749
+        },
+        "storage": {
+          "quota": 639272572,
+          "usage": 4252992,
+          "usageDetails": {
+            "fileSystem": 4252992
+          },
+          "persisted": false
+        }
+      },
+      "reader": {
+        "reads": 49,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 49,
+          "mean": 89.5,
+          "p50": 50.8,
+          "p95": 236.89,
+          "p99": 391.17,
+          "max": 391.17
+        }
+      },
+      "frames": {
+        "frames": 381,
+        "frameGapMs": {
+          "n": 381,
+          "mean": 16.59,
+          "p50": 16.66,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 639272572,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 639272572,
+          "usage": 4252992,
+          "usageDetails": {
+            "fileSystem": 4252992
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 4252992,
+        "bytesPerRecord": 143
+      },
+      "crossOriginIsolated": true
+    },
+    {
+      "name": "quota/idb/batched",
+      "config": {
+        "workers": 1,
+        "rateHz": 125,
+        "durationMs": 120000,
+        "backend": "indexeddb",
+        "backendOptions": {},
+        "buffer": {
+          "maxBatch": 128,
+          "flushMs": 50
+        },
+        "topology": "direct",
+        "saturate": true,
+        "payloadBytes": 2048,
+        "maxPending": null
+      },
+      "wallMs": 120177,
+      "totalCommitted": 73216,
+      "totalErrors": 0,
+      "totalUnfinished": 0,
+      "totalShed": 0,
+      "throughputPerSec": 609,
+      "writers": [
+        {
+          "type": "result",
+          "role": "writer",
+          "worker": 0,
+          "produced": 73216,
+          "committed": 73216,
+          "shed": 0,
+          "unfinished": 0,
+          "errors": 0,
+          "quotaError": null,
+          "elapsedMs": 120104,
+          "achievedPerSec": 610,
+          "writeLatencyMs": {
+            "n": 73216,
+            "mean": 838.1,
+            "p50": 845.04,
+            "p95": 1564.4,
+            "p99": 1897.86,
+            "max": 1963.85
+          },
+          "recovery": null,
+          "engine": {
+            "backend": "indexeddb",
+            "journalMode": null,
+            "busyRetries": 0,
+            "transactions": 143,
+            "txnLockWaitMs": {
+              "n": 143,
+              "mean": 18.05,
+              "p50": 16.71,
+              "p95": 30.57,
+              "p99": 36.97,
+              "max": 46.91
+            },
+            "txnCommitMs": {
+              "n": 143,
+              "mean": 835.65,
+              "p50": 840.81,
+              "p95": 1561.56,
+              "p99": 1895.55,
+              "max": 1958.59
+            },
+            "buffer": {
+              "enqueued": 73216,
+              "committed": 73216,
+              "dropped": 0,
+              "failed": 0,
+              "batches": 143,
+              "avgBatch": 512,
+              "queueWaitMs": {
+                "n": 73216,
+                "mean": 2.39,
+                "p50": 2.25,
+                "p95": 4.52,
+                "p99": 6.6,
+                "max": 9.2
+              },
+              "commitMs": {
+                "n": 143,
+                "mean": 835.71,
+                "p50": 840.84,
+                "p95": 1561.61,
+                "p99": 1895.61,
+                "max": 1958.66
+              }
+            },
+            "direct": null
+          }
+        }
+      ],
+      "owner": null,
+      "reader": {
+        "reads": 279,
+        "errors": 0,
+        "readLatencyMs": {
+          "n": 279,
+          "mean": 383.34,
+          "p50": 61.07,
+          "p95": 1363.83,
+          "p99": 1681.48,
+          "max": 1866.74
+        }
+      },
+      "frames": {
+        "frames": 7216,
+        "frameGapMs": {
+          "n": 7216,
+          "mean": 16.66,
+          "p50": 16.67,
+          "p95": 16.67,
+          "p99": 16.67,
+          "max": 16.67
+        },
+        "framesOver50ms": 0,
+        "longTasks": 0,
+        "longestTaskMs": 0
+      },
+      "storage": {
+        "before": {
+          "quota": 41943040,
+          "usage": 0,
+          "usageDetails": {},
+          "persisted": false
+        },
+        "after": {
+          "quota": 41943040,
+          "usage": 28625377,
+          "usageDetails": {
+            "indexedDB": 28625377
+          },
+          "persisted": false
+        },
+        "usageDeltaBytes": 28625377,
+        "bytesPerRecord": 391
+      },
+      "crossOriginIsolated": true,
+      "quotaMB": 40,
+      "note": "INVALID as a quota test: the payload padding was a repeated character, which Chromium's IndexedDB compresses (Snappy), so 73,216 x 2 KB records used only 28.6 MB (391 B/record) and never reached the 40 MB override. The generator now uses random padding; re-run with --only quota/."
+    }
+  ],
+  "notes": [
+    "Contention scenarios used 96-byte payloads with compressible padding; bytesPerRecord is therefore a lower bound."
+  ]
+}

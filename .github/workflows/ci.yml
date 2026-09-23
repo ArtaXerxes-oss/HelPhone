@@ -91,3 +91,36 @@ jobs:
       - name: Build helphone-contract (stellar contract build)
         working-directory: contract
         run: stellar contract build
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Closes #588 — blocks PRs introducing typosquatted / hijacked packages.
+      - name: Typosquatting gate
+        run: node scripts/detect-typosquatting.js
+
+      # Closes #589 — transitive DAG audit (offline graph + depth stats;
+      # live OSV lookup is best-effort via --audit).
+      - name: Transitive vulnerability scan
+        run: node scripts/transitive-vulnerability-scanner.js
+
+      # Closes #590 — asserts committed ZK WASM artifact hash + flags.
+      - name: WASM reproducibility check
+        run: bash scripts/verify-wasm-build.sh
+
+      # Closes #591 — informational health index; never blocks merges.
+      - name: Dependency health monitor
+        run: node scripts/monitor-dep-health.js --offline
+        continue-on-error: true
