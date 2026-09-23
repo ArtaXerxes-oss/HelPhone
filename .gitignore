@@ -16,6 +16,7 @@ yarn-error.log*
 # Rust/Soroban build output
 contract/**/target/
 contracts/**/target/
+scripts/spikes/**/target/
 contracts/noir_verifier/
 circuits/target/proof/
 circuits/target/vk/

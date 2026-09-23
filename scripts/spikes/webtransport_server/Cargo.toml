@@ -1,0 +1,18 @@
+[package]
+name = "helphone-wt-spike"
+version = "0.1.0"
+edition = "2021"
+description = "Spike #603: WebTransport (HTTP/3, quinn via wtransport) + TCP alert push server/client for loss benchmarks"
+publish = false
+
+[[bin]]
+name = "wt-spike"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "time"] }
+wtransport = { version = "0.7", features = ["dangerous-configuration"] }
+
+[profile.release]
+opt-level = 3
