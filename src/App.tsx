@@ -6,6 +6,8 @@ import RevealDiv from './components/animations/RevealDiv'
 import Button from './components/ui/Button'
 import SectionHeader from './components/shared/SectionHeader'
 import MainLayout from './components/layout/MainLayout'
+import MaintainerFunding from './components/MaintainerFunding'
+import ProvenanceBadge from './components/ProvenanceBadge'
 
 export default function App() {
   const { t } = useTranslation('common')
@@ -538,6 +540,8 @@ export default function App() {
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px', flexWrap: 'wrap', paddingTop: '22px' }}>
             <span style={{ fontSize: '12.5px', color: '#6f857c' }}>{t('footer.copyright')}</span>
+            <MaintainerFunding />
+            <ProvenanceBadge />
             <span style={{ fontFamily: "'VT323', monospace", fontSize: '15px', color: '#6f857c', letterSpacing: '1px' }}>{t('footer.motto')}</span>
           </div>
         </div>
