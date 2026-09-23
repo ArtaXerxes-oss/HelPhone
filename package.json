@@ -20,6 +20,8 @@
     "security:cargo": "bash scripts/security/cargo_minimal_versions.sh --check-only",
     "security:commits": "node scripts/security/verify_commit_signatures.js --range origin/main..HEAD",
     "security:audit-report": "npm audit --json --omit=dev > security-audit.json || true",
+    "build:wasm-sandbox": "rustc --target wasm32-unknown-unknown --crate-type cdylib -C opt-level=s -C panic=abort -C strip=symbols src/wasm/memory_sandbox.rs -o src/wasm/memory_sandbox.wasm",
+    "spike:wasm-memory": "node scripts/spikes/wasm_memory_bench.js",
     "build:all": "npm run build && npm run build --workspace server --if-present",
     "preview": "vite preview",
     "prepare": "husky",
