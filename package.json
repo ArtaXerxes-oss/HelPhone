@@ -28,7 +28,12 @@
     "test:update-snapshots": "vitest run -u",
     "test:a11y": "vitest run test/a11y-components.test.jsx",
     "test:e2e": "playwright test",
-    "test:e2e:a11y": "playwright test tests/e2e/a11y.spec.ts"
+    "test:e2e:a11y": "playwright test tests/e2e/a11y.spec.ts",
+    "spike:crdt": "node --expose-gc --max-old-space-size=3072 scripts/spikes/crdt_memory_profile.js --heap-snapshots --out docs/spikes/results/crdt-memory-profile.json",
+    "spike:zk:build": "bash circuits/recursive_verifier/build.sh 1 && bash circuits/recursive_verifier/build.sh 2 && bash circuits/recursive_verifier/build.sh 5",
+    "spike:zk": "node scripts/spikes/zk_aggregation_benchmark.js --out docs/spikes/results/zk-aggregation.json",
+    "spike:routing": "node --expose-gc --max-old-space-size=3072 scripts/spikes/routing_benchmark.js --out docs/spikes/results/routing-benchmark.json",
+    "spike:storage": "node scripts/spikes/storage_contention_benchmark.js --out docs/spikes/results/storage-contention.json"
   },
   "lint-staged": {
     "*.{js,jsx}": [
@@ -47,6 +52,7 @@
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.62.1",
+    "@sqlite.org/sqlite-wasm": "^3.53.4-build1",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
@@ -60,6 +66,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "compression": "~1.8.1",
     "eslint": "^9.0.0",
+    "fake-indexeddb": "^6.2.5",
     "globals": "^17.11.0",
     "husky": "^9.0.0",
     "jest-axe": "^11.0.0",
@@ -73,7 +80,8 @@
     "typescript": "^7.0.2",
     "vite": "^8.0.16",
     "vite-plugin-pwa": "^0.21.2",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.10",
+    "yjs": "^13.6.33"
   },
   "dependencies": {
     "@aztec/bb.js": "^0.87.9",
