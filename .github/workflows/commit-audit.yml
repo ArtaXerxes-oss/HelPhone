@@ -1,0 +1,37 @@
+name: Commit Signature & Sign-off Audit
+
+# Closes #627 — rejects unsigned/unverified commits and missing DCO
+# sign-offs at the CI boundary; validates AI-attribution trailers.
+#
+# Contributor setup (one time):
+#   git config --global user.name "Your Name"
+#   git config --global user.email "you@example.com"
+#   # GPG: git config --global commit.gpgsign true   (or SSH: gpg.format ssh
+#   #        + user.signingkey ~/.ssh/id_ed25519.pub)
+#   git commit -S -s -m "scope: message"   # -s adds the Signed-off-by trailer
+# AI-assisted work must also carry: Co-authored-by: <AI name> <email>
+on:
+  pull_request:
+    branches: [main, develop]
+  push:
+    branches: [main, develop]
+
+jobs:
+  commit-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Verify commit signatures + DCO sign-offs (strict)
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            node scripts/security/verify_commit_signatures.js --strict --range "origin/${{ github.base_ref }}..HEAD"
+          else
+            node scripts/security/verify_commit_signatures.js --strict --range "${{ github.event.before }}..HEAD"
+          fi
