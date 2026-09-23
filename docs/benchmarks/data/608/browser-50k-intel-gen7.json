@@ -1,0 +1,436 @@
+[
+  {
+    "issue": 608,
+    "date": "2026-09-23T18:11:11.638Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "adapter": {
+      "vendor": "intel",
+      "architecture": "gen-7",
+      "description": ""
+    },
+    "requestedBackend": "webgpu",
+    "backend": "webgpu",
+    "fallbackReasons": [],
+    "mode": "clusters",
+    "points": 50000,
+    "grid": {
+      "cellSize": 24,
+      "gridW": 48,
+      "gridH": 23,
+      "minPts": 8,
+      "relativeDensity": 2
+    },
+    "durationMs": 10000,
+    "frame": {
+      "frames": 599,
+      "fps": 59.97004501257468,
+      "p50": 16.674999999999727,
+      "p95": 16.68500000000131,
+      "p99": 16.69000000000051,
+      "droppedPct": 0
+    },
+    "clusterTotalMs": {
+      "p50": 7.769999999552965,
+      "p95": 10.640000000596046,
+      "mean": 7.935900673307855,
+      "n": 594
+    },
+    "encodeMs": {
+      "p50": 0.19500000029802322,
+      "p95": 0.4299999997019768,
+      "mean": 0.23395622889777828,
+      "n": 594
+    },
+    "gpuRoundTripMs": {
+      "p50": 7.449999999254942,
+      "p95": 10.259999997913837,
+      "mean": 7.626170033676807,
+      "n": 594
+    },
+    "gpuPassMs": {
+      "p50": 0.84576,
+      "p95": 2.08864,
+      "mean": 1.1904270707070705,
+      "n": 594
+    },
+    "computeMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "readbackMs": {
+      "p50": 0.06499999761581421,
+      "p95": 0.1550000011920929,
+      "mean": 0.07577441073326951,
+      "n": 594
+    },
+    "mergeMs": {
+      "p50": 0.48000000044703484,
+      "p95": 0.8099999986588955,
+      "mean": 0.5278030303228484,
+      "n": 594
+    },
+    "hostToGpuUploadMs": {
+      "p50": 0.5850000008940697,
+      "p95": 6.830000001937151,
+      "mean": 1.7218333336214224,
+      "n": 30
+    },
+    "canvasDrawMs": {
+      "p50": 0.9549999982118607,
+      "p95": 1.469999998807907,
+      "mean": 0.9818697829788336,
+      "n": 599
+    },
+    "clusterUpdatesPerSec": 59.4,
+    "verification": {
+      "countMismatchCells": 2,
+      "countDelta": 2,
+      "maxCentroidErr": 0.004807692307692308,
+      "maxRadiusErr": 0
+    },
+    "gpuMemoryBytes": 635392,
+    "jsHeapBytes": 13256648
+  },
+  {
+    "issue": 608,
+    "date": "2026-09-23T18:11:24.964Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "adapter": null,
+    "requestedBackend": "webgl2",
+    "backend": "webgl2",
+    "fallbackReasons": [],
+    "mode": "clusters",
+    "points": 50000,
+    "grid": {
+      "cellSize": 24,
+      "gridW": 48,
+      "gridH": 23,
+      "minPts": 8,
+      "relativeDensity": 2
+    },
+    "durationMs": 10000,
+    "frame": {
+      "frames": 601,
+      "fps": 59.97094253167184,
+      "p50": 16.674999999999272,
+      "p95": 16.6850000000004,
+      "p99": 16.69000000000051,
+      "droppedPct": 0
+    },
+    "clusterTotalMs": {
+      "p50": 3.1799999997019768,
+      "p95": 4.41499999910593,
+      "mean": 3.4281031614519692,
+      "n": 601
+    },
+    "encodeMs": {
+      "p50": 0.08500000089406967,
+      "p95": 0.26500000059604645,
+      "mean": 0.11806156405692489,
+      "n": 601
+    },
+    "gpuRoundTripMs": {
+      "p50": 2.969999998807907,
+      "p95": 4.245000001043081,
+      "mean": 3.200041597358845,
+      "n": 601
+    },
+    "gpuPassMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "computeMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "readbackMs": {
+      "p50": 0.10999999940395355,
+      "p95": 0.15000000223517418,
+      "mean": 0.11000000003619916,
+      "n": 601
+    },
+    "mergeMs": {
+      "p50": 0.4649999998509884,
+      "p95": 0.6950000002980232,
+      "mean": 0.505873544163345,
+      "n": 601
+    },
+    "hostToGpuUploadMs": null,
+    "canvasDrawMs": {
+      "p50": 0.8000000007450581,
+      "p95": 1.1149999983608723,
+      "mean": 0.8531281198382675,
+      "n": 601
+    },
+    "clusterUpdatesPerSec": 60.1,
+    "verification": {
+      "countMismatchCells": 0,
+      "countDelta": 0,
+      "maxCentroidErr": 0.020833333333333332,
+      "maxRadiusErr": 0.0625
+    },
+    "gpuMemoryBytes": 435328,
+    "jsHeapBytes": 13105633
+  },
+  {
+    "issue": 608,
+    "date": "2026-09-23T18:11:37.781Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "adapter": null,
+    "requestedBackend": "worker",
+    "backend": "worker",
+    "fallbackReasons": [],
+    "mode": "clusters",
+    "points": 50000,
+    "grid": {
+      "cellSize": 24,
+      "gridW": 48,
+      "gridH": 23,
+      "minPts": 8,
+      "relativeDensity": 2
+    },
+    "durationMs": 10000,
+    "frame": {
+      "frames": 600,
+      "fps": 59.97178327596867,
+      "p50": 16.674999999999272,
+      "p95": 16.684999999999945,
+      "p99": 16.690000000000055,
+      "droppedPct": 0
+    },
+    "clusterTotalMs": {
+      "p50": 9.160000000149012,
+      "p95": 12.010000001639128,
+      "mean": 9.75088135596933,
+      "n": 590
+    },
+    "encodeMs": {
+      "p50": 0,
+      "p95": 0,
+      "mean": 0,
+      "n": 590
+    },
+    "gpuRoundTripMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "gpuPassMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "computeMs": {
+      "p50": 8.424999997019768,
+      "p95": 11.224999997764826,
+      "mean": 8.954305084769503,
+      "n": 590
+    },
+    "readbackMs": {
+      "p50": 0.7049999982118607,
+      "p95": 1.0049999989569187,
+      "mean": 0.7965762711998264,
+      "n": 590
+    },
+    "mergeMs": {
+      "p50": 0.29500000178813934,
+      "p95": 0.5749999992549419,
+      "mean": 0.357152542383489,
+      "n": 590
+    },
+    "hostToGpuUploadMs": null,
+    "canvasDrawMs": {
+      "p50": 0.7200000025331974,
+      "p95": 1.330000001937151,
+      "mean": 0.8579916666944821,
+      "n": 600
+    },
+    "clusterUpdatesPerSec": 59,
+    "verification": {
+      "countMismatchCells": 0,
+      "countDelta": 0,
+      "maxCentroidErr": 0,
+      "maxRadiusErr": 0
+    },
+    "gpuMemoryBytes": 0,
+    "jsHeapBytes": 14709749
+  },
+  {
+    "issue": 608,
+    "date": "2026-09-23T18:11:50.589Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "adapter": null,
+    "requestedBackend": "cpu",
+    "backend": "cpu",
+    "fallbackReasons": [],
+    "mode": "clusters",
+    "points": 50000,
+    "grid": {
+      "cellSize": 24,
+      "gridW": 48,
+      "gridH": 23,
+      "minPts": 8,
+      "relativeDensity": 2
+    },
+    "durationMs": 10000,
+    "frame": {
+      "frames": 601,
+      "fps": 59.97237877796049,
+      "p50": 16.674999999999272,
+      "p95": 16.684999999999945,
+      "p99": 16.69000000000051,
+      "droppedPct": 0
+    },
+    "clusterTotalMs": {
+      "p50": 6.910000000149012,
+      "p95": 8.975000001490116,
+      "mean": 7.234642262813851,
+      "n": 601
+    },
+    "encodeMs": {
+      "p50": 0,
+      "p95": 0,
+      "mean": 0,
+      "n": 601
+    },
+    "gpuRoundTripMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "gpuPassMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "computeMs": {
+      "p50": 6.910000000149012,
+      "p95": 8.975000001490116,
+      "mean": 7.234642262813851,
+      "n": 601
+    },
+    "readbackMs": {
+      "p50": 0,
+      "p95": 0,
+      "mean": 0,
+      "n": 601
+    },
+    "mergeMs": {
+      "p50": 0.30000000074505806,
+      "p95": 0.48499999940395355,
+      "mean": 0.34194675534839636,
+      "n": 601
+    },
+    "hostToGpuUploadMs": null,
+    "canvasDrawMs": {
+      "p50": 0.5749999992549419,
+      "p95": 1.030000001192093,
+      "mean": 0.6432861896129496,
+      "n": 601
+    },
+    "clusterUpdatesPerSec": 60.1,
+    "verification": {
+      "countMismatchCells": 0,
+      "countDelta": 0,
+      "maxCentroidErr": 0,
+      "maxRadiusErr": 0
+    },
+    "gpuMemoryBytes": 0,
+    "jsHeapBytes": 13627058
+  },
+  {
+    "issue": 608,
+    "date": "2026-09-23T18:12:03.526Z",
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+    "adapter": null,
+    "requestedBackend": "cpu",
+    "backend": "cpu",
+    "fallbackReasons": [],
+    "mode": "raw",
+    "points": 50000,
+    "grid": {
+      "cellSize": 24,
+      "gridW": 48,
+      "gridH": 23,
+      "minPts": 8,
+      "relativeDensity": 2
+    },
+    "durationMs": 10000,
+    "frame": {
+      "frames": 178,
+      "fps": 17.791984710887743,
+      "p50": 50.025000000000546,
+      "p95": 83.38500000000022,
+      "p99": 100.05500000000029,
+      "droppedPct": 98.87640449438202
+    },
+    "clusterTotalMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "encodeMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "gpuRoundTripMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "gpuPassMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "computeMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "readbackMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "mergeMs": {
+      "p50": null,
+      "p95": null,
+      "mean": null,
+      "n": 0
+    },
+    "hostToGpuUploadMs": null,
+    "canvasDrawMs": {
+      "p50": 19.25500000268221,
+      "p95": 31.699999999254942,
+      "mean": 21.646292134868293,
+      "n": 178
+    },
+    "clusterUpdatesPerSec": 0,
+    "verification": {
+      "countMismatchCells": 0,
+      "countDelta": 0,
+      "maxCentroidErr": 0,
+      "maxRadiusErr": 0
+    },
+    "gpuMemoryBytes": 0,
+    "jsHeapBytes": 9645413
+  }
+]
