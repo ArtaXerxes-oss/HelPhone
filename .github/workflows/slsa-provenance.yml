@@ -1,0 +1,78 @@
+name: SLSA Provenance
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # keyless Sigstore signing (Fulcio OIDC)
+      attestations: write # GitHub-hosted in-toto attestation store
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - run: npm run build
+
+      # Digest manifest of every shipped file. This exact file is what gets
+      # signed and logged in Rekor; the browser re-hashes it and its own entry
+      # bundle against it (src/utils/verifyProvenance.js).
+      - name: Compute bundle digests
+        working-directory: dist
+        run: find . -type f ! -name 'digests.txt' ! -name 'provenance.json' ! -name 'stats.html' -printf '%P\n' | LC_ALL=C sort | xargs -d '\n' sha256sum > digests.txt
+
+      # cosign v2 logs to public Rekor v1, which the browser queries by logIndex.
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.1'
+
+      - name: Sign digest manifest (keyless, uploads to Rekor)
+        run: cosign sign-blob --yes --bundle dist/digests.sigstore.json dist/digests.txt
+
+      # SLSA v1 in-toto provenance signed via Sigstore, generated on an
+      # isolated GitHub-hosted runner (SLSA Build L3 requirements).
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/digests.txt'
+
+      - name: Write provenance.json
+        run: |
+          node -e '
+            const fs = require("fs");
+            const b = JSON.parse(fs.readFileSync("dist/digests.sigstore.json", "utf8"));
+            // new (protobuf) bundle format, falling back to cosign v2 legacy bundle
+            const tlog = b.verificationMaterial?.tlogEntries?.[0] ?? b.rekorBundle?.Payload ?? {};
+            fs.writeFileSync("dist/provenance.json", JSON.stringify({
+              repository: process.env.GITHUB_REPOSITORY,
+              commit: process.env.GITHUB_SHA,
+              workflow: process.env.GITHUB_WORKFLOW_REF,
+              runId: process.env.GITHUB_RUN_ID,
+              rekorLogIndex: Number(tlog.logIndex),
+            }, null, 2));
+          '
+
+      - name: Verify signature against this workflow identity
+        run: |
+          cosign verify-blob dist/digests.txt \
+            --bundle dist/digests.sigstore.json \
+            --certificate-identity "https://github.com/${GITHUB_WORKFLOW_REF}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-with-provenance
+          path: dist

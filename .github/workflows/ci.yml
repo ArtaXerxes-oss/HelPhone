@@ -65,10 +65,15 @@ jobs:
         with:
           workspaces: |
             contracts/aegis_vault
+            contracts/maintainer_vault
             contract
 
       - name: Run cargo test (aegis_vault)
         working-directory: contracts/aegis_vault
+        run: cargo test --locked
+
+      - name: Run cargo test (maintainer_vault)
+        working-directory: contracts/maintainer_vault
         run: cargo test --locked
 
       # The `soroban` CLI was renamed to `stellar` (soroban-cli -> stellar-cli);

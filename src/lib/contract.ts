@@ -515,6 +515,19 @@ export async function getRanking(limit = 50, period = "All Time") {
   });
 }
 
+/** Maintainer Vault funding stats (contracts/maintainer_vault). Returns null
+ *  when VITE_MAINTAINER_VAULT_CONTRACT_ID is unset (vault not deployed). */
+export async function getMaintainerFunding() {
+  const id = import.meta.env?.VITE_MAINTAINER_VAULT_CONTRACT_ID;
+  if (!id) return null;
+  const vault = new Contract(assertValidContractId(id, "VITE_MAINTAINER_VAULT_CONTRACT_ID"));
+  return _withCache('getMaintainerFunding', [id], CACHE_TTL.long, async () => {
+    const sim = await simulateRead(vault.call("stats"));
+    if (!sim.result) return null;
+    return scValToNative(sim.result.retval);
+  });
+}
+
 export async function getExpertVerifications(walletAddress, limit = 10) {
   if (!walletAddress) return [];
   return _withCache('getExpertVerifications', [walletAddress, limit], CACHE_TTL.long, async () => {
