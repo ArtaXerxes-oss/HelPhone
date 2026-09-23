@@ -5,6 +5,8 @@ import { requestLogger } from './middleware/logger.js'
 import { generalLimiter } from './middleware/rateLimiter.js'
 import { notFoundHandler, globalErrorHandler } from './middleware/errorHandler.js'
 import { zkRouter } from './routes/zk.js'
+import { requestMetrics } from './middleware/metrics.ts'
+import { createSupplyChainRouters } from './routes/supplyChainSecurity.ts'
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3001
@@ -25,6 +27,7 @@ app.use(
 
 // ── Global middleware pipeline ────────────────────────────────────────────────
 app.use(requestLogger)          // HTTP request logging
+app.use(requestMetrics)         // Prometheus request counters (#600)
 app.use(generalLimiter)         // Global rate limiting (100 req/min per IP)
 app.use(express.json({ limit: '1mb' }))
 
@@ -37,6 +40,11 @@ app.get('/health', (_req, res) => {
 
 // ZK prover routes mounted at /zk
 app.use('/zk', zkRouter)
+
+// Supply chain security index, dashboard and Prometheus metrics (#600)
+const supplyChain = createSupplyChainRouters()
+app.use('/api/supply-chain', supplyChain.api)
+app.use('/metrics', supplyChain.metrics)
 
 // ── Responder availability (Issue #156) ───────────────────────────────────────
 // In-memory store; production would use a database.

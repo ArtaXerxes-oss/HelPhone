@@ -9,6 +9,8 @@ import { fileURLToPath } from 'url'
 import { rpc } from '@stellar/stellar-sdk'
 
 import { normalizeBase64 } from './base64Utils.js'
+import { requestMetrics } from './middleware/metrics.ts'
+import { createSupplyChainRouters } from './routes/supplyChainSecurity.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -95,6 +97,7 @@ app.use(cors({
   optionsSuccessStatus: 204
 }))
 app.use(compression())
+app.use(requestMetrics)
 app.use(express.json({ limit: '1mb' }))
 
 // Rate limiter on all routes (disabled in test)
@@ -383,6 +386,11 @@ app.get('/api/feedback/:requestId', (req, res) => {
   if (!entry) return res.status(404).json({ error: 'Not found' })
   res.json(entry)
 })
+
+// ── Supply chain security index (#600) ───────────────────────────────────────
+const supplyChain = createSupplyChainRouters()
+app.use('/api/supply-chain', supplyChain.api)
+app.use('/metrics', supplyChain.metrics)
 
 export function startServer() {
   return app.listen(PORT, () => {
