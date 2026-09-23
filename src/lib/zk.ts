@@ -1,4 +1,7 @@
 // @ts-nocheck
+// Reproducibility (#590): the circuit below is the verified build artifact
+// circuits/target/aegis.json, pinned by circuits/target/aegis.sha256 and
+// gated in CI by scripts/verify-wasm-build.sh. Do not swap in unreviewed blobs.
 // TypeScript migration: Noir/Barretenberg WASM interop types are suppressed here.
 // Exported function signatures are defined (see src/types/index.ts for LocationProof, ProofZone).
 // Full strict typing is tracked in a follow-up refactor.
