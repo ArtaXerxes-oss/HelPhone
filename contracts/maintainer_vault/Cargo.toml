@@ -1,0 +1,22 @@
+[package]
+name = "maintainer_vault"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { version = "26.0.1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+soroban-sdk = { version = "26.0.1", features = ["testutils", "alloc"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = true

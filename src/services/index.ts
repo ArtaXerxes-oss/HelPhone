@@ -4,20 +4,20 @@
  */
 
 // Core API service
-export { api, ApiService } from './api';
+export { api, default as ApiService } from './api';
 export type { ApiError, ApiResponse, ApiRequestOptions, Interceptor } from './api';
 
 // Domain-specific services
-export { preferencesService, PreferencesService } from './preferences';
+export { preferencesService, default as PreferencesService } from './preferences';
 export type { UserPreferences, PreferencesResponse } from './preferences';
 
-export { responderStatusService, ResponderStatusService } from './responderStatus';
+export { responderStatusService, default as ResponderStatusService } from './responderStatus';
 export type { ResponderStatus, UpdateResponderStatusRequest } from './responderStatus';
 
-export { feedbackService, FeedbackService } from './feedback';
+export { feedbackService, default as FeedbackService } from './feedback';
 export type { FeedbackSubmission, FeedbackResponse } from './feedback';
 
-export { zkProverService, ZKProverService } from './zkProver';
+export { zkProverService, default as ZKProverService } from './zkProver';
 export type {
   ProofZone,
   LocationProofInputs,
