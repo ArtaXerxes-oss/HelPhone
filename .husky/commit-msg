@@ -1,0 +1,1 @@
+node scripts/security/verify_commit_signatures.js "$1"
