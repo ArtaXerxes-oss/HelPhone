@@ -8,6 +8,8 @@ use soroban_sdk::{
 // ── Constants ──────────────────────────────────────────────────
 const MAX_ACTIVE_KEYS: u32 = 500;
 const MAX_RANKING: u32 = 100;
+const MAX_PAGE_SIZE: u32 = 100;
+const MAX_EXPERT_RECORDS: u32 = 500;
 
 // ── Data Keys ──────────────────────────────────────────────────
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -295,6 +297,9 @@ impl HelPhone {
             .persistent()
             .get(&key)
             .unwrap_or(Vec::new(&env));
+        if records.len() >= MAX_EXPERT_RECORDS {
+            records.remove(0);
+        }
         records.push_back(record.clone());
         env.storage().persistent().set(&key, &records);
 
@@ -333,6 +338,22 @@ impl HelPhone {
             .persistent()
             .get(&DataKey::ActiveRequestIds)
             .unwrap_or(Vec::new(&env))
+    }
+
+
+    /// Bounded read for callers that do not need the complete active set.
+    pub fn get_active_requests_page(env: Env, cursor: u32, limit: u32) -> Vec<u64> {
+        let ids: Vec<u64> = env.storage().persistent()
+            .get(&DataKey::ActiveRequestIds).unwrap_or(Vec::new(&env));
+        let take = if limit > MAX_PAGE_SIZE { MAX_PAGE_SIZE } else { limit };
+        let end = core::cmp::min(ids.len(), cursor.saturating_add(take));
+        let mut page = Vec::new(&env);
+        let mut i = cursor;
+        while i < end {
+            page.push_back(ids.get(i).unwrap());
+            i += 1;
+        }
+        page
     }
 
     pub fn get_ranking(env: Env) -> Vec<RankingEntry> {

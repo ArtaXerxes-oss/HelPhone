@@ -1,3 +1,17 @@
+export type TraversalMode = 'host' | 'srflx' | 'relay' | 'unknown'
+export type RealtimeTransport = 'probing' | 'webrtc' | 'websocket'
+export interface IceCandidateMetric {
+  mode: TraversalMode
+  gatheredAtMs: number
+  protocol: string
+}
+export interface IceBenchmarkResult {
+  candidates: IceCandidateMetric[]
+  gatheringMs: number
+  success: boolean
+  hasRelay: boolean
+  recommendedTransport: Exclude<RealtimeTransport, 'probing'>
+}
 // ── Domain interfaces for HelPhone ───────────────────────────────────────────
 
 /** On-chain request status values returned by the Soroban contract. */

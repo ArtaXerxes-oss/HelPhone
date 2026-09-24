@@ -22,6 +22,7 @@ interface MapboxWrapperProps {
   initialViewState?: { longitude: number; latitude: number; zoom: number }
   accessToken?: string
   showNavigationControl?: boolean
+  onIsolationChange?: (isolated: boolean) => void
   navigationControlPosition?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
   style?: React.CSSProperties
   children?: React.ReactNode
@@ -36,6 +37,7 @@ const MapboxWrapper = forwardRef<unknown, MapboxWrapperProps>(function MapboxWra
     accessToken,
     showNavigationControl = true,
     navigationControlPosition = 'bottom-right',
+    onIsolationChange,
     style = FILL_PARENT,
     children,
     ...rest
@@ -49,6 +51,7 @@ const MapboxWrapper = forwardRef<unknown, MapboxWrapperProps>(function MapboxWra
       mapboxAccessToken={accessToken ?? DEFAULT_TOKEN}
       initialViewState={initialViewState ?? DEFAULT_VIEW_STATE}
       style={style}
+      onLoad={() => onIsolationChange?.(globalThis.crossOriginIsolated === true)}
       mapStyle={mapStyle}
       onClick={onMapClick}
       {...rest}

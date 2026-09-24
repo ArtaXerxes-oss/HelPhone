@@ -44,6 +44,7 @@ function createBarretenbergLogger(onLog) {
 }
 
 function getThreadCount() {
+  if (!self.crossOriginIsolated || typeof SharedArrayBuffer === "undefined") return 1;
   const available =
     typeof navigator !== "undefined" ? navigator.hardwareConcurrency : 4;
   return Math.max(1, Math.min(available, 8));

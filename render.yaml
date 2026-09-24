@@ -14,3 +14,5 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
+      - key: COEP_POLICY
+        value: credentialless

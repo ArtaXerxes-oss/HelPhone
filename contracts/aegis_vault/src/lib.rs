@@ -17,6 +17,8 @@ use soroban_sdk::{
 // [192..224] nullifier       Poseidon2(secret_id, campaign_id) — proof return value
 const CAMPAIGN_INPUTS_LEN: usize = 160;
 const PUBLIC_INPUTS_LEN: usize = 224;
+/// Keep attacker-controlled proof material far below the host linear-memory ceiling.
+const MAX_PROOF_BYTES: u32 = 1024 * 1024;
 const DEFAULT_PAYOUT_STROOP: i128 = 50 * 10_000_000; // 50 USDC (7 decimals)
 const BN254_FIELD_PRIME: [u8; 32] = [
     0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
@@ -50,6 +52,7 @@ pub enum VaultError {
     // NotAuthorized variant set_payout_amount() already uses for the
     // same "caller isn't admin" case.
     AdminNotSet = 11,
+    PayloadTooLarge = 12,
 }
 
 #[contractevent(topics = ["claimed"], data_format = "map")]
@@ -299,6 +302,9 @@ impl AegisVault {
         public_inputs: Bytes,
         proof_bytes: Bytes,
     ) -> Result<(), VaultError> {
+        if proof_bytes.len() > MAX_PROOF_BYTES {
+            return Err(VaultError::PayloadTooLarge);
+        }
         // Recipient must sign to authorize the payout to themselves.
         recipient.require_auth();
 
