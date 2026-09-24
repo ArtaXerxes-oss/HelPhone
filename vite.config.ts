@@ -4,12 +4,14 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import { visualizer } from "rollup-plugin-visualizer";
 import { envFirewallVitePlugin } from "./scripts/security/env_firewall.js";
+import deadcodePruner from "./plugins/vite-plugin-deadcode-pruner.js";
 
 export default defineConfig({
   plugins: [
     react(),
     // #626: fails the build if static output contains leaked secrets.
     envFirewallVitePlugin(),
+    deadcodePruner(),
     visualizer({
       open: false,
       filename: 'dist/stats.html',
@@ -65,7 +67,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ["**/*.{js,css,html,ico,png,svg,wav,mp4,wasm,json}"],
-        globIgnores: ["**/node_modules/**/*", "dist/stats.html"],
+        globIgnores: ["**/node_modules/**/*", "dist/stats.html", "**/security-surface-report.json"],
         // Raise limit to 10MB to accommodate Barretenberg WASM/JS bundles
         maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
         runtimeCaching: [
@@ -195,6 +197,14 @@ export default defineConfig({
       "@noir-lang/backend_barretenberg",
       "@noir-lang/acvm_js",
       "@noir-lang/noirc_abi",
+      "@aztec/bb.js",
     ],
+    include: ["buffer"],
+  },
+  worker: {
+    format: "es",
+  },
+  define: {
+    "import.meta.env.VITE_WASM_MAX_MEMORY_MB": JSON.stringify(512),
   },
 });

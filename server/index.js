@@ -87,6 +87,13 @@ function workerCount() {
     : Math.max(1, availableParallelism())
 }
 
+// Performance: Brotli & Gzip dynamic compression (threshold 1KB, bypass binary assets)
+// Uses custom middleware (shrink-ray-current / zlib) — falls back to generic if needed
+app.use(brotliCompression({ threshold: 1024, debug: process.env.DEBUG_COMPRESSION === 'true' }))
+// Observability: structured logger + pool monitoring
+app.use(logger({ slowThresholdMs: 1000 }))
+app.use(poolMonitorMiddleware)
+
 // Solves Issue 1: Restrict CORS policy on ZK Prover Server
 app.use(cors({
   origin: process.env.ALLOWED_ORIGINS
@@ -222,11 +229,28 @@ async function initProver() {
 }
 
 function health(_req, res) {
-  res.json({ status: _ready ? 'ready' : 'warming', ready: _ready })
+  let poolStats = null
+  try { poolStats = getPool().getStats() } catch {}
+  res.json({
+    status: _ready ? 'ready' : 'warming',
+    ready: _ready,
+    pool: poolStats,
+    compression: { threshold: 1024, encodings: ['br', 'gzip'] },
+  })
 }
 
 app.get('/health', health)
 app.get('/zk/health', health)
+
+// Pool observability: GET /health/pool exposes detailed pool stats
+app.get('/health/pool', (req, res) => {
+  try {
+    const stats = getPool().monitor()
+    res.json({ ok: true, pool: stats })
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message })
+  }
+})
 
 app.post('/zk/prove', async (req, res) => {
   try {

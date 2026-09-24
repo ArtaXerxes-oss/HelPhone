@@ -1,9 +1,13 @@
 // @ts-nocheck
+// Reproducibility (#590): the circuit below is the verified build artifact
+// circuits/target/aegis.json, pinned by circuits/target/aegis.sha256 and
+// gated in CI by scripts/verify-wasm-build.sh. Do not swap in unreviewed blobs.
 // TypeScript migration: Noir/Barretenberg WASM interop types are suppressed here.
 // Exported function signatures are defined (see src/types/index.ts for LocationProof, ProofZone).
 // Full strict typing is tracked in a follow-up refactor.
 import { StrKey } from "@stellar/stellar-sdk";
 import type { LocationProof, ProofZone } from "../types/index";
+import { getWasmMemoryPool } from "./wasmMemory.js";
 
 let _noir: {
   execute(
@@ -650,7 +654,13 @@ async function _browserProof({
   };
 
   onLog("Executing Noir circuit witness");
+  // WASM memory pooling: recycle buffers across runs to avoid re-allocating WASM memory
+  const memPool = getWasmMemoryPool();
+  let witnessBuf: ArrayBuffer | null = null;
+  let proofScratch: ArrayBuffer | null = null;
+  try { witnessBuf = memPool.allocate(256 * 1024); proofScratch = memPool.allocate(2 * 1024 * 1024); } catch {}
   const { witness, returnValue } = await _noir.execute(inputs);
+  if (witnessBuf) memPool.release(witnessBuf);
 
   onLog("Preparing Barretenberg prover");
   try {
@@ -688,10 +698,12 @@ async function _browserProof({
       },
     );
   } catch (err: unknown) {
+    if (proofScratch) try { memPool.release(proofScratch); } catch {}
     await resetBackend();
     throw err;
   }
   const { proof, publicInputs } = proofResult;
+  if (proofScratch) try { memPool.release(proofScratch); } catch {}
   onLog("UltraHonk proof generated");
 
   // returnValue is the nullifier (field element)

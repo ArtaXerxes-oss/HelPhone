@@ -28,12 +28,14 @@ Privacy-first proximity proofs on Stellar (Soroban). Users prove they are nearby
 **Goal**: Prove `distance(user, reference) ≤ radius` without revealing `user`.
 
 **Circuit** (`pol.circom`):
+
 - **Private inputs**: `user_lat`, `user_lng` (fixed-point, scaled to integers)
 - **Public inputs**: `ref_lat`, `ref_lng`, `max_radius_meters`, `nullifier`
 - **Constraint**: `haversine(user, ref) ≤ radius` — approximated via squared Euclidean in projected space for circuit efficiency, or a minimax polynomial for haversine.
 - **Output**: Groth16 proof + public signals
 
 **Contract** (`PolVerifier.sol` → `src/contracts/pol.rs`):
+
 ```
 fn verify_proof(
     env: Env,
@@ -42,11 +44,13 @@ fn verify_proof(
     nullifier: BytesN<32>,
 ) -> bool
 ```
+
 - Stores `nullifier` to prevent replay
 - Emits `ProofVerified { nullifier, ref_lat, ref_lng, radius, timestamp }`
 - Gas: ~50k (Groth16 verification in WASM)
 
 **Client integration**:
+
 - `snarkjs` runs `pol.wasm` in a Web Worker (non-blocking)
 - User clicks "Generate Proof of Location" in profile panel
 - Prover takes current `navigator.geolocation` as private input
@@ -141,6 +145,7 @@ Users submit proofs via `SorobanClient.sendTransaction()` with a small XLM fee.
 ### Profile Panel — ZK Proofs Section (already built)
 
 Each proof type shows:
+
 - **Inactive** (grey dot) → user hasn't generated this proof yet
 - **Active** (green dot) → proof exists and is valid
 - **Generating** (spinner) → WASM prover is running
@@ -163,17 +168,73 @@ Each proof type shows:
 - **Prover privacy**: WASM runs locally; private inputs never leave the browser.
 - **DoS**: proof verification has a fixed gas cost; nullifier set prevents duplicate submissions.
 
+## WASM Linear Memory Pool (`src/lib/wasmMemory.ts`)
+
+Proving is memory-heavy: Barretenberg allocates CRS + witness buffers in WASM linear memory. Repeated `generateProof()` calls without recycling cause page thrashing and browser OOM.
+
+### Pool
+
+- Pre-allocated `ArrayBuffer` buckets: 4KB, 16KB, 64KB (1 page), 256KB, 1MB, 4MB, 16MB — all WASM-page-aligned.
+- `allocate(size)` rounds up to bucket; reuses idle buffers before `new ArrayBuffer`.
+- `release(buf)` zero-fills and returns to pool for next run (prevents witness leakage).
+- `MAX_MEMORY_BYTES = 512MB` (8192 WASM pages) — hard cap to avoid tab crashes. `allocate` throws if `totalAllocated + bucket > 512MB`.
+- `preallocate()` warms 2×64KB + 2×1MB + 1×4MB so first proof doesn't jank.
+
+### Usage
+
+```ts
+import { getWasmMemoryPool } from './src/lib/wasmMemory.js';
+
+// In src/lib/zk.js — wraps witness + proof generation
+const mem = getWasmMemoryPool();
+const w = mem.allocate(256 * 1024);
+const p = mem.allocate(4 * 1024 * 1024);
+try {
+  const { witness } = await noir.execute(inputs);
+  const { proof } = await backend.generateProof(witness);
+} finally {
+  mem.release(w); mem.release(p);
+}
+
+// In src/workers/zk-worker.js — same pool inside Worker
+```
+
+### Worker
+
+`src/workers/zk-worker.js` runs Noir + Barretenberg off-main-thread and uses an in-worker `WorkerMemoryPool` shim with identical 512MB cap. Main thread talks to it via:
+
+```js
+worker.postMessage({ type: 'prove', id, inputs });
+worker.onmessage = ({ data }) => {
+  if (data.type === 'done') handleProof(data.proof);
+};
+```
+
+### Vite
+
+`vite.config.js` excludes `@noir-lang/*` and `@aztec/bb.js` from `optimizeDeps` and sets `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` so the prover can use `SharedArrayBuffer` / threads when available. See `vite.config.ts` for the `worker.format: 'es'` and `wasmMemory` chunk.
+
+### Stats & Monitoring
+
+```ts
+pool.getStats(); // { totalAllocated, poolSize, pooledBuffers, activeBuffers, peakAllocated, recyclingRate, utilisationPct }
+pool.getPageCount(); // allocated pages
+```
+
+Tests: `test/wasm-memory.test.js` verifies recycling, cap enforcement, zero-fill, and sequential-run reuse.
+
 ## Roadmap
 
-| Phase | What | Depends On |
-|-------|------|------------|
-| 1 | Design + circuit prototyping | — |
-| 2 | `pol.circom` + trusted setup | Phase 1 |
-| 3 | Soroban `pol.rs` verifier | Phase 2 |
-| 4 | Client WASM integration (snarkjs worker) | Phase 3 |
-| 5 | Proof of Humanity circuit | Phase 4 |
-| 6 | Proof of Reputation accumulator | Phase 5 |
-| 7 | Production audit | Phase 6 |
+| Phase | What                                     | Depends On |
+| ----- | ---------------------------------------- | ---------- |
+| 1     | Design + circuit prototyping             | —          |
+| 2     | `pol.circom` + trusted setup             | Phase 1    |
+| 3     | Soroban `pol.rs` verifier                | Phase 2    |
+| 4     | Client WASM integration (snarkjs worker) | Phase 3    |
+| 5     | Proof of Humanity circuit                | Phase 4    |
+| 6     | Proof of Reputation accumulator          | Phase 5    |
+| 7     | Production audit                         | Phase 6    |
+| 8     | **WASM memory pooling** (this doc)       | Phase 4    |
 
 ## Next Step
 
@@ -182,3 +243,14 @@ Start with Phase 1: build the `pol.circom` circuit with the approximate distance
 1. Define the fixed-point scaling (e.g., lat/lng × 10^6 → integer)
 2. Define the exact distance formula to use
 3. Decide whether to run a local trusted setup or use a ceremony
+
+## Binary Reproducibility (#590)
+
+- The committed artifact `circuits/target/aegis.json` is pinned by SHA-256 in
+  `circuits/target/aegis.sha256`. CI (`bash scripts/verify-wasm-build.sh`)
+  fails on any mismatch, blocking untrusted pre-compiled blobs.
+- Deterministic flags: `circuits/Nargo.toml` pins `compiler_version`; Soroban
+  manifests use the locked release profile (`opt-level = "z"`, `lto = true`,
+  `codegen-units = 1`); npm builds install with `npm ci`.
+- After a deliberate, reviewed rebuild: `bash scripts/verify-wasm-build.sh --update`.
+- `src/lib/zk.ts` loads only this verified artifact (see header comment).

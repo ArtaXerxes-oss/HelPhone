@@ -114,6 +114,11 @@
     "privacy": "Privacy",
     "verification": "Verification",
     "copyright": "© 2026 HelPhone · Built for neighbours",
-    "motto": "▤ help arrives through people"
+    "motto": "▤ help arrives through people",
+    "maintainerFunding": "{{bps}}% of protocol fees fund {{count}} open source maintainers · {{paid}} paid out",
+    "maintainerFundingPending": "Protocol fees will fund open source maintainers",
+    "provenanceVerified": "Verified Build Provenance",
+    "provenanceUnverified": "Build provenance unverified",
+    "provenanceChecking": "Checking build provenance…"
   }
 }

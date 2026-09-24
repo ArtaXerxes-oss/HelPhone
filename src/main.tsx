@@ -13,6 +13,8 @@ import "./styles/theme.css";
 // initial bundle and Time-To-Interactive low.
 const Help = lazy(() => import("./pages/Help"));
 const Ranking = lazy(() => import("./pages/Ranking"));
+// #608 spike: WebGPU spatial-clustering prototype + benchmark harness (ADR-008).
+const ClusterLab = lazy(() => import("./components/WebGPUMap"));
 
 function RouteFallback() {
   return (
@@ -51,6 +53,7 @@ function render() {
                 <Route path="/" element={<App />} />
                 <Route path="/help" element={<Help />} />
                 <Route path="/ranking" element={<Ranking />} />
+                <Route path="/lab/cluster-bench" element={<ClusterLab />} />
               </Routes>
             </Suspense>
           </BrowserRouter>
