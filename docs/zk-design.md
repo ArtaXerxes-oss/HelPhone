@@ -168,6 +168,61 @@ Each proof type shows:
 - **Prover privacy**: WASM runs locally; private inputs never leave the browser.
 - **DoS**: proof verification has a fixed gas cost; nullifier set prevents duplicate submissions.
 
+## WASM Linear Memory Pool (`src/lib/wasmMemory.ts`)
+
+Proving is memory-heavy: Barretenberg allocates CRS + witness buffers in WASM linear memory. Repeated `generateProof()` calls without recycling cause page thrashing and browser OOM.
+
+### Pool
+
+- Pre-allocated `ArrayBuffer` buckets: 4KB, 16KB, 64KB (1 page), 256KB, 1MB, 4MB, 16MB — all WASM-page-aligned.
+- `allocate(size)` rounds up to bucket; reuses idle buffers before `new ArrayBuffer`.
+- `release(buf)` zero-fills and returns to pool for next run (prevents witness leakage).
+- `MAX_MEMORY_BYTES = 512MB` (8192 WASM pages) — hard cap to avoid tab crashes. `allocate` throws if `totalAllocated + bucket > 512MB`.
+- `preallocate()` warms 2×64KB + 2×1MB + 1×4MB so first proof doesn't jank.
+
+### Usage
+
+```ts
+import { getWasmMemoryPool } from './src/lib/wasmMemory.js';
+
+// In src/lib/zk.js — wraps witness + proof generation
+const mem = getWasmMemoryPool();
+const w = mem.allocate(256 * 1024);
+const p = mem.allocate(4 * 1024 * 1024);
+try {
+  const { witness } = await noir.execute(inputs);
+  const { proof } = await backend.generateProof(witness);
+} finally {
+  mem.release(w); mem.release(p);
+}
+
+// In src/workers/zk-worker.js — same pool inside Worker
+```
+
+### Worker
+
+`src/workers/zk-worker.js` runs Noir + Barretenberg off-main-thread and uses an in-worker `WorkerMemoryPool` shim with identical 512MB cap. Main thread talks to it via:
+
+```js
+worker.postMessage({ type: 'prove', id, inputs });
+worker.onmessage = ({ data }) => {
+  if (data.type === 'done') handleProof(data.proof);
+};
+```
+
+### Vite
+
+`vite.config.js` excludes `@noir-lang/*` and `@aztec/bb.js` from `optimizeDeps` and sets `Cross-Origin-Opener-Policy` / `Cross-Origin-Embedder-Policy` so the prover can use `SharedArrayBuffer` / threads when available. See `vite.config.ts` for the `worker.format: 'es'` and `wasmMemory` chunk.
+
+### Stats & Monitoring
+
+```ts
+pool.getStats(); // { totalAllocated, poolSize, pooledBuffers, activeBuffers, peakAllocated, recyclingRate, utilisationPct }
+pool.getPageCount(); // allocated pages
+```
+
+Tests: `test/wasm-memory.test.js` verifies recycling, cap enforcement, zero-fill, and sequential-run reuse.
+
 ## Roadmap
 
 | Phase | What                                     | Depends On |
@@ -179,6 +234,7 @@ Each proof type shows:
 | 5     | Proof of Humanity circuit                | Phase 4    |
 | 6     | Proof of Reputation accumulator          | Phase 5    |
 | 7     | Production audit                         | Phase 6    |
+| 8     | **WASM memory pooling** (this doc)       | Phase 4    |
 
 ## Next Step
 
