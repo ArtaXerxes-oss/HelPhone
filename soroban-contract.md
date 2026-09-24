@@ -9,6 +9,10 @@
 ---
 
 ## Data Structures
+Memory bounds and pagination are documented in
+[`docs/memory-architecture.md`](docs/memory-architecture.md). Collections are
+capped at 500, page reads at 100, and verifier proof payloads at 1 MiB.
+
 
 ```rust
 #[derive(Clone, Debug, Eq, PartialEq)]

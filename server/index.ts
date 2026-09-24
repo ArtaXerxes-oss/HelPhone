@@ -5,6 +5,8 @@ import { requestLogger } from './middleware/logger.js'
 import { generalLimiter } from './middleware/rateLimiter.js'
 import { notFoundHandler, globalErrorHandler } from './middleware/errorHandler.js'
 import { zkRouter } from './routes/zk.js'
+import { eventsRouter } from './routes/events.js'
+import { syncRouter } from './routes/sync.js'
 
 const app = express()
 const PORT = Number(process.env.PORT) || 3001
@@ -22,6 +24,12 @@ app.use(
     optionsSuccessStatus: 204,
   }),
 )
+app.use((_req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+  res.setHeader('Cross-Origin-Embedder-Policy', process.env.COEP_POLICY || 'credentialless')
+  res.setHeader('Origin-Agent-Cluster', '?1')
+  next()
+})
 
 // ── Global middleware pipeline ────────────────────────────────────────────────
 app.use(requestLogger)          // HTTP request logging
@@ -35,6 +43,8 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok' })
 })
 
+app.use('/api/events', eventsRouter)
+app.use('/api/sync', syncRouter)
 // ZK prover routes mounted at /zk
 app.use('/zk', zkRouter)
 
