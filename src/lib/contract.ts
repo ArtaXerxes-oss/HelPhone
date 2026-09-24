@@ -41,9 +41,9 @@ const DEFAULT_CONTRACT_ID = assertValidContractId(
   "DEFAULT_CONTRACT_ID",
 );
 
-const ACTIVE_NETWORK_STORAGE_KEY = 'helphone:active-network'
-const WALLET_ADDRESS_STORAGE_KEY = 'helphone:wallet-address'
-const DEFAULT_FRIENDBOT_URL = 'https://friendbot.stellar.org'
+const ACTIVE_NETWORK_STORAGE_KEY = "helphone:active-network";
+const WALLET_ADDRESS_STORAGE_KEY = "helphone:wallet-address";
+const DEFAULT_FRIENDBOT_URL = "https://friendbot.stellar.org";
 
 // ── Wallet persistence (#160) ──────────────────────────────────────────────
 // Persists the wallet connection address to localStorage so the session
@@ -51,9 +51,9 @@ const DEFAULT_FRIENDBOT_URL = 'https://friendbot.stellar.org'
 
 /** Save wallet address to localStorage. Silently ignores storage failures. */
 export function saveWalletAddress(address) {
-  if (typeof address !== 'string' || !address) return
+  if (typeof address !== "string" || !address) return;
   try {
-    window.localStorage?.setItem(WALLET_ADDRESS_STORAGE_KEY, address)
+    window.localStorage?.setItem(WALLET_ADDRESS_STORAGE_KEY, address);
   } catch {
     // Storage quota exceeded or unavailable — non-critical
   }
@@ -62,16 +62,16 @@ export function saveWalletAddress(address) {
 /** Load previously saved wallet address from localStorage, or empty string. */
 export function loadWalletAddress() {
   try {
-    return window.localStorage?.getItem(WALLET_ADDRESS_STORAGE_KEY) || ''
+    return window.localStorage?.getItem(WALLET_ADDRESS_STORAGE_KEY) || "";
   } catch {
-    return ''
+    return "";
   }
 }
 
 /** Remove saved wallet address from localStorage. */
 export function clearWalletAddress() {
   try {
-    window.localStorage?.removeItem(WALLET_ADDRESS_STORAGE_KEY)
+    window.localStorage?.removeItem(WALLET_ADDRESS_STORAGE_KEY);
   } catch {
     // Non-critical
   }
@@ -198,14 +198,16 @@ async function _withCache(method, args, ttl, fetchFn) {
   if (_requestPromises.has(key)) {
     return _requestPromises.get(key);
   }
-  const promise = fetchFn().then((result) => {
-    _requestCache.set(key, { value: result, timestamp: Date.now(), ttl });
-    _requestPromises.delete(key);
-    return result;
-  }).catch((err) => {
-    _requestPromises.delete(key);
-    throw err;
-  });
+  const promise = fetchFn()
+    .then((result) => {
+      _requestCache.set(key, { value: result, timestamp: Date.now(), ttl });
+      _requestPromises.delete(key);
+      return result;
+    })
+    .catch((err) => {
+      _requestPromises.delete(key);
+      throw err;
+    });
   _requestPromises.set(key, promise);
   return promise;
 }
@@ -333,11 +335,12 @@ const PRIORITY_LEVELS = ["Low", "Medium", "High", "Critical"];
 
 function mapRequest(raw) {
   const STATUS = ["Pending", "Enroute", "Resolved", "Cancelled"];
-  const rawPriority = typeof raw.priority === 'number'
-    ? PRIORITY_LEVELS[raw.priority]
-    : typeof raw.priority === 'string'
-      ? raw.priority
-      : 'Medium';
+  const rawPriority =
+    typeof raw.priority === "number"
+      ? PRIORITY_LEVELS[raw.priority]
+      : typeof raw.priority === "string"
+        ? raw.priority
+        : "Medium";
   return {
     id: raw.id ? safeToNumber(raw.id) : raw.id,
     requester: raw.requester,
@@ -349,7 +352,7 @@ function mapRequest(raw) {
     status:
       STATUS[raw.status] ??
       (Array.isArray(raw.status) ? raw.status[0] : raw.status),
-    priority: PRIORITY_LEVELS.includes(rawPriority) ? rawPriority : 'Medium',
+    priority: PRIORITY_LEVELS.includes(rawPriority) ? rawPriority : "Medium",
     created_at: safeToNumber(raw.created_at),
     resolved_at: raw.resolved_at ? safeToNumber(raw.resolved_at) : null,
   };
@@ -452,7 +455,7 @@ async function resolveWalletAddress(wallet, fallback = "") {
 export async function getRequest(requestId) {
   const id = safeToNumber(requestId);
   if (!Number.isFinite(id) || id < 0) return null;
-  return _withCache('getRequest', [id], CACHE_TTL.short, async () => {
+  return _withCache("getRequest", [id], CACHE_TTL.short, async () => {
     const sim = await simulateRead(
       contract.call("get_request", scv(id, { type: "u64" })),
     );
@@ -463,22 +466,27 @@ export async function getRequest(requestId) {
 }
 
 export async function getResponder(requestId, index) {
-  return _withCache('getResponder', [requestId, index], CACHE_TTL.short, async () => {
-    const sim = await simulateRead(
-      contract.call(
-        "get_responder",
-        scv(Number(requestId), { type: "u64" }),
-        scv(Number(index), { type: "u32" }),
-      ),
-    );
-    if (!sim.result) return null;
-    const raw = scValToNative(sim.result.retval);
-    return raw ? { id: `${requestId}-${index}`, ...mapResponder(raw) } : null;
-  });
+  return _withCache(
+    "getResponder",
+    [requestId, index],
+    CACHE_TTL.short,
+    async () => {
+      const sim = await simulateRead(
+        contract.call(
+          "get_responder",
+          scv(Number(requestId), { type: "u64" }),
+          scv(Number(index), { type: "u32" }),
+        ),
+      );
+      if (!sim.result) return null;
+      const raw = scValToNative(sim.result.retval);
+      return raw ? { id: `${requestId}-${index}`, ...mapResponder(raw) } : null;
+    },
+  );
 }
 
 export async function getActiveRequests(max = 500) {
-  return _withCache('getActiveRequests', [max], CACHE_TTL.short, async () => {
+  return _withCache("getActiveRequests", [max], CACHE_TTL.short, async () => {
     const sim = await simulateRead(contract.call("get_active_requests"));
     if (!sim.result) return [];
     const rawIds = scValToNative(sim.result.retval);
@@ -487,7 +495,7 @@ export async function getActiveRequests(max = 500) {
 }
 
 export async function getRequestCount() {
-  return _withCache('getRequestCount', [], CACHE_TTL.short, async () => {
+  return _withCache("getRequestCount", [], CACHE_TTL.short, async () => {
     const sim = await simulateRead(contract.call("get_request_count"));
     if (!sim.result) return 0;
     return safeToNumber(scValToNative(sim.result.retval));
@@ -495,20 +503,25 @@ export async function getRequestCount() {
 }
 
 export async function getResponderCount(requestId) {
-  return _withCache('getResponderCount', [requestId], CACHE_TTL.short, async () => {
-    const sim = await simulateRead(
-      contract.call(
-        "get_responder_count",
-        scv(Number(requestId), { type: "u64" }),
-      ),
-    );
-    if (!sim.result) return 0;
-    return scValToNative(sim.result.retval);
-  });
+  return _withCache(
+    "getResponderCount",
+    [requestId],
+    CACHE_TTL.short,
+    async () => {
+      const sim = await simulateRead(
+        contract.call(
+          "get_responder_count",
+          scv(Number(requestId), { type: "u64" }),
+        ),
+      );
+      if (!sim.result) return 0;
+      return scValToNative(sim.result.retval);
+    },
+  );
 }
 
 export async function getRanking(limit = 50, period = "All Time") {
-  return _withCache('getRanking', [limit, period], CACHE_TTL.long, async () => {
+  return _withCache("getRanking", [limit, period], CACHE_TTL.long, async () => {
     const sim = await simulateRead(contract.call("get_ranking"));
     if (!sim.result) return [];
     return scValToNative(sim.result.retval).slice(0, limit);
@@ -520,8 +533,10 @@ export async function getRanking(limit = 50, period = "All Time") {
 export async function getMaintainerFunding() {
   const id = import.meta.env?.VITE_MAINTAINER_VAULT_CONTRACT_ID;
   if (!id) return null;
-  const vault = new Contract(assertValidContractId(id, "VITE_MAINTAINER_VAULT_CONTRACT_ID"));
-  return _withCache('getMaintainerFunding', [id], CACHE_TTL.long, async () => {
+  const vault = new Contract(
+    assertValidContractId(id, "VITE_MAINTAINER_VAULT_CONTRACT_ID"),
+  );
+  return _withCache("getMaintainerFunding", [id], CACHE_TTL.long, async () => {
     const sim = await simulateRead(vault.call("stats"));
     if (!sim.result) return null;
     return scValToNative(sim.result.retval);
@@ -530,17 +545,22 @@ export async function getMaintainerFunding() {
 
 export async function getExpertVerifications(walletAddress, limit = 10) {
   if (!walletAddress) return [];
-  return _withCache('getExpertVerifications', [walletAddress, limit], CACHE_TTL.long, async () => {
-    const sim = await simulateRead(
-      contract.call(
-        "get_expert_verifications",
-        scv(walletAddress, { type: "address" }),
-        scv(Number(limit), { type: "u32" }),
-      ),
-    );
-    if (!sim.result) return [];
-    return scValToNative(sim.result.retval) || [];
-  });
+  return _withCache(
+    "getExpertVerifications",
+    [walletAddress, limit],
+    CACHE_TTL.long,
+    async () => {
+      const sim = await simulateRead(
+        contract.call(
+          "get_expert_verifications",
+          scv(walletAddress, { type: "address" }),
+          scv(Number(limit), { type: "u32" }),
+        ),
+      );
+      if (!sim.result) return [];
+      return scValToNative(sim.result.retval) || [];
+    },
+  );
 }
 
 // ── Contract event stream (issue #177) ─────────────────────────
@@ -579,25 +599,30 @@ export function subscribeToContractEvents(onEvent) {
 
 export async function getWalletBalances(address) {
   if (!address) return [];
-  return _withCache('getWalletBalances', [address], CACHE_TTL.long, async () => {
-    const url = new URL(`/accounts/${address}`, ACTIVE_NETWORK.horizonUrl);
-    const response = await fetch(url.toString());
+  return _withCache(
+    "getWalletBalances",
+    [address],
+    CACHE_TTL.long,
+    async () => {
+      const url = new URL(`/accounts/${address}`, ACTIVE_NETWORK.horizonUrl);
+      const response = await fetch(url.toString());
 
-    if (!response.ok) {
-      if (response.status === 404) return [];
-      throw new Error("Could not load wallet balances");
-    }
+      if (!response.ok) {
+        if (response.status === 404) return [];
+        throw new Error("Could not load wallet balances");
+      }
 
-    const account = await response.json();
-    return (account.balances || []).map((balance) => ({
-      asset: balance.asset_type === "native" ? "XLM" : balance.asset_code,
-      balance: Number(balance.balance),
-    }));
-  });
+      const account = await response.json();
+      return (account.balances || []).map((balance) => ({
+        asset: balance.asset_type === "native" ? "XLM" : balance.asset_code,
+        balance: Number(balance.balance),
+      }));
+    },
+  );
 }
 export async function checkAccount(address) {
   if (!address) return false;
-  return _withCache('checkAccount', [address], CACHE_TTL.long, async () => {
+  return _withCache("checkAccount", [address], CACHE_TTL.long, async () => {
     try {
       await server.getAccount(address);
       return true;
@@ -759,6 +784,17 @@ const CONTRACT_ERROR_MESSAGES = {
   record_expert_verification: {
     2: "This wallet is not authorized to record the checkpoint.",
   },
+  propose_transfer: {
+    2: "Only the current contract owner can propose an ownership transfer.",
+  },
+  accept_transfer: {
+    2: "Only the nominated new owner can accept this transfer.",
+    5: "There is no pending ownership transfer to accept.",
+  },
+  revoke_transfer: {
+    2: "Only the current owner or nominated new owner can revoke this transfer.",
+    5: "There is no pending ownership transfer to revoke.",
+  },
 };
 
 function parseContractErrorCode(message) {
@@ -840,7 +876,7 @@ export async function createRequest(
   nickname,
   contact,
   wallet,
-  priority = 'Medium',
+  priority = "Medium",
 ) {
   const signerAddress = await resolveWalletAddress(wallet, requester);
   if (!signerAddress) throw new Error("Wallet address is not available yet");
@@ -1269,4 +1305,110 @@ export async function recordExpertVerification(
       .replace(/[a-zA-Z0-9]{64,}/g, "[REDACTED]");
     throw new Error(sanitizedMessage || "Recording failed");
   }
+}
+
+// ── Two-Step Ownership Transfer (helphone-contract) ────────────────────────
+//
+// Mirrors the propose_transfer / accept_transfer / revoke_transfer functions
+// added to contract/contracts/helphone-contract/src/lib.rs.
+//
+// The three functions follow the same sendWrite pattern used by all write
+// operations in this file: fund account → build tx → simulate → sign → submit.
+
+/** Read the pending new owner from the contract (or null if none). */
+export async function getPendingOwner() {
+  const sim = await simulateRead(contract.call("get_pending_owner"));
+  if (!sim.result) return null;
+  const raw = scValToNative(sim.result.retval);
+  return raw || null;
+}
+
+/**
+ * Step 1 — Propose transferring ownership to `newOwner`.
+ * Only the current admin may call this. Replaces any earlier pending transfer.
+ *
+ * @param currentOwner - Stellar address of the current contract admin
+ * @param newOwner     - Stellar address of the intended new owner
+ * @param wallet       - Signed wallet (StellarWalletsKit instance or compatible)
+ */
+export async function proposeTransfer(currentOwner, newOwner, wallet) {
+  const signerAddress = await resolveWalletAddress(wallet, currentOwner);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK,
+  })
+    .addOperation(
+      Operation.invokeContractFunction({
+        contract: CONTRACT_ID,
+        function: "propose_transfer",
+        args: [
+          scv(signerAddress, { type: "address" }),
+          scv(newOwner, { type: "address" }),
+        ],
+      }),
+    )
+    .setTimeout(30)
+    .build();
+  return await sendWrite(tx, wallet, "propose_transfer");
+}
+
+/**
+ * Step 2 — Accept the pending ownership transfer.
+ * Only the address nominated via proposeTransfer may call this.
+ * On success the caller becomes the new admin.
+ *
+ * @param newOwner - Stellar address of the incoming new owner
+ * @param wallet   - Signed wallet for newOwner
+ */
+export async function acceptTransfer(newOwner, wallet) {
+  const signerAddress = await resolveWalletAddress(wallet, newOwner);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK,
+  })
+    .addOperation(
+      Operation.invokeContractFunction({
+        contract: CONTRACT_ID,
+        function: "accept_transfer",
+        args: [scv(signerAddress, { type: "address" })],
+      }),
+    )
+    .setTimeout(30)
+    .build();
+  return await sendWrite(tx, wallet, "accept_transfer");
+}
+
+/**
+ * Revoke a pending ownership transfer.
+ * Callable by either the current admin (cancels their proposal) or the
+ * nominated new owner (declines the handoff).
+ *
+ * @param callerAddress - Stellar address of the caller (admin or pending owner)
+ * @param wallet        - Signed wallet for callerAddress
+ */
+export async function revokeTransfer(callerAddress, wallet) {
+  const signerAddress = await resolveWalletAddress(wallet, callerAddress);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK,
+  })
+    .addOperation(
+      Operation.invokeContractFunction({
+        contract: CONTRACT_ID,
+        function: "revoke_transfer",
+        args: [scv(signerAddress, { type: "address" })],
+      }),
+    )
+    .setTimeout(30)
+    .build();
+  return await sendWrite(tx, wallet, "revoke_transfer");
 }

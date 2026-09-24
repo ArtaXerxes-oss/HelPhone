@@ -1,5 +1,4 @@
 import express from 'express'
-import cors from 'cors'
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
@@ -7,6 +6,7 @@ import { fileURLToPath } from 'url'
 import { normalizeBase64 } from './base64Utils.js'
 import { compression } from './middleware/compression.js'
 import { logger, poolMonitorMiddleware } from './middleware/logger.js'
+import { createCorsMiddleware } from './middleware/cors.js'
 import { getPool } from './db/connection.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -19,15 +19,8 @@ app.use(compression({ threshold: 1024, debug: process.env.DEBUG_COMPRESSION === 
 app.use(logger({ slowThresholdMs: 1000 }))
 app.use(poolMonitorMiddleware)
 
-// Solves Issue 1: Restrict CORS policy on ZK Prover Server
-app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS 
-    ? process.env.ALLOWED_ORIGINS.split(',') 
-    : ['https://helphone.com', 'https://staging.helphone.com'],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}))
+// Solves Issue 1: Restrict CORS policy on ZK Prover Server — stateful regex validation + 24h preflight cache
+app.use(createCorsMiddleware())
 app.use(express.json({ limit: '1mb' }))
 
 let _noir = null

@@ -58,3 +58,14 @@ export interface PoolStats {
 }
 
 export type EmergencyType = 'lost' | 'fallen' | 'medical' | 'car' | 'danger' | 'other';
+
+export interface HelpDraft {
+  emergencyType: EmergencyType | string | null
+  nickname: string
+  contact: string
+  location: [number, number] | null
+  searchQuery: string
+  extra?: Record<string, unknown>
+  createdAt: number
+  updatedAt: number
+}

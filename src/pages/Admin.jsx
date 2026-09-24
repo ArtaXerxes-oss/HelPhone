@@ -8,7 +8,10 @@ import {
   getAegisPayoutAmount,
   setAegisPayoutAmount,
   upgradeAegisVault,
-  sanitizeWalletAddress,
+  getPendingOwner,
+  proposeTransfer,
+  acceptTransfer,
+  revokeTransfer,
 } from "../lib/contract";
 
 function sanitizeAddress(raw) {
@@ -30,6 +33,10 @@ export default function Admin() {
   const [actionLoading, setActionLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
+
+  // ── Ownership transfer state ────────────────────────────────────────────
+  const [pendingOwner, setPendingOwner] = useState(null);
+  const [transferTarget, setTransferTarget] = useState("");
 
   const isOwner =
     walletAddress &&
@@ -63,12 +70,14 @@ export default function Admin() {
     setLoading(true);
     setMessage("");
     try {
-      const [admin, payout] = await Promise.all([
+      const [admin, payout, pending] = await Promise.all([
         getAegisAdmin(),
         getAegisPayoutAmount(),
+        getPendingOwner(),
       ]);
       setContractAdmin(admin);
       setPayoutAmount(payout);
+      setPendingOwner(pending);
     } catch (err) {
       setMessage("Failed to load admin data: " + err.message);
       setMessageType("error");
@@ -86,6 +95,70 @@ export default function Admin() {
       const sanitized = sanitizeAddress(address);
       if (sanitized) setWalletAddress(sanitized);
     } catch {}
+  }
+
+  // ── Ownership transfer handlers ──────────────────────────────────────────
+
+  async function handleProposeTransfer() {
+    const target = sanitizeAddress(transferTarget);
+    if (!target) {
+      setMessage("Enter a valid Stellar address (G…).");
+      setMessageType("error");
+      return;
+    }
+    if (target === walletAddress) {
+      setMessage("New owner must be a different address.");
+      setMessageType("error");
+      return;
+    }
+    setActionLoading(true);
+    setMessage("");
+    try {
+      await proposeTransfer(walletAddress, target, StellarWalletsKit);
+      setPendingOwner(target);
+      setTransferTarget("");
+      setMessage(
+        `Transfer proposed to ${target.slice(0, 8)}…  ` +
+          "The new owner must connect their wallet and accept.",
+      );
+      setMessageType("success");
+    } catch (err) {
+      setMessage("Propose failed: " + err.message);
+      setMessageType("error");
+    }
+    setActionLoading(false);
+  }
+
+  async function handleAcceptTransfer() {
+    setActionLoading(true);
+    setMessage("");
+    try {
+      await acceptTransfer(walletAddress, StellarWalletsKit);
+      setContractAdmin(walletAddress);
+      setPendingOwner(null);
+      setMessage("Ownership accepted. You are now the contract admin.");
+      setMessageType("success");
+    } catch (err) {
+      setMessage("Accept failed: " + err.message);
+      setMessageType("error");
+    }
+    setActionLoading(false);
+  }
+
+  async function handleRevokeTransfer() {
+    setActionLoading(true);
+    setMessage("");
+    try {
+      await revokeTransfer(walletAddress, StellarWalletsKit);
+      setPendingOwner(null);
+      setTransferTarget("");
+      setMessage("Pending ownership transfer has been cancelled.");
+      setMessageType("info");
+    } catch (err) {
+      setMessage("Revoke failed: " + err.message);
+      setMessageType("error");
+    }
+    setActionLoading(false);
   }
 
   async function handleSetPayout() {
@@ -670,6 +743,159 @@ export default function Admin() {
               {actionLoading ? "Upgrading..." : "Upgrade"}
             </button>
           </div>
+        </div>
+
+        {/* Ownership Transfer — Two-Step */}
+        <div style={cardStyle}>
+          <div
+            style={{
+              fontSize: "10px",
+              letterSpacing: "1.5px",
+              color: "#7fb8ba",
+              fontWeight: 900,
+              marginBottom: "16px",
+            }}
+          >
+            OWNERSHIP TRANSFER
+          </div>
+          <p
+            style={{
+              color: "rgba(242,236,220,0.45)",
+              fontSize: "12px",
+              lineHeight: 1.6,
+              marginBottom: "14px",
+            }}
+          >
+            Two-step handoff: propose a new owner, then the recipient accepts
+            from their own wallet. Either party can revoke before acceptance.
+          </p>
+
+          {/* Current pending transfer banner */}
+          {pendingOwner && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "10px",
+                background: "rgba(255,122,107,0.10)",
+                border: "1px solid rgba(255,122,107,0.30)",
+                borderRadius: "10px",
+                padding: "10px 14px",
+                marginBottom: "14px",
+              }}
+            >
+              <span style={{ fontSize: "15px", lineHeight: 1 }}>⏳</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    fontWeight: 700,
+                    color: "#FF7A6B",
+                    marginBottom: "2px",
+                  }}
+                >
+                  Transfer pending
+                </div>
+                <div
+                  style={{
+                    fontSize: "11px",
+                    color: "rgba(242,236,220,0.55)",
+                    wordBreak: "break-all",
+                    fontFamily: "'Courier New', monospace",
+                  }}
+                >
+                  {pendingOwner}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Propose new owner — only current admin sees this */}
+          {isOwner && !pendingOwner && (
+            <div style={{ marginBottom: "10px" }}>
+              <div
+                style={{
+                  fontSize: "11px",
+                  color: "rgba(242,236,220,0.45)",
+                  marginBottom: "6px",
+                }}
+              >
+                Propose transfer to
+              </div>
+              <div
+                style={{ display: "flex", gap: "10px", alignItems: "center" }}
+              >
+                <input
+                  type="text"
+                  value={transferTarget}
+                  onChange={(e) => setTransferTarget(e.target.value.trim())}
+                  placeholder="New owner address (G…)"
+                  aria-label="New owner Stellar address"
+                  style={{ ...inputStyle, flex: 1 }}
+                />
+                <button
+                  type="button"
+                  onClick={handleProposeTransfer}
+                  disabled={actionLoading || !transferTarget}
+                  style={{
+                    ...btnPrimary,
+                    background:
+                      actionLoading || !transferTarget
+                        ? "rgba(115,87,255,0.35)"
+                        : "#7357FF",
+                  }}
+                >
+                  {actionLoading ? "Proposing…" : "Propose"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Accept — shown when connected wallet is the pending new owner */}
+          {pendingOwner &&
+            walletAddress &&
+            walletAddress.trim() === pendingOwner.trim() && (
+              <div style={{ marginBottom: "10px" }}>
+                <p
+                  style={{
+                    fontSize: "12px",
+                    color: "rgba(242,236,220,0.55)",
+                    marginBottom: "10px",
+                  }}
+                >
+                  You have been nominated as the new contract owner. Accept to
+                  complete the transfer.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleAcceptTransfer}
+                  disabled={actionLoading}
+                  style={{ ...btnPrimary, width: "100%" }}
+                >
+                  {actionLoading ? "Accepting…" : "Accept Ownership"}
+                </button>
+              </div>
+            )}
+
+          {/* Revoke — admin cancels proposal, or pending owner declines */}
+          {pendingOwner &&
+            walletAddress &&
+            (walletAddress.trim() === contractAdmin?.trim() ||
+              walletAddress.trim() === pendingOwner.trim()) && (
+              <button
+                type="button"
+                onClick={handleRevokeTransfer}
+                disabled={actionLoading}
+                style={{
+                  ...btnDanger,
+                  marginTop: "6px",
+                  width: "100%",
+                  opacity: actionLoading ? 0.6 : 1,
+                }}
+              >
+                {actionLoading ? "Revoking…" : "Revoke Transfer"}
+              </button>
+            )}
         </div>
 
         {/* Quick Actions */}

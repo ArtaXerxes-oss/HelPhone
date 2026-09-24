@@ -28,6 +28,12 @@ services:
       # Postgres connection (set DATABASE_URL in Render dashboard when Postgres is provisioned)
       - key: DATABASE_URL
         sync: false
-      # CORS (comma-separated allowed origins)
+      # CORS — stateful regex validation + preflight caching (Access-Control-Max-Age: 86400)
+      # ALLOWED_ORIGINS supports comma-separated regex patterns:
+      #   - Exact: https://helphone.com
+      #   - Regex: https://.*\.helphone\.com , https://staging\.helphone\.com
+      #   - Wildcard: https://*.helphone.com
       - key: ALLOWED_ORIGINS
-        value: "https://helphone.com,https://staging.helphone.com"
+        value: "https://helphone.com,https://staging.helphone.com,https://.*\\.helphone\\.com"
+      - key: CORS_MAX_AGE
+        value: "86400"
