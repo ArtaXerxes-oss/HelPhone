@@ -197,6 +197,14 @@ export default defineConfig({
       "@noir-lang/backend_barretenberg",
       "@noir-lang/acvm_js",
       "@noir-lang/noirc_abi",
+      "@aztec/bb.js",
     ],
+    include: ["buffer"],
+  },
+  worker: {
+    format: "es",
+  },
+  define: {
+    "import.meta.env.VITE_WASM_MAX_MEMORY_MB": JSON.stringify(512),
   },
 });

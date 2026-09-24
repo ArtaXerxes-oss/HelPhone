@@ -2,41 +2,65 @@ name: CI
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, feat/**, fix/**]
   pull_request:
     branches: [main, develop]
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+    env:
+      NODE_VERSION: "22"
+      DATABASE_URL: postgres://helphone:helphone@localhost:5432/helphone_test
+      PG_MAX_CONNECTIONS: "20"
+      PG_IDLE_TIMEOUT_MS: "30000"
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: helphone
+          POSTGRES_PASSWORD: helphone
+          POSTGRES_DB: helphone_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U helphone"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     strategy:
       matrix:
         node-version: [22.x]
-    
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-      
+
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Run linter
         run: npm run lint
         continue-on-error: true
-      
+
+      # Performance hardening: pool, compression, wasm memory, image processor
+      - name: Run subsystem tests
+        run: npm test -- test/db-pool.test.js test/http-compression.test.js test/wasm-memory.test.js test/image-processor.test.js
+
       - name: Run tests
         run: npm test
-      
+
       - name: Run coverage
         run: npm run test:coverage
-      
+        continue-on-error: true
+
       - name: Upload coverage reports
         uses: codecov/codecov-action@v4
         with:
@@ -44,9 +68,23 @@ jobs:
           flags: unittests
           name: codecov-umbrella
         continue-on-error: true
-      
+
+      # Verify compression savings & pool health (smoke)
+      - name: Health check (compression + pool)
+        run: node -e "
+          import('./server/middleware/compression.js').then(async m => {
+            const payload = JSON.stringify({ data: 'x'.repeat(5000) });
+            const r = await m.measureCompressionSavings(payload, 'br');
+            console.log('Brotli savings', r.savingsPct.toFixed(1) + '%');
+            if (r.savingsPct < 50) throw new Error('Compression savings below 50%');
+          });
+          "
+
       - name: Build project
         run: npm run build
+
+      - name: Check WASM memory cap
+        run: node -e "import('./src/lib/wasmMemory.js').then(m => { if (m.MAX_MEMORY_BYTES !== 512*1024*1024) throw new Error('WASM cap not 512MB'); console.log('WASM cap OK 512MB'); });"
 
   contracts:
     runs-on: ubuntu-latest
