@@ -7,27 +7,14 @@ services:
     name: helphone-zk-prover
     runtime: node
     plan: free            # 512MB — Barretenberg may OOM; bump to "starter" if it crashes
-    buildCommand: npm install
+    # security:audit-report snapshots `npm audit --json` at build time so the
+    # supply-chain API (#600) serves CVE counts without shelling out per request.
+    buildCommand: npm install && npm run security:audit-report
     startCommand: node server/index.js
     healthCheckPath: /health
     autoDeploy: false
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # Performance & pool tuning (overrides defaults in server/db/poolManager.ts & compression.ts)
-      - key: PG_MAX_CONNECTIONS
-        value: "20"
-      - key: PG_IDLE_TIMEOUT_MS
-        value: "30000"
-      - key: COMPRESSION_THRESHOLD
-        value: "1024"
-      - key: DEBUG_POOL
-        value: "false"
-      - key: DEBUG_COMPRESSION
-        value: "false"
-      # Postgres connection (set DATABASE_URL in Render dashboard when Postgres is provisioned)
-      - key: DATABASE_URL
-        sync: false
-      # CORS (comma-separated allowed origins)
-      - key: ALLOWED_ORIGINS
-        value: "https://helphone.com,https://staging.helphone.com"
+      - key: SUPPLY_CHAIN_AUDIT_REPORT
+        value: security-audit.json

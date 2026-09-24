@@ -5,6 +5,8 @@ dist/
 .DS_Store
 **/.DS_Store
 *.log
+# Build-time npm audit snapshot served by /api/supply-chain (#600)
+security-audit.json
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -14,6 +16,7 @@ yarn-error.log*
 # Rust/Soroban build output
 contract/**/target/
 contracts/**/target/
+scripts/spikes/**/target/
 contracts/noir_verifier/
 circuits/target/proof/
 circuits/target/vk/

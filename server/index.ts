@@ -4,30 +4,35 @@ import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
 
-import { normalizeBase64 } from './base64Utils.js'
-import { compression } from './middleware/compression.js'
-import { logger, poolMonitorMiddleware } from './middleware/logger.js'
-import { getPool } from './db/connection.js'
+import { requestLogger } from './middleware/logger.js'
+import { generalLimiter } from './middleware/rateLimiter.js'
+import { notFoundHandler, globalErrorHandler } from './middleware/errorHandler.js'
+import { zkRouter } from './routes/zk.js'
+import { requestMetrics } from './middleware/metrics.ts'
+import { createSupplyChainRouters } from './routes/supplyChainSecurity.ts'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
-const PORT = process.env.PORT || 3001
+const PORT = Number(process.env.PORT) || 3001
 
-// Performance: Brotli & Gzip dynamic compression (threshold 1KB, bypass binary assets)
-app.use(compression({ threshold: 1024, debug: process.env.DEBUG_COMPRESSION === 'true' }))
-// Observability: structured logger + pool monitoring
-app.use(logger({ slowThresholdMs: 1000 }))
-app.use(poolMonitorMiddleware)
+// ── CORS ──────────────────────────────────────────────────────────────────────
+const allowedOrigins: string[] = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((o) => o.trim())
+  : ['https://helphone.com', 'https://staging.helphone.com']
 
-// Solves Issue 1: Restrict CORS policy on ZK Prover Server
-app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS 
-    ? process.env.ALLOWED_ORIGINS.split(',') 
-    : ['https://helphone.com', 'https://staging.helphone.com'],
-  methods: ['GET', 'POST', 'OPTIONS'],
-  preflightContinue: false,
-  optionsSuccessStatus: 204
-}))
+app.use(
+  cors({
+    origin: allowedOrigins,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
+  }),
+)
+
+// ── Global middleware pipeline ────────────────────────────────────────────────
+app.use(requestLogger)          // HTTP request logging
+app.use(requestMetrics)         // Prometheus request counters (#600)
+app.use(generalLimiter)         // Global rate limiting (100 req/min per IP)
 app.use(express.json({ limit: '1mb' }))
 
 let _noir = null
@@ -48,9 +53,14 @@ async function initProver() {
   const { UltraHonkBackend } = await import('@aztec/bb.js')
   const { cpus } = await import('os')
 
-  const circuitPath = join(__dirname, '..', 'circuits', 'target', 'aegis.json')
-  const circuit = JSON.parse(readFileSync(circuitPath, 'utf-8'))
-  circuit.bytecode = normalizeBase64(circuit.bytecode)
+// Supply chain security index, dashboard and Prometheus metrics (#600)
+const supplyChain = createSupplyChainRouters()
+app.use('/api/supply-chain', supplyChain.api)
+app.use('/metrics', supplyChain.metrics)
+
+// ── Responder availability (Issue #156) ───────────────────────────────────────
+// In-memory store; production would use a database.
+const responderStatusStore = new Map<string, { active: boolean; updatedAt: number }>()
 
   _noir = new Noir(circuit)
   _backend = new UltraHonkBackend(
