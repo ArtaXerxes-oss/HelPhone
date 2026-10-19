@@ -108,3 +108,91 @@ if (typeof window !== 'undefined') {
     }
   });
 }
+
+// ── Cross-Device Transfer Ticket (ISP-058 / #728) ─────────────────────────
+/**
+ * Single-use, expiring transfer tickets with explicit generation semantics.
+ * A source device at generation N mints a ticket; the destination redeems it
+ * once and becomes generation N+1 — the sole dispatchable endpoint. Replaying
+ * a redeemed or expired ticket fails deterministically. The full transfer /
+ * presence state machine is specced in `docs/spikes/728-session-transfer-report.md`.
+ */
+
+export interface SessionIdentity {
+  sessionId: string;
+  generation: number;
+  deviceId: string;
+}
+
+export interface TransferTicket extends SessionIdentity {
+  ticketId: string;
+  nonce: string;
+  issuedAt: number;
+  expiresAt: number;
+}
+
+export type TransferRedeemResult =
+  | { ok: true; sessionId: string; generation: number; deviceId: string }
+  | { ok: false; error: 'expired' | 'already_redeemed' | 'malformed' };
+
+const TRANSFER_TICKET_TTL_MS = 90_000;
+const redeemedTicketIds = new Set<string>();
+
+/** Mint a transfer ticket for the identity at `generation`, valid for `ttlMs`. */
+export function createTransferTicket(
+  identity: SessionIdentity,
+  options: { ttlMs?: number; now?: number } = {},
+): TransferTicket {
+  const now = options.now ?? Date.now();
+  const ttl = options.ttlMs ?? TRANSFER_TICKET_TTL_MS;
+  const nonceBytes = crypto.getRandomValues(new Uint8Array(16));
+  return {
+    ticketId: crypto.randomUUID(),
+    sessionId: identity.sessionId,
+    generation: identity.generation,
+    deviceId: identity.deviceId,
+    nonce: Array.from(nonceBytes, (b) => b.toString(16).padStart(2, '0')).join(''),
+    issuedAt: now,
+    expiresAt: now + ttl,
+  };
+}
+
+/**
+ * Redeem a ticket exactly once. On success the caller holds generation
+ * `ticket.generation + 1` bound to `destinationDeviceId`; the source
+ * generation is superseded (enforcement lives in presence handling).
+ */
+export function redeemTransferTicket(
+  ticket: TransferTicket,
+  options: { destinationDeviceId: string; now?: number },
+): TransferRedeemResult {
+  const now = options.now ?? Date.now();
+  if (
+    !ticket ||
+    typeof ticket.ticketId !== 'string' ||
+    typeof ticket.sessionId !== 'string' ||
+    !Number.isInteger(ticket.generation) ||
+    ticket.generation < 0 ||
+    !options.destinationDeviceId
+  ) {
+    return { ok: false, error: 'malformed' };
+  }
+  if (redeemedTicketIds.has(ticket.ticketId)) {
+    return { ok: false, error: 'already_redeemed' };
+  }
+  if (!Number.isFinite(ticket.expiresAt) || now > ticket.expiresAt) {
+    return { ok: false, error: 'expired' };
+  }
+  redeemedTicketIds.add(ticket.ticketId);
+  return {
+    ok: true,
+    sessionId: ticket.sessionId,
+    generation: ticket.generation + 1,
+    deviceId: options.destinationDeviceId,
+  };
+}
+
+/** Test hook: forget redeemed tickets so suites start from a clean slate. */
+export function __resetRedeemedTicketsForTests(): void {
+  redeemedTicketIds.clear();
+}
