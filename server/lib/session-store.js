@@ -46,6 +46,11 @@ export async function issueSession(userId, username, opts = {}) {
   const claims = {
     sub: userId,
     username,
+    // ISP-059 / #729: UV tier rides the session so downstream middleware can
+    // gate sensitive actions and audit can attribute (user, uv_tier) without
+    // a perpetual device fingerprint. Defaults true because sessions are only
+    // minted after ceremonies that already require user verification.
+    uv: opts.uv !== false,
     iat: now,
     exp: now + ttl,
     jti,
@@ -117,7 +122,7 @@ export async function renewSessionIfNeeded(token, claims) {
   if (remaining > RENEW_WINDOW_SECONDS) return null;
   await revokeSession(claims.jti, claims.exp);
   return {
-    token: await issueSession(claims.sub, claims.username),
+    token: await issueSession(claims.sub, claims.username, { uv: claims.uv !== false }),
     previousToken: token,
   };
 }

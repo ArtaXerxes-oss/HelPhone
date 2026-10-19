@@ -1206,3 +1206,84 @@ export function verifyForeignSignature(data: string, signatureHex: string, forei
   return verifyEd25519Signature(data, signatureHex, foreignPublicKey)
 }
 
+
+// ── Message Franking (ISP-056 / #726) ──────────────────────────────────────
+/**
+ * HMAC-commitment message franking. The sender attaches a compact tag over
+ * `(nonce ‖ ciphertext)` under a versioned franking key; a moderator holding
+ * the key for `keyId` can verify a reported ciphertext deterministically,
+ * while a party without the key cannot forge or (with the tag withheld)
+ * prove anything about unreported traffic.
+ *
+ * `keyId` is part of the tag envelope so verification survives key rotation
+ * (`src/lib/keyRotation.ts`): old keys are retained read-only, mapped by
+ * id, and never used to tag new messages. The full escrow/report flow is
+ * specced in `docs/spikes/726-message-franking-report.md`.
+ */
+export interface FrankingTag {
+  keyId: string
+  nonce: string
+  mac: string
+}
+
+export const FRANKING_MAC_BYTES = 16
+const FRANKING_NONCE_BYTES = 12
+
+function frankingMac(key: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array): Uint8Array {
+  const hmac = crypto.createHmac('sha256', key)
+  hmac.update(nonce)
+  hmac.update(ciphertext)
+  return new Uint8Array(hmac.digest().subarray(0, FRANKING_MAC_BYTES))
+}
+
+function timingSafeEqualBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i += 1) diff |= a[i] ^ b[i]
+  return diff === 0
+}
+
+/** Attach a franking tag to a ciphertext before transmission. */
+export function attachFrankingTag(
+  ciphertext: Uint8Array,
+  frankKey: Uint8Array | string,
+  keyId: string,
+): FrankingTag {
+  if (!keyId) {
+    throw new E2EEError('bad-franking', 'A franking tag requires a keyId so old reports stay verifiable after rotation.')
+  }
+  const key = typeof frankKey === 'string' ? encodeUtf8(frankKey) : frankKey
+  if (key.length === 0) {
+    throw new E2EEError('bad-franking', 'The franking key must not be empty.')
+  }
+  const nonce = randomBytes(FRANKING_NONCE_BYTES)
+  const mac = frankingMac(key, nonce, ciphertext)
+  return { keyId, nonce: bytesToHex(nonce), mac: bytesToHex(mac) }
+}
+
+/**
+ * Verify a reported ciphertext against its franking tag. Returns false on
+ * any malformed input rather than throwing, so moderators can batch-check
+ * untrusted reports safely.
+ */
+export function verifyFrankingTag(
+  ciphertext: Uint8Array,
+  tag: FrankingTag,
+  frankKey: Uint8Array | string,
+): boolean {
+  if (!tag || typeof tag.keyId !== 'string' || typeof tag.nonce !== 'string' || typeof tag.mac !== 'string') {
+    return false
+  }
+  const key = typeof frankKey === 'string' ? encodeUtf8(frankKey) : frankKey
+  if (key.length === 0) return false
+  let nonce: Uint8Array
+  let expected: Uint8Array
+  try {
+    nonce = hexToBytes(tag.nonce, 'franking nonce')
+    expected = hexToBytes(tag.mac, 'franking mac')
+  } catch {
+    return false
+  }
+  if (nonce.length !== FRANKING_NONCE_BYTES || expected.length !== FRANKING_MAC_BYTES) return false
+  return timingSafeEqualBytes(frankingMac(key, nonce, ciphertext), expected)
+}

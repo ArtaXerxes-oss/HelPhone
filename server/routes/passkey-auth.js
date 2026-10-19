@@ -138,7 +138,7 @@ export function createPasskeyAuthRouter() {
         username: state.username,
         transports: req.body?.response?.response?.transports || [],
       });
-      return res.json({ verified: true, sessionToken: await issueSession(state.userId, state.username) });
+      return res.json({ verified: true, sessionToken: await issueSession(state.userId, state.username, { uv: true }) });
     } catch (error) {
       return res.status(401).json({ error: error instanceof Error ? error.message : 'Passkey verification failed' });
     }
@@ -183,7 +183,11 @@ export function createPasskeyAuthRouter() {
       if (!verification.verified) return res.status(401).json({ error: 'Passkey assertion was not verified' });
       stored.counter = verification.authenticationInfo.newCounter;
       await saveCredential(id, stored);
-      return res.json({ verified: true, sessionToken: await issueSession(stored.userId, stored.username) });
+      // ISP-059 / #729: record the measured UV tier on the session. The
+      // requireUserVerification gate above makes uv=true a precondition, but
+      // the claim is taken from the authenticator's answer so it stays honest
+      // if enforcement is ever relaxed to a step-up model.
+      return res.json({ verified: true, sessionToken: await issueSession(stored.userId, stored.username, { uv: verification.authenticationInfo.userVerified !== false }) });
     } catch (error) {
       return res.status(401).json({ error: error instanceof Error ? error.message : 'Passkey verification failed' });
     }
@@ -195,7 +199,7 @@ export function createPasskeyAuthRouter() {
       const claims = await verifySessionToken(token);
       if (!claims) return res.status(401).json({ error: 'Expired or invalid passkey session' });
       await revokeSession(claims.jti, claims.exp);
-      return res.json({ sessionToken: await issueSession(claims.sub, claims.username) });
+      return res.json({ sessionToken: await issueSession(claims.sub, claims.username, { uv: claims.uv !== false }) });
     } catch (error) {
       return res.status(401).json({ error: error instanceof Error ? error.message : 'Passkey refresh failed' });
     }
