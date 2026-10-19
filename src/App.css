@@ -46,3 +46,34 @@
     display: none;
   }
 }
+
+/* Print: ink-friendly A4 report output. Everything here is scoped to
+   @media print so the screen layout is untouched. Elements that must not
+   appear on paper opt out with .hp-print-hide; cards that must not split
+   across pages opt in with .hp-print-card. */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .hp-app-nav,
+  .hp-print-hide {
+    display: none !important;
+  }
+
+  .hp-print-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  [dir="rtl"] {
+    direction: rtl;
+  }
+}
