@@ -2910,8 +2910,8 @@ export default function Help() {
                         aria-expanded={searchSuggestions.length > 0}
                         aria-controls="hp-search-suggestions"
                         aria-activedescendant={
-                          activeSuggestion >= 0
-                            ? `hp-suggestion-${activeSuggestion}`
+                          activeSuggestion >= 0 && searchSuggestions[activeSuggestion]
+                            ? `hp-suggestion-${searchSuggestions[activeSuggestion].id}`
                             : undefined
                         }
                       />
@@ -2963,7 +2963,7 @@ export default function Help() {
                             {searchSuggestions.map((feature, idx) => (
                               <button
                                 key={feature.id}
-                                id={`hp-suggestion-${idx}`}
+                                id={`hp-suggestion-${feature.id}`}
                                 role="option"
                                 aria-selected={idx === activeSuggestion}
                                 type="button"
@@ -2978,7 +2978,7 @@ export default function Help() {
                                       ? "rgba(255,255,255,0.07)"
                                       : "transparent",
                                   color: "rgba(242,236,220,0.9)",
-                                  textAlign: "left",
+                                  textAlign: "start",
                                   cursor: "pointer",
                                   display: "block",
                                 }}
@@ -3525,7 +3525,7 @@ export default function Help() {
                           display: "flex",
                           alignItems: "center",
                           gap: "10px",
-                          textAlign: "left",
+                          textAlign: "start",
                         }}
                       >
                         <img
@@ -4059,7 +4059,7 @@ export default function Help() {
                     color:
                       i === mapStyleIndex ? "#B3A6FF" : "rgba(242,236,220,0.7)",
                     cursor: "pointer",
-                    textAlign: "left",
+                    textAlign: "start",
                     display: "block",
                     transition: "background 0.15s",
                   }}
@@ -4770,7 +4770,7 @@ export default function Help() {
                       border: `1.5px solid ${isSelected ? "#FF7A6B" : "rgba(255,255,255,0.08)"}`,
                       borderRadius: "14px",
                       cursor: "pointer",
-                      textAlign: "left",
+                      textAlign: "start",
                       transition: "border-color 0.15s, background 0.15s",
                     }}
                   >
