@@ -85,6 +85,32 @@ export function trackSubscriptionTransport(
 }
 
 /**
+ * Track whether an emergency audio alert was actually audible (ISP-049).
+ * `blocked` means the browser's autoplay policy kept the AudioContext
+ * suspended, so the siren could not sound; `fallback` records what was done
+ * instead. blocked / (played + blocked) is the "audio-blocked rate".
+ */
+export function trackAudioAlert(
+  outcome: 'played' | 'blocked',
+  details: { fallback?: 'vibrate' | 'none' } = {}
+): void {
+  const span = tracer.startSpan('audio.alert')
+
+  try {
+    span.setAttributes({
+      'audio.outcome': outcome,
+      'audio.fallback': details.fallback ?? 'none',
+    })
+
+    if (outcome === 'blocked') {
+      span.setStatus({ code: SpanStatusCode.ERROR, message: 'autoplay blocked' })
+    }
+  } finally {
+    span.end()
+  }
+}
+
+/**
  * Track video performance metrics (Issue #745)
  */
 export function trackVideoPerformance(
