@@ -24,8 +24,17 @@ const ALLOWED_TILE_MIMES = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(() => {
-      self.skipWaiting();
+    caches.open(CACHE_NAME).then((cache) => {
+      // ISP-046: Precache critical locale files for offline i18n support
+      // Ensures Arabic Help form renders offline without suspense hang
+      return cache.addAll([
+        '/locales/en/common.json',
+        '/locales/en/help.json',
+        '/locales/ar/common.json',
+        '/locales/ar/help.json',
+      ]).then(() => {
+        self.skipWaiting();
+      });
     }),
   );
 });
