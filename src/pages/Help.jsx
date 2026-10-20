@@ -63,6 +63,7 @@ import {
   generateEncryptionKeyPair,
   importPrivateKeyJwk,
 } from "../lib/crypto";
+import { redactProfile, jitterCoordinates } from "../lib/privacy.ts";
 import { api } from "../services/api";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
