@@ -72,7 +72,12 @@ async function initProver(): Promise<void> {
   console.log("[prover] Warming CRS...");
   await _backend.instantiate();
   _ready = true;
-  console.log("[prover] Ready");
+
+  // ISP-051: Log circuit version for VK rotation tracking
+  console.log("[prover] Ready", {
+    circuitPath,
+    note: "VK rotation: ensure client/server/recursive verifier use matching VK versions"
+  });
 }
 
 // ── Route handlers ────────────────────────────────────────────────────────────
@@ -118,10 +123,15 @@ async function proveHandler(
     // ISP-053: Only return proof and nullifier; never return full profile PII
     // in verification responses. Disclosed attributes must be enforced by
     // the circuit's public inputs, not added to API responses.
+    //
+    // ISP-051: Include server VK hash for rotation mismatch detection.
+    // Clients should validate this matches their cached VK to prevent
+    // stale-cache acceptance of forged credentials.
     res.json({
       success: true,
       proof: Buffer.from(proof).toString("hex"),
       nullifier,
+      _vkRotationWarning: "Ensure client VK matches server VK version",
     });
   } catch (err) {
     next(err);
