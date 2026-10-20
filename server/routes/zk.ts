@@ -115,6 +115,9 @@ async function proveHandler(
       `[prover] Proof generated in ${((Date.now() - start) / 1000).toFixed(1)}s`,
     );
 
+    // ISP-053: Only return proof and nullifier; never return full profile PII
+    // in verification responses. Disclosed attributes must be enforced by
+    // the circuit's public inputs, not added to API responses.
     res.json({
       success: true,
       proof: Buffer.from(proof).toString("hex"),
