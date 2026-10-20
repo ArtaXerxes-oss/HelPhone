@@ -218,3 +218,39 @@ export function violationFromVaultError(code: number): ZonePrivacyViolation | nu
       return null
   }
 }
+
+/**
+ * Redact PII from user profiles for public map display (ISP-053).
+ * Only disclosed attributes pass through; undisclosed fields are stripped.
+ */
+export function redactProfile<T extends Record<string, any>>(
+  profile: T,
+  disclosedFields: string[] = ['nickname', 'id']
+): Partial<T> {
+  const redacted: Partial<T> = {}
+  for (const field of disclosedFields) {
+    if (field in profile) {
+      redacted[field as keyof T] = profile[field]
+    }
+  }
+  return redacted
+}
+
+/**
+ * Add positional jitter to coordinates for k-anonymity (ISP-053).
+ * Jitters coordinates by ±jitterMeters to prevent exact location tracking.
+ */
+export function jitterCoordinates(
+  lat: number,
+  lng: number,
+  jitterMeters: number = 200
+): { lat: number; lng: number } {
+  // 1 degree latitude ≈ 111km
+  const latJitter = (Math.random() - 0.5) * 2 * (jitterMeters / 111000)
+  // Longitude degrees vary by latitude
+  const lngJitter = (Math.random() - 0.5) * 2 * (jitterMeters / (111000 * Math.cos((lat * Math.PI) / 180)))
+  return {
+    lat: lat + latJitter,
+    lng: lng + lngJitter,
+  }
+}
