@@ -1,0 +1,168 @@
+{
+  "generatedAt": "2026-10-20T08:33:03.502Z",
+  "browser": "155.0.8059.80",
+  "turn": "node-turn on 127.0.0.1 (UDP+TCP), long-term credentials",
+  "runsPerVariant": 10,
+  "timeoutMs": 8000,
+  "variants": [
+    {
+      "name": "control: no isolation headers",
+      "transport": "udp",
+      "headers": {},
+      "crossOriginIsolated": false,
+      "connected": "10/10",
+      "viaRelayPair": "10/10",
+      "medianMsToConnect": 167,
+      "consoleErrors": [],
+      "sample": {
+        "connected": true,
+        "msToConnect": 100,
+        "iceConnectionState": {
+          "a": "connected",
+          "b": "connected"
+        },
+        "candidateTypes": [
+          "relay"
+        ],
+        "selectedPair": {
+          "local": "relay",
+          "remote": "relay"
+        },
+        "crossOriginIsolated": false,
+        "consoleErrors": []
+      }
+    },
+    {
+      "name": "repo config: COOP same-origin + COEP credentialless",
+      "transport": "udp",
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "credentialless"
+      },
+      "crossOriginIsolated": true,
+      "connected": "10/10",
+      "viaRelayPair": "10/10",
+      "medianMsToConnect": 252,
+      "consoleErrors": [],
+      "sample": {
+        "connected": true,
+        "msToConnect": 303,
+        "iceConnectionState": {
+          "a": "connected",
+          "b": "connected"
+        },
+        "candidateTypes": [
+          "relay"
+        ],
+        "selectedPair": {
+          "local": "relay",
+          "remote": "relay"
+        },
+        "crossOriginIsolated": true,
+        "consoleErrors": []
+      }
+    },
+    {
+      "name": "strict: COOP same-origin + COEP require-corp",
+      "transport": "udp",
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp"
+      },
+      "crossOriginIsolated": true,
+      "connected": "10/10",
+      "viaRelayPair": "10/10",
+      "medianMsToConnect": 169,
+      "consoleErrors": [],
+      "sample": {
+        "connected": true,
+        "msToConnect": 145,
+        "iceConnectionState": {
+          "a": "connected",
+          "b": "connected"
+        },
+        "candidateTypes": [
+          "relay"
+        ],
+        "selectedPair": {
+          "local": "relay",
+          "remote": "relay"
+        },
+        "crossOriginIsolated": true,
+        "consoleErrors": []
+      }
+    },
+    {
+      "name": "control: no isolation headers",
+      "transport": "tcp",
+      "headers": {},
+      "crossOriginIsolated": false,
+      "connected": "0/10",
+      "viaRelayPair": "0/10",
+      "medianMsToConnect": null,
+      "consoleErrors": [],
+      "sample": {
+        "connected": false,
+        "msToConnect": null,
+        "iceConnectionState": {
+          "a": "new",
+          "b": "new"
+        },
+        "candidateTypes": [],
+        "selectedPair": null,
+        "crossOriginIsolated": false,
+        "consoleErrors": []
+      }
+    },
+    {
+      "name": "repo config: COOP same-origin + COEP credentialless",
+      "transport": "tcp",
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "credentialless"
+      },
+      "crossOriginIsolated": true,
+      "connected": "0/10",
+      "viaRelayPair": "0/10",
+      "medianMsToConnect": null,
+      "consoleErrors": [],
+      "sample": {
+        "connected": false,
+        "msToConnect": null,
+        "iceConnectionState": {
+          "a": "new",
+          "b": "new"
+        },
+        "candidateTypes": [],
+        "selectedPair": null,
+        "crossOriginIsolated": true,
+        "consoleErrors": []
+      }
+    },
+    {
+      "name": "strict: COOP same-origin + COEP require-corp",
+      "transport": "tcp",
+      "headers": {
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "Cross-Origin-Embedder-Policy": "require-corp"
+      },
+      "crossOriginIsolated": true,
+      "connected": "0/10",
+      "viaRelayPair": "0/10",
+      "medianMsToConnect": null,
+      "consoleErrors": [],
+      "sample": {
+        "connected": false,
+        "msToConnect": null,
+        "iceConnectionState": {
+          "a": "new",
+          "b": "new"
+        },
+        "candidateTypes": [],
+        "selectedPair": null,
+        "crossOriginIsolated": true,
+        "consoleErrors": []
+      }
+    }
+  ]
+}

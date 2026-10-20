@@ -168,10 +168,18 @@ export default function Help() {
     JSON.stringify({ contact, medicalNotes, nickname: '' })
   ).length
   const overBudget = plaintextBytes > MAX_PAYLOAD_PLAINTEXT_BYTES
+  // ISP-049: the first tap anywhere unlocks audio, so a later alert that has no
+  // gesture of its own can sound instead of being silently blocked.
+  useEffect(() => emergencyAudioAlert.armOnFirstGesture(), [])
+
   const handleTestSiren = async () => {
     try {
-      await emergencyAudioAlert.play()
-      setStatusMessage('Emergency siren preview played.')
+      const outcome = await emergencyAudioAlert.play()
+      setStatusMessage(
+        outcome === 'played'
+          ? 'Emergency siren preview played.'
+          : 'Your browser is blocking sound. Tap the page once, then try again; vibration was used instead.'
+      )
     } catch (err: any) {
       setStatusMessage(err.message || 'Unable to play the emergency siren.')
     }
