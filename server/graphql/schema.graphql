@@ -1,9 +1,43 @@
-# Canonical GraphQL contract for the dispatch/events/sync domain.
-# This file is versioned and compared against swagger.json + the zod schemas by
-# scripts/detect-api-drift.js. Field names, nullability, enums, and pagination
-# cursors deliberately mirror the REST surface.
+# Canonical GraphQL contract for the dispatch/events/sync and database domain.
+# This file is versioned and compared against swagger.json + the zod schemas.
 
 scalar JSON
+
+type PoolStats {
+  total: Int!
+  active: Int!
+  idle: Int!
+  waiting: Int!
+  maxConnections: Int!
+}
+
+type Health {
+  status: String!
+  database: Boolean!
+  databaseLatencyMs: Int!
+  pool: PoolStats!
+}
+
+type AuthUser {
+  publicKey: String!
+  algorithm: String!
+}
+
+type Verification {
+  wallet: String!
+  recordedAt: String
+  attributes: JSON!
+}
+
+type HelpRequest {
+  id: ID!
+  status: String
+  createdAt: String
+  attributes: JSON!
+  responders: [Responder!]!
+  responderCount: Int!
+  arrivedCount: Int!
+}
 
 enum IncidentStatus {
   open
@@ -42,12 +76,16 @@ type Event {
 }
 
 type Responder {
-  id: ID!
-  incidentId: ID!
-  name: String!
-  status: ResponderStatus!
-  location: Location!
+  id: ID
+  incidentId: ID
+  name: String
+  status: ResponderStatus
+  location: Location
   lastEvent: Event
+
+  requestId: ID
+  arrived: Boolean
+  attributes: JSON
 }
 
 type Incident {
@@ -124,6 +162,12 @@ input AssignResponderInput {
 }
 
 type Query {
+  health: Health!
+  requests(status: String, limit: Int = 20, offset: Int = 0): [HelpRequest!]!
+  request(id: ID!): HelpRequest
+  verifications(wallet: String!, limit: Int = 10): [Verification!]!
+  me: AuthUser
+
   incident(id: ID!): Incident
   incidents(limit: Int = 20, cursor: String): IncidentConnection!
   events(incidentId: ID!, limit: Int = 20, cursor: String): EventConnection!

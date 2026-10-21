@@ -16,12 +16,22 @@ import {
   BASE_FEE,
   StrKey,
 } from "@stellar/stellar-sdk";
+import { parseEndpointList } from "./networkEstimator";
+import { initRpcHealth, reportRpcFailure } from "./rpcHealth";
+import { toAssetRow, toAmount, classifyOracleError, ORACLE_ERROR_MESSAGES } from "./treasury";
 import type {
   HelpRequest,
   Responder,
   RankingEntry,
   RequestStatus,
 } from "../types/index";
+import {
+  getCachedFootprintTemplate,
+  buildSorobanTransaction,
+  summarizeFootprint,
+} from "./footprint";
+import { verificationWindow } from "./ringBuffer";
+import { isEncryptedEnvelope } from "./crypto";
 
 /** Validate a Stellar Soroban contract ID (strkey 'C...' with CRC16 checksum).
  *  Throws immediately with a clear message instead of letting a malformed ID
@@ -41,9 +51,9 @@ const DEFAULT_CONTRACT_ID = assertValidContractId(
   "DEFAULT_CONTRACT_ID",
 );
 
-const ACTIVE_NETWORK_STORAGE_KEY = 'helphone:active-network'
-const WALLET_ADDRESS_STORAGE_KEY = 'helphone:wallet-address'
-const DEFAULT_FRIENDBOT_URL = 'https://friendbot.stellar.org'
+const ACTIVE_NETWORK_STORAGE_KEY = "helphone:active-network";
+const WALLET_ADDRESS_STORAGE_KEY = "helphone:wallet-address";
+const DEFAULT_FRIENDBOT_URL = "https://friendbot.stellar.org";
 
 // ── Wallet persistence (#160) ──────────────────────────────────────────────
 // Persists the wallet connection address to localStorage so the session
@@ -51,9 +61,9 @@ const DEFAULT_FRIENDBOT_URL = 'https://friendbot.stellar.org'
 
 /** Save wallet address to localStorage. Silently ignores storage failures. */
 export function saveWalletAddress(address) {
-  if (typeof address !== 'string' || !address) return
+  if (typeof address !== "string" || !address) return;
   try {
-    window.localStorage?.setItem(WALLET_ADDRESS_STORAGE_KEY, address)
+    window.localStorage?.setItem(WALLET_ADDRESS_STORAGE_KEY, address);
   } catch {
     // Storage quota exceeded or unavailable — non-critical
   }
@@ -62,16 +72,16 @@ export function saveWalletAddress(address) {
 /** Load previously saved wallet address from localStorage, or empty string. */
 export function loadWalletAddress() {
   try {
-    return window.localStorage?.getItem(WALLET_ADDRESS_STORAGE_KEY) || ''
+    return window.localStorage?.getItem(WALLET_ADDRESS_STORAGE_KEY) || "";
   } catch {
-    return ''
+    return "";
   }
 }
 
 /** Remove saved wallet address from localStorage. */
 export function clearWalletAddress() {
   try {
-    window.localStorage?.removeItem(WALLET_ADDRESS_STORAGE_KEY)
+    window.localStorage?.removeItem(WALLET_ADDRESS_STORAGE_KEY);
   } catch {
     // Non-critical
   }
@@ -158,11 +168,40 @@ const CONTRACT_ID = assertValidContractId(
   ACTIVE_NETWORK.contractId,
   "CONTRACT_ID",
 );
+const DAO_CONTRACT_ID = import.meta.env?.VITE_HELPHONE_DAO_CONTRACT_ID;
+
+function getDaoContractId() {
+  if (!DAO_CONTRACT_ID) throw new Error("VITE_HELPHONE_DAO_CONTRACT_ID is not configured");
+  return assertValidContractId(DAO_CONTRACT_ID, "VITE_HELPHONE_DAO_CONTRACT_ID");
+}
 const RPC_URL = ACTIVE_NETWORK.rpcUrl;
 const FRIENDBOT_URL = ACTIVE_NETWORK.friendbotUrl;
 const NETWORK = ACTIVE_NETWORK.networkPassphrase;
 
-const server = new rpc.Server(RPC_URL, { timeout: 30_000 });
+const RPC_TIMEOUT_MS = 30_000;
+let server = new rpc.Server(RPC_URL, { timeout: RPC_TIMEOUT_MS });
+
+// ── RPC health & failover (#539) ────────────────────────────────
+// Backup Soroban RPC nodes come from a comma-separated
+// VITE_STELLAR_<NETWORK>_RPC_FALLBACK_URLS (or the network-agnostic
+// VITE_STELLAR_RPC_FALLBACK_URLS). The estimator probes the pool and, when the
+// primary fails, swaps `server` to the lowest-latency healthy backup; it swaps
+// back once the primary recovers. Probing only runs after startRpcMonitoring()
+// so importing this module has no network side effects (see rpcHealth.ts).
+const RPC_POOL = parseEndpointList(
+  RPC_URL,
+  import.meta.env?.[
+    `VITE_STELLAR_${ACTIVE_NETWORK.name.toUpperCase()}_RPC_FALLBACK_URLS`
+  ],
+  import.meta.env?.VITE_STELLAR_RPC_FALLBACK_URLS,
+);
+
+initRpcHealth({
+  endpoints: RPC_POOL,
+  onChange: (url) => {
+    server = new rpc.Server(url, { timeout: RPC_TIMEOUT_MS });
+  },
+});
 const contract = new Contract(CONTRACT_ID);
 
 // ── RPC Response Cache (issue #63) ──────────────────────────────
@@ -198,14 +237,16 @@ async function _withCache(method, args, ttl, fetchFn) {
   if (_requestPromises.has(key)) {
     return _requestPromises.get(key);
   }
-  const promise = fetchFn().then((result) => {
-    _requestCache.set(key, { value: result, timestamp: Date.now(), ttl });
-    _requestPromises.delete(key);
-    return result;
-  }).catch((err) => {
-    _requestPromises.delete(key);
-    throw err;
-  });
+  const promise = fetchFn()
+    .then((result) => {
+      _requestCache.set(key, { value: result, timestamp: Date.now(), ttl });
+      _requestPromises.delete(key);
+      return result;
+    })
+    .catch((err) => {
+      _requestPromises.delete(key);
+      throw err;
+    });
   _requestPromises.set(key, promise);
   return promise;
 }
@@ -331,25 +372,48 @@ function scv(val, opts) {
 
 const PRIORITY_LEVELS = ["Low", "Medium", "High", "Critical"];
 
+/**
+ * Parse the sealed envelope the contract returned.
+ *
+ * The contract stores it as opaque bytes (we submit hex), so anything that
+ * fails to parse is surfaced as `null` rather than crashing a map render — a
+ * responder dashboard must still show the request's location and status.
+ */
+function parseEncryptedPayload(raw) {
+  const hex = typeof raw === "string" ? raw : raw?.toString?.("hex");
+  if (typeof hex !== "string" || hex.length === 0) return null;
+  try {
+    const envelope = JSON.parse(Buffer.from(hex, "hex").toString("utf8"));
+    return isEncryptedEnvelope(envelope) ? envelope : null;
+  } catch {
+    return null;
+  }
+}
+
 function mapRequest(raw) {
   const STATUS = ["Pending", "Enroute", "Resolved", "Cancelled"];
-  const rawPriority = typeof raw.priority === 'number'
-    ? PRIORITY_LEVELS[raw.priority]
-    : typeof raw.priority === 'string'
-      ? raw.priority
-      : 'Medium';
+  // `priority` is a client-side display concern; the contract has no such
+  // field, so it is carried through from local state when present and
+  // defaulted otherwise.
+  const rawPriority =
+    typeof raw.priority === "number"
+      ? PRIORITY_LEVELS[raw.priority]
+      : typeof raw.priority === "string"
+        ? raw.priority
+        : "Medium";
   return {
     id: raw.id ? safeToNumber(raw.id) : raw.id,
     requester: raw.requester,
     lat: decodeLat(raw.lat),
     lng: decodeLng(raw.lng),
     emergency_type: raw.emergency_type,
-    nickname: raw.nickname,
-    contact: raw.contact,
+    // The contact number and medical notes now live *inside* this envelope,
+    // sealed to the authorized responders. Decrypt locally to read them.
+    encrypted_payload: parseEncryptedPayload(raw.encrypted_payload),
     status:
       STATUS[raw.status] ??
       (Array.isArray(raw.status) ? raw.status[0] : raw.status),
-    priority: PRIORITY_LEVELS.includes(rawPriority) ? rawPriority : 'Medium',
+    priority: PRIORITY_LEVELS.includes(rawPriority) ? rawPriority : "Medium",
     created_at: safeToNumber(raw.created_at),
     resolved_at: raw.resolved_at ? safeToNumber(raw.resolved_at) : null,
   };
@@ -399,6 +463,9 @@ async function withRetry(
       return await fn();
     } catch (err) {
       lastErr = err;
+      // A network-shaped failure counts against the active RPC node so the
+      // estimator can fail over without waiting for its next probe.
+      if (isRetryableError(err)) reportRpcFailure();
       if (!isRetryableError(err) || attempt === maxAttempts - 1) break;
       const delayMs = RETRY_BASE_DELAY_MS * 2 ** attempt;
       console.warn(
@@ -452,7 +519,7 @@ async function resolveWalletAddress(wallet, fallback = "") {
 export async function getRequest(requestId) {
   const id = safeToNumber(requestId);
   if (!Number.isFinite(id) || id < 0) return null;
-  return _withCache('getRequest', [id], CACHE_TTL.short, async () => {
+  return _withCache("getRequest", [id], CACHE_TTL.short, async () => {
     const sim = await simulateRead(
       contract.call("get_request", scv(id, { type: "u64" })),
     );
@@ -463,22 +530,27 @@ export async function getRequest(requestId) {
 }
 
 export async function getResponder(requestId, index) {
-  return _withCache('getResponder', [requestId, index], CACHE_TTL.short, async () => {
-    const sim = await simulateRead(
-      contract.call(
-        "get_responder",
-        scv(Number(requestId), { type: "u64" }),
-        scv(Number(index), { type: "u32" }),
-      ),
-    );
-    if (!sim.result) return null;
-    const raw = scValToNative(sim.result.retval);
-    return raw ? { id: `${requestId}-${index}`, ...mapResponder(raw) } : null;
-  });
+  return _withCache(
+    "getResponder",
+    [requestId, index],
+    CACHE_TTL.short,
+    async () => {
+      const sim = await simulateRead(
+        contract.call(
+          "get_responder",
+          scv(Number(requestId), { type: "u64" }),
+          scv(Number(index), { type: "u32" }),
+        ),
+      );
+      if (!sim.result) return null;
+      const raw = scValToNative(sim.result.retval);
+      return raw ? { id: `${requestId}-${index}`, ...mapResponder(raw) } : null;
+    },
+  );
 }
 
 export async function getActiveRequests(max = 500) {
-  return _withCache('getActiveRequests', [max], CACHE_TTL.short, async () => {
+  return _withCache("getActiveRequests", [max], CACHE_TTL.short, async () => {
     const sim = await simulateRead(contract.call("get_active_requests"));
     if (!sim.result) return [];
     const rawIds = scValToNative(sim.result.retval);
@@ -487,7 +559,7 @@ export async function getActiveRequests(max = 500) {
 }
 
 export async function getRequestCount() {
-  return _withCache('getRequestCount', [], CACHE_TTL.short, async () => {
+  return _withCache("getRequestCount", [], CACHE_TTL.short, async () => {
     const sim = await simulateRead(contract.call("get_request_count"));
     if (!sim.result) return 0;
     return safeToNumber(scValToNative(sim.result.retval));
@@ -495,20 +567,25 @@ export async function getRequestCount() {
 }
 
 export async function getResponderCount(requestId) {
-  return _withCache('getResponderCount', [requestId], CACHE_TTL.short, async () => {
-    const sim = await simulateRead(
-      contract.call(
-        "get_responder_count",
-        scv(Number(requestId), { type: "u64" }),
-      ),
-    );
-    if (!sim.result) return 0;
-    return scValToNative(sim.result.retval);
-  });
+  return _withCache(
+    "getResponderCount",
+    [requestId],
+    CACHE_TTL.short,
+    async () => {
+      const sim = await simulateRead(
+        contract.call(
+          "get_responder_count",
+          scv(Number(requestId), { type: "u64" }),
+        ),
+      );
+      if (!sim.result) return 0;
+      return scValToNative(sim.result.retval);
+    },
+  );
 }
 
 export async function getRanking(limit = 50, period = "All Time") {
-  return _withCache('getRanking', [limit, period], CACHE_TTL.long, async () => {
+  return _withCache("getRanking", [limit, period], CACHE_TTL.long, async () => {
     const sim = await simulateRead(contract.call("get_ranking"));
     if (!sim.result) return [];
     return scValToNative(sim.result.retval).slice(0, limit);
@@ -520,27 +597,191 @@ export async function getRanking(limit = 50, period = "All Time") {
 export async function getMaintainerFunding() {
   const id = import.meta.env?.VITE_MAINTAINER_VAULT_CONTRACT_ID;
   if (!id) return null;
-  const vault = new Contract(assertValidContractId(id, "VITE_MAINTAINER_VAULT_CONTRACT_ID"));
-  return _withCache('getMaintainerFunding', [id], CACHE_TTL.long, async () => {
+  const vault = new Contract(
+    assertValidContractId(id, "VITE_MAINTAINER_VAULT_CONTRACT_ID"),
+  );
+  return _withCache("getMaintainerFunding", [id], CACHE_TTL.long, async () => {
     const sim = await simulateRead(vault.call("stats"));
     if (!sim.result) return null;
     return scValToNative(sim.result.retval);
   });
 }
 
+// ── HelPhone DAO — open source sustainability reserve (#587) ──
+// contracts/helphone_dao routes 1% of protocol transactions (SAC token) into
+// a reserve and pays DAO-approved grants to dependency maintainers.
+
+/** Basis-point cut of each gross protocol amount routed to the reserve. */
+export const SUSTAINABILITY_FEE_BPS = 100;
+
+/** Fee the DAO collects on `grossAmount` (integer stroops), rounded down to
+ *  match the contract's i128 arithmetic. Returns a BigInt. */
+export function computeSustainabilityFee(grossAmount) {
+  const gross = BigInt(grossAmount);
+  if (gross <= 0n) return 0n;
+  return (gross * BigInt(SUSTAINABILITY_FEE_BPS)) / 10_000n;
+}
+
+/** Decode `get_sustainability_stats` into plain numbers for the UI. */
+export function normalizeSustainabilityStats(raw) {
+  if (!raw) return null;
+  const toNum = (v) => {
+    const n = safeToNumber(v ?? 0);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    token: raw.token || null,
+    feeBps: toNum(raw.fee_bps),
+    reserve: toNum(raw.reserve),
+    totalCollected: toNum(raw.total_collected),
+    totalDisbursed: toNum(raw.total_disbursed),
+    grantsProposed: toNum(raw.grants_proposed),
+    grantsDisbursed: toNum(raw.grants_disbursed),
+    maintainersFunded: toNum(raw.maintainers_funded),
+  };
+}
+
+/** Decode a `MaintainerGrant` (status is a unit enum → `[name]` or `name`). */
+export function normalizeMaintainerGrant(raw) {
+  if (!raw) return null;
+  const status = Array.isArray(raw.status) ? raw.status[0] : raw.status;
+  return {
+    proposalId: safeToNumber(raw.proposal_id),
+    maintainer: raw.maintainer,
+    package: raw.package,
+    amount: safeToNumber(raw.amount),
+    status: status === "Disbursed" ? "Disbursed" : "Pending",
+    disbursedAt: safeToNumber(raw.disbursed_at) || null,
+  };
+}
+
+function _daoContractId() {
+  const id = import.meta.env?.VITE_HELPHONE_DAO_CONTRACT_ID;
+  return id ? assertValidContractId(id, "VITE_HELPHONE_DAO_CONTRACT_ID") : null;
+}
+
+/** Reserve + grant statistics. Returns null when the DAO is not deployed
+ *  (VITE_HELPHONE_DAO_CONTRACT_ID unset). */
+export async function getSustainabilityStats() {
+  const id = _daoContractId();
+  if (!id) return null;
+  return _withCache("getSustainabilityStats", [id], CACHE_TTL.short, async () => {
+    const sim = await simulateRead(new Contract(id).call("get_sustainability_stats"));
+    if (!sim.result) return null;
+    return normalizeSustainabilityStats(scValToNative(sim.result.retval));
+  });
+}
+
+export async function getMaintainerGrant(proposalId) {
+  const id = _daoContractId();
+  if (!id) return null;
+  const sim = await simulateRead(
+    new Contract(id).call("get_maintainer_grant", scv(BigInt(proposalId), { type: "u64" })),
+  );
+  if (!sim.result) return null;
+  return normalizeMaintainerGrant(scValToNative(sim.result.retval));
+}
+
+async function _daoWrite(fn, args, wallet) {
+  const id = _daoContractId();
+  if (!id) throw new Error("VITE_HELPHONE_DAO_CONTRACT_ID not configured");
+  const signerAddress = await resolveWalletAddress(wallet);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK,
+  })
+    .addOperation(
+      Operation.invokeContractFunction({
+        contract: id,
+        function: fn,
+        args: args(signerAddress),
+      }),
+    )
+    .setTimeout(30)
+    .build();
+  return await sendWrite(tx, wallet, fn);
+}
+
+/** Open a DAO FundAllocation proposal granting `amount` stroops of the
+ *  reserve token to `maintainer` for `pkg` (e.g. "npm:@stellar/stellar-sdk"). */
+export async function proposeMaintainerGrant(
+  maintainer,
+  pkg,
+  amount,
+  title,
+  description,
+  wallet,
+) {
+  return _daoWrite(
+    "propose_maintainer_grant",
+    (signer) => [
+      scv(signer, { type: "address" }),
+      scv(maintainer, { type: "address" }),
+      scv(pkg, { type: "string" }),
+      scv(BigInt(amount), { type: "i128" }),
+      scv(title, { type: "string" }),
+      scv(description, { type: "string" }),
+    ],
+    wallet,
+  );
+}
+
+/** Retry a grant left Pending because the reserve was short at execution. */
+export async function disburseMaintainerGrant(proposalId, wallet) {
+  return _daoWrite(
+    "disburse_grant",
+    () => [scv(BigInt(proposalId), { type: "u64" })],
+    wallet,
+  );
+}
+
 export async function getExpertVerifications(walletAddress, limit = 10) {
   if (!walletAddress) return [];
-  return _withCache('getExpertVerifications', [walletAddress, limit], CACHE_TTL.long, async () => {
-    const sim = await simulateRead(
-      contract.call(
-        "get_expert_verifications",
-        scv(walletAddress, { type: "address" }),
-        scv(Number(limit), { type: "u32" }),
-      ),
-    );
-    if (!sim.result) return [];
-    return scValToNative(sim.result.retval) || [];
-  });
+  return _withCache(
+    "getExpertVerifications",
+    [walletAddress, limit],
+    CACHE_TTL.long,
+    async () => {
+      const sim = await simulateRead(
+        contract.call(
+          "get_expert_verifications",
+          scv(walletAddress, { type: "address" }),
+          scv(Number(limit), { type: "u32" }),
+        ),
+      );
+      if (!sim.result) return [];
+      return scValToNative(sim.result.retval) || [];
+    },
+  );
+}
+
+/** Which verification indexes are still readable for a wallet. The contract
+ *  keeps only the newest `capacity` entries per wallet (#531); older ones read
+ *  back as missing, so callers should page within `[oldest, total)`. */
+export async function getExpertVerificationWindow(walletAddress) {
+  if (!walletAddress) return null;
+  return _withCache(
+    "getExpertVerificationWindow",
+    [walletAddress],
+    CACHE_TTL.short,
+    async () => {
+      const readCount = async (method, ...args) => {
+        const sim = await simulateRead(contract.call(method, ...args));
+        return sim.result ? safeToNumber(scValToNative(sim.result.retval)) : 0;
+      };
+      const [total, capacity] = await Promise.all([
+        readCount(
+          "get_expert_verification_count",
+          scv(walletAddress, { type: "address" }),
+        ),
+        readCount("get_expert_verification_capacity"),
+      ]);
+      return verificationWindow(total, capacity);
+    },
+  );
 }
 
 // ── Contract event stream (issue #177) ─────────────────────────
@@ -551,53 +792,113 @@ export async function getExpertVerifications(walletAddress, limit = 10) {
 // depending on whether this connects.
 const EVENTS_URL =
   import.meta.env?.VITE_EVENTS_URL || "http://localhost:3001/events/stream";
+const EVENTS_WS_URL = import.meta.env?.VITE_EVENTS_WS_URL ||
+  `${EVENTS_URL.replace(/^http/, "ws").replace(/\/events\/stream(?:\?.*)?$/, "/events/ws")}`;
 
 /** Subscribe to contract lifecycle events. `onEvent` is called with
  *  `{ topic, ledger, id }` for each event. Returns an unsubscribe function.
  *  Never throws — a construction failure (e.g. no EventSource support)
  *  just means the caller's polling fallback keeps doing all the work. */
 export function subscribeToContractEvents(onEvent) {
-  let es;
-  try {
-    es = new EventSource(EVENTS_URL);
-  } catch {
-    return () => {};
-  }
-  es.onmessage = (msg) => {
+  let es = null;
+  let ws = null;
+  let reconnectTimer = null;
+  let reconnectAttempt = 0;
+  let stopped = false;
+  const recentIds = new Set();
+  const deliver = (raw) => {
     try {
-      onEvent(JSON.parse(msg.data));
+      const decoded = typeof raw === "string" ? JSON.parse(raw) : raw;
+      const event = decoded?.type === "contract-event" ? decoded : decoded;
+      if (decoded?.type && decoded.type !== "contract-event") return;
+      if (!event || typeof event.topic !== "string" || typeof event.id !== "string" || !Number.isSafeInteger(event.ledger)) return;
+      if (recentIds.has(event.id)) return;
+      recentIds.add(event.id);
+      if (recentIds.size > 512) recentIds.delete(recentIds.values().next().value);
+      onEvent(event);
     } catch {
-      // malformed event payload — ignore, don't crash the subscriber
+      // Malformed event payloads are ignored; polling remains the backstop.
     }
   };
-  es.onerror = () => {
-    // EventSource auto-reconnects on transient errors; nothing to do here.
-    // The caller's polling fallback continues covering us regardless.
+
+  const openSseFallback = () => {
+    if (stopped || es || typeof EventSource === "undefined") return;
+    try {
+      es = new EventSource(EVENTS_URL);
+      es.onmessage = (message) => deliver(message.data);
+      es.onerror = () => {
+        // EventSource performs its own retry; the contract polling loop is a backstop.
+      };
+    } catch {
+      es = null;
+    }
   };
-  return () => es.close();
+
+  const connectWebSocket = () => {
+    if (stopped || typeof WebSocket === "undefined") {
+      openSseFallback();
+      return;
+    }
+    try {
+      const url = new URL(EVENTS_WS_URL, window.location.href);
+      const tenant = import.meta.env?.VITE_TENANT_ID;
+      if (tenant) url.searchParams.set("tenant", tenant);
+      ws = new WebSocket(url.toString());
+      ws.onopen = () => {
+        reconnectAttempt = 0;
+        es?.close();
+        es = null;
+        ws?.send(JSON.stringify({ type: "subscribe", topics: ["RqCreated", "RqAcptd", "LocUpd", "Arrived", "Resolved", "Cancelled"] }));
+      };
+      ws.onmessage = (message) => deliver(message.data);
+      ws.onerror = () => openSseFallback();
+      ws.onclose = () => {
+        ws = null;
+        openSseFallback();
+        if (stopped) return;
+        const delay = Math.min(30_000, 500 * 2 ** reconnectAttempt++);
+        reconnectTimer = window.setTimeout(connectWebSocket, delay);
+      };
+    } catch {
+      openSseFallback();
+    }
+  };
+
+  connectWebSocket();
+  return () => {
+    stopped = true;
+    if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
+    es?.close();
+    ws?.close(1000, "Unsubscribed");
+  };
 }
 
 export async function getWalletBalances(address) {
   if (!address) return [];
-  return _withCache('getWalletBalances', [address], CACHE_TTL.long, async () => {
-    const url = new URL(`/accounts/${address}`, ACTIVE_NETWORK.horizonUrl);
-    const response = await fetch(url.toString());
+  return _withCache(
+    "getWalletBalances",
+    [address],
+    CACHE_TTL.long,
+    async () => {
+      const url = new URL(`/accounts/${address}`, ACTIVE_NETWORK.horizonUrl);
+      const response = await fetch(url.toString());
 
-    if (!response.ok) {
-      if (response.status === 404) return [];
-      throw new Error("Could not load wallet balances");
-    }
+      if (!response.ok) {
+        if (response.status === 404) return [];
+        throw new Error("Could not load wallet balances");
+      }
 
-    const account = await response.json();
-    return (account.balances || []).map((balance) => ({
-      asset: balance.asset_type === "native" ? "XLM" : balance.asset_code,
-      balance: Number(balance.balance),
-    }));
-  });
+      const account = await response.json();
+      return (account.balances || []).map((balance) => ({
+        asset: balance.asset_type === "native" ? "XLM" : balance.asset_code,
+        balance: Number(balance.balance),
+      }));
+    },
+  );
 }
 export async function checkAccount(address) {
   if (!address) return false;
-  return _withCache('checkAccount', [address], CACHE_TTL.long, async () => {
+  return _withCache("checkAccount", [address], CACHE_TTL.long, async () => {
     try {
       await server.getAccount(address);
       return true;
@@ -759,6 +1060,17 @@ const CONTRACT_ERROR_MESSAGES = {
   record_expert_verification: {
     2: "This wallet is not authorized to record the checkpoint.",
   },
+  propose_transfer: {
+    2: "Only the current contract owner can propose an ownership transfer.",
+  },
+  accept_transfer: {
+    2: "Only the nominated new owner can accept this transfer.",
+    5: "There is no pending ownership transfer to accept.",
+  },
+  revoke_transfer: {
+    2: "Only the current owner or nominated new owner can revoke this transfer.",
+    5: "There is no pending ownership transfer to revoke.",
+  },
 };
 
 function parseContractErrorCode(message) {
@@ -832,21 +1144,108 @@ function guardNaN(val, label) {
   return num;
 }
 
+// ── Automated footprint assembly (#517) ─────────────────────────────────
+// Functions whose storage key set is purely determined by their arguments can
+// reuse a server-verified footprint template baked into the envelope. The write
+// path ONLY reuses templates the inspector already cached — it never performs
+// an inspection round-trip itself (that would double RPC calls and slow the
+// critical submit path). Templates are produced up-front by inspectFootprint /
+// warmFootprintTemplates (client pre-flight or the server inspection endpoint).
+const SAFE_FOOTPRINT_FUNCTIONS = new Set([
+  "mark_arrived",
+  "resolve_request",
+  "cancel_request",
+  "propose_transfer",
+  "accept_transfer",
+  "revoke_transfer",
+  "create_admin_proposal",
+  "approve_admin_proposal",
+  "execute_admin_proposal",
+]);
+
+/** Build a contract invocation, baking a cached/verified footprint in when one
+ *  is already resident. Cache misses degrade gracefully to the footprint-free
+ *  envelope (pre-sign simulation derives the keys as it always has). */
+async function buildInvocation({ account, functionName, args, timeoutSeconds = 30, contractId = CONTRACT_ID }) {
+  let template;
+  if (SAFE_FOOTPRINT_FUNCTIONS.has(functionName)) {
+    template = getCachedFootprintTemplate(contractId, functionName, args);
+    if (template) {
+      const summary = summarizeFootprint(template);
+      console.debug(
+        `[footprint] ${functionName}: using cached template (${summary.readOnlyCount} read / ${summary.readWriteCount} write keys, resource fee ${summary.resourceFee})`,
+      );
+    }
+  }
+  const { transaction } = buildSorobanTransaction({
+    account,
+    contractId,
+    functionName,
+    args,
+    template,
+    networkPassphrase: NETWORK,
+    timeoutSeconds,
+  });
+  return transaction;
+}
+
+/**
+ * Encode a sealed emergency payload for `create_request`.
+ *
+ * Accepts the `EncryptedEnvelope` produced by `encryptEmergencyPayload` (the
+ * normal path) or a raw hex string (for tests / replay). Plaintext is
+ * rejected outright: contact numbers and medical notes must never reach a
+ * ledger entry, and the contract now refuses an empty payload.
+ */
+export function encodeEncryptedPayload(payload) {
+  if (typeof payload === "string") {
+    const hex = payload.trim();
+    if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hex)) {
+      throw new Error(
+        "Encrypted payload must be a hex string or an EncryptedEnvelope.",
+      );
+    }
+    return hex;
+  }
+  if (payload && typeof payload === "object") {
+    if (!isEncryptedEnvelope(payload)) {
+      throw new Error(
+        "Encrypted payload envelope is malformed, truncated or of an unknown version.",
+      );
+    }
+    return Buffer.from(JSON.stringify(payload), "utf8").toString("hex");
+  }
+  throw new Error(
+    "An encrypted payload is required. Emergency contact details are never sent in plaintext.",
+  );
+}
+
+/**
+ * Broadcast a help request.
+ *
+ * @param encryptedPayload sealed `EncryptedEnvelope` (or hex string). The
+ *        contact number, nickname and medical notes must already be inside it
+ *        — use `encryptEmergencyPayload` with each responder's public key.
+ * @param options.priority client-side display tier only. It is *not* a
+ *        contract field and is deliberately not sent on-chain: the deployed
+ *        `create_request` takes exactly five arguments, and sending a sixth
+ *        used to make every submission revert.
+ */
 export async function createRequest(
   requester,
   lat,
   lng,
   emergencyType,
-  nickname,
-  contact,
+  encryptedPayload,
   wallet,
-  priority = 'Medium',
+  options = {},
 ) {
   const signerAddress = await resolveWalletAddress(wallet, requester);
   if (!signerAddress) throw new Error("Wallet address is not available yet");
   await ensureAccountFunded(signerAddress);
   const account = await server.getAccount(signerAddress);
-  const priorityIndex = PRIORITY_LEVELS.indexOf(priority);
+  const payloadHex = encodeEncryptedPayload(encryptedPayload);
+  const priorityIndex = PRIORITY_LEVELS.indexOf(options.priority);
   const tx = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: NETWORK,
@@ -860,9 +1259,7 @@ export async function createRequest(
           scv(encodeCoord(lat, "lat"), { type: "i32" }),
           scv(encodeCoord(lng, "lng"), { type: "i32" }),
           scv(emergencyType, { type: "string" }),
-          scv(nickname, { type: "string" }),
-          scv(contact, { type: "string" }),
-          scv(priorityIndex >= 0 ? priorityIndex : 1, { type: "u32" }),
+          scv(Buffer.from(payloadHex, "hex"), { type: "bytes" }),
         ],
       }),
     )
@@ -871,7 +1268,11 @@ export async function createRequest(
 
   const result = await sendWrite(tx, wallet, "create_request");
   const retval = scValToNative(result.returnValue);
-  return { requestId: safeToNumber(retval), hash: result.hash };
+  return {
+    requestId: safeToNumber(retval),
+    hash: result.hash,
+    priority: priorityIndex >= 0 ? options.priority : "Medium",
+  };
 }
 
 export async function acceptRequest(
@@ -916,22 +1317,14 @@ export async function markArrived(responder, requestId, wallet) {
   if (!signerAddress) throw new Error("Wallet address is not available yet");
   await ensureAccountFunded(signerAddress);
   const account = await server.getAccount(signerAddress);
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK,
-  })
-    .addOperation(
-      Operation.invokeContractFunction({
-        contract: CONTRACT_ID,
-        function: "mark_arrived",
-        args: [
-          scv(responder, { type: "address" }),
-          scv(Number(requestId), { type: "u64" }),
-        ],
-      }),
-    )
-    .setTimeout(30)
-    .build();
+  const tx = await buildInvocation({
+    account,
+    functionName: "mark_arrived",
+    args: [
+      scv(responder, { type: "address" }),
+      scv(Number(requestId), { type: "u64" }),
+    ],
+  });
 
   return await sendWrite(tx, wallet, "mark_arrived");
 }
@@ -995,22 +1388,11 @@ export async function resolveRequest(requester, requestId, wallet) {
   if (!signerAddress) throw new Error("Wallet address is not available yet");
   await ensureAccountFunded(signerAddress);
   const account = await server.getAccount(signerAddress);
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK,
-  })
-    .addOperation(
-      Operation.invokeContractFunction({
-        contract: CONTRACT_ID,
-        function: "resolve_request",
-        args: [
-          scv(requester, { type: "address" }),
-          scv(Number(requestId), { type: "u64" }),
-        ],
-      }),
-    )
-    .setTimeout(30)
-    .build();
+  const tx = await buildInvocation({
+    account,
+    functionName: "resolve_request",
+    args: [scv(requester, { type: "address" }), scv(Number(requestId), { type: "u64" })],
+  });
 
   await sendWrite(tx, wallet, "resolve_request");
 }
@@ -1020,22 +1402,11 @@ export async function cancelRequest(requester, requestId, wallet) {
   if (!signerAddress) throw new Error("Wallet address is not available yet");
   await ensureAccountFunded(signerAddress);
   const account = await server.getAccount(signerAddress);
-  const tx = new TransactionBuilder(account, {
-    fee: BASE_FEE,
-    networkPassphrase: NETWORK,
-  })
-    .addOperation(
-      Operation.invokeContractFunction({
-        contract: CONTRACT_ID,
-        function: "cancel_request",
-        args: [
-          scv(requester, { type: "address" }),
-          scv(Number(requestId), { type: "u64" }),
-        ],
-      }),
-    )
-    .setTimeout(30)
-    .build();
+  const tx = await buildInvocation({
+    account,
+    functionName: "cancel_request",
+    args: [scv(requester, { type: "address" }), scv(Number(requestId), { type: "u64" })],
+  });
 
   await sendWrite(tx, wallet, "cancel_request");
 }
@@ -1090,6 +1461,33 @@ export async function getAegisPayoutAmount() {
   const sim = await simulateRead(contract.call("payout_amount"));
   if (!sim.result) return null;
   return safeToNumber(scValToNative(sim.result.retval));
+}
+
+/** The vault's zone differential-privacy policy (#529): the parameters plus
+ *  the smallest box side they currently allow. Null when no vault is
+ *  configured. While `enabled` is false the vault checks nothing. */
+export async function getZonePrivacyPolicy() {
+  if (!AEGIS_VAULT_ID) return null;
+  const vault = new Contract(
+    assertValidContractId(AEGIS_VAULT_ID, "VITE_AEGIS_VAULT_ID"),
+  );
+  return _withCache("getZonePrivacyPolicy", [AEGIS_VAULT_ID], CACHE_TTL.long, async () => {
+    const [params, min] = await Promise.all([
+      simulateRead(vault.call("privacy_params")),
+      simulateRead(vault.call("min_box_dimension")),
+    ]);
+    if (!params.result) return null;
+    const raw = scValToNative(params.result.retval);
+    return {
+      enabled: !!raw.enabled,
+      epsilonMilli: safeToNumber(raw.epsilon_milli),
+      sensitivity: safeToNumber(raw.sensitivity),
+      tailMult: safeToNumber(raw.tail_mult),
+      grid: safeToNumber(raw.grid),
+      kCells: safeToNumber(raw.k_cells),
+      minBoxDimension: min.result ? safeToNumber(scValToNative(min.result.retval)) : 0,
+    };
+  });
 }
 
 export async function setAegisPayoutAmount(admin, amount, wallet) {
@@ -1155,6 +1553,106 @@ export async function upgradeAegisVault(newWasmHash, wallet) {
     .setTimeout(30)
     .build();
   return await sendWrite(tx, wallet, "upgrade");
+}
+
+// ── Multi-asset treasury (Aegis Vault, #541) ───────────────────
+function aegisCall(fn, ...args) {
+  return new Contract(AEGIS_VAULT_ID).call(fn, ...args);
+}
+
+async function readNative(call, fallback) {
+  const sim = await simulateRead(call);
+  if (!sim?.result) return fallback;
+  return scValToNative(sim.result.retval);
+}
+
+/** Per-asset reserve, daily cap usage and target weight for every treasury asset. */
+export async function getTreasurySnapshot() {
+  if (!AEGIS_VAULT_ID) return [];
+  const assets = (await readNative(aegisCall("treasury_assets"), [])) || [];
+  return Promise.all(
+    assets.map(async (asset) => {
+      const arg = scv(asset, { type: "address" });
+      const [reserve, limit, spent, remaining, weight] = await Promise.all([
+        readNative(aegisCall("treasury_reserve", arg), 0n),
+        readNative(aegisCall("daily_limit", arg), 0n),
+        readNative(aegisCall("spent_today", arg), 0n),
+        readNative(aegisCall("remaining_today", arg), 0n),
+        readNative(aegisCall("target_weight", arg), 0),
+      ]);
+      return toAssetRow(asset, { reserve, limit, spent, remaining, weight });
+    }),
+  );
+}
+
+/** Signed buy(+)/sell(-) amounts per treasury asset to reach target weights.
+ *  `prices` follows the order of `treasury_assets`. */
+export async function getTreasuryRebalancePlan(prices) {
+  if (!AEGIS_VAULT_ID) return [];
+  const arg = nativeToScVal(
+    prices.map((p) => BigInt(p)),
+    { type: "i128" },
+  );
+  const plan = await readNative(aegisCall("rebalance_plan", arg), []);
+  return (plan || []).map(toAmount);
+}
+
+export async function setTreasuryDailyLimit(asset, limit, wallet) {
+  if (!AEGIS_VAULT_ID) throw new Error("VITE_AEGIS_VAULT_ID not configured");
+  const signerAddress = await resolveWalletAddress(wallet);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = new TransactionBuilder(account, {
+    fee: BASE_FEE,
+    networkPassphrase: NETWORK,
+  })
+    .addOperation(
+      Operation.invokeContractFunction({
+        contract: AEGIS_VAULT_ID,
+        function: "set_daily_limit",
+        args: [
+          scv(signerAddress, { type: "address" }),
+          scv(asset, { type: "address" }),
+          scv(BigInt(limit), { type: "i128" }),
+        ],
+      }),
+    )
+    .setTimeout(30)
+    .build();
+  return await sendWrite(tx, wallet, "set_daily_limit");
+}
+
+// ── Price oracle conversions (HelPhone DAO, #543) ──────────────
+const DAO_ORACLE_CONTRACT_ID = import.meta.env?.VITE_HELPHONE_DAO_ID || "";
+
+/** Live token conversion via the DAO's oracle adapter (e.g. XLM -> USDC).
+ *  Throws an Error with a user-facing message; a feed older than 1 hour
+ *  surfaces as the "stale" message. */
+export async function getOracleQuote(fromToken, toToken, amount) {
+  if (!DAO_ORACLE_CONTRACT_ID) throw new Error("VITE_HELPHONE_DAO_ID not configured");
+  const call = new Contract(DAO_ORACLE_CONTRACT_ID).call(
+    "quote_conversion",
+    scv(fromToken, { type: "address" }),
+    scv(toToken, { type: "address" }),
+    scv(BigInt(amount), { type: "i128" }),
+  );
+  let sim;
+  try {
+    sim = await simulateRead(call);
+  } catch (err) {
+    throw new Error(ORACLE_ERROR_MESSAGES[classifyOracleError(err)]);
+  }
+  if (sim?.error) {
+    throw new Error(ORACLE_ERROR_MESSAGES[classifyOracleError(sim.error)]);
+  }
+  if (!sim?.result) throw new Error(ORACLE_ERROR_MESSAGES.unknown);
+  return {
+    fromToken,
+    toToken,
+    amountIn: Number(amount),
+    amountOut: toAmount(scValToNative(sim.result.retval)),
+  };
 }
 
 export async function withdrawProtocolFees(
@@ -1269,4 +1767,226 @@ export async function recordExpertVerification(
       .replace(/[a-zA-Z0-9]{64,}/g, "[REDACTED]");
     throw new Error(sanitizedMessage || "Recording failed");
   }
+}
+
+// ── Two-Step Ownership Transfer (helphone-contract) ────────────────────────
+//
+// Mirrors the propose_transfer / accept_transfer / revoke_transfer functions
+// added to contract/contracts/helphone-contract/src/lib.rs.
+//
+// The three functions follow the same sendWrite pattern used by all write
+// operations in this file: fund account → build tx → simulate → sign → submit.
+
+/** Read the pending new owner from the contract (or null if none). */
+export async function getPendingOwner() {
+  const sim = await simulateRead(contract.call("get_pending_owner"));
+  if (!sim.result) return null;
+  const raw = scValToNative(sim.result.retval);
+  return raw || null;
+}
+
+/**
+ * Step 1 — Propose transferring ownership to `newOwner`.
+ * Only the current admin may call this. Replaces any earlier pending transfer.
+ *
+ * @param currentOwner - Stellar address of the current contract admin
+ * @param newOwner     - Stellar address of the intended new owner
+ * @param wallet       - Signed wallet (StellarWalletsKit instance or compatible)
+ */
+export async function proposeTransfer(currentOwner, newOwner, wallet) {
+  const signerAddress = await resolveWalletAddress(wallet, currentOwner);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = await buildInvocation({
+    account,
+    functionName: "propose_transfer",
+    args: [scv(signerAddress, { type: "address" }), scv(newOwner, { type: "address" })],
+  });
+  return await sendWrite(tx, wallet, "propose_transfer");
+}
+
+/**
+ * Step 2 — Accept the pending ownership transfer.
+ * Only the address nominated via proposeTransfer may call this.
+ * On success the caller becomes the new admin.
+ *
+ * @param newOwner - Stellar address of the incoming new owner
+ * @param wallet   - Signed wallet for newOwner
+ */
+export async function acceptTransfer(newOwner, wallet) {
+  const signerAddress = await resolveWalletAddress(wallet, newOwner);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = await buildInvocation({
+    account,
+    functionName: "accept_transfer",
+    args: [scv(signerAddress, { type: "address" })],
+  });
+  return await sendWrite(tx, wallet, "accept_transfer");
+}
+
+/**
+ * Revoke a pending ownership transfer.
+ * Callable by either the current admin (cancels their proposal) or the
+ * nominated new owner (declines the handoff).
+ *
+ * @param callerAddress - Stellar address of the caller (admin or pending owner)
+ * @param wallet        - Signed wallet for callerAddress
+ */
+export async function revokeTransfer(callerAddress, wallet) {
+  const signerAddress = await resolveWalletAddress(wallet, callerAddress);
+  if (!signerAddress) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signerAddress);
+  const account = await server.getAccount(signerAddress);
+  const tx = await buildInvocation({
+    account,
+    functionName: "revoke_transfer",
+    args: [scv(signerAddress, { type: "address" })],
+  });
+  return await sendWrite(tx, wallet, "revoke_transfer");
+}
+
+// ── Replay-protection nonce tracking (client-side mirror of contract/nonce.rs) ──
+//
+// Tracks the next expected on-chain nonce per account locally so callers can
+// attach it to state-changing invocations without an extra read round-trip.
+// The contract is still the source of truth: a stale local value is only a
+// perf miss, never a correctness issue, since the contract itself rejects a
+// reused/out-of-order nonce (#560).
+const _localNonceCache = new Map();
+
+export function getLocalNonce(accountAddress) {
+  return _localNonceCache.get(accountAddress) ?? 0;
+}
+
+export function advanceLocalNonce(accountAddress) {
+  const next = getLocalNonce(accountAddress) + 1;
+  _localNonceCache.set(accountAddress, next);
+  return next;
+}
+
+export function resetLocalNonce(accountAddress, value = 0) {
+  _localNonceCache.set(accountAddress, value);
+}
+
+// ── M-of-N multisig proposals (#575) ─────────────────────────────────────
+/** Combine independently collected signatures for one transaction envelope. */
+export function aggregateProposalSignatures(proposal, signatures, threshold) {
+  if (!proposal?.transactionXdr || !proposal?.networkPassphrase) {
+    throw new Error("Proposal transaction envelope is required");
+  }
+  if (!Number.isInteger(threshold) || threshold < 1) {
+    throw new Error("Threshold must be a positive integer");
+  }
+  const unique = new Map();
+  for (const entry of signatures || []) {
+    if (!entry?.signer || !entry?.signedTransactionXdr) continue;
+    unique.set(entry.signer, entry);
+  }
+  const collected = [...unique.values()];
+  return {
+    ...proposal,
+    signatures: collected,
+    approvalCount: collected.length,
+    threshold,
+    ready: collected.length >= threshold,
+  };
+}
+
+async function sendMultisigCall(signerAddress, functionName, args, wallet) {
+  const signer = await resolveWalletAddress(wallet, signerAddress);
+  if (!signer) throw new Error("Wallet address is not available yet");
+  await ensureAccountFunded(signer);
+  const account = await server.getAccount(signer);
+  const tx = await buildInvocation({
+    account,
+    functionName,
+    args,
+  });
+  return sendWrite(tx, wallet, functionName);
+}
+
+export async function createAdminProposal(proposer, newAdmin, wallet) {
+  return sendMultisigCall(proposer, "create_admin_proposal", [
+    scv(proposer, { type: "address" }),
+    scv(newAdmin, { type: "address" }),
+  ], wallet);
+}
+
+export async function approveAdminProposal(id, signer, wallet) {
+  return sendMultisigCall(signer, "approve_admin_proposal", [
+    scv(BigInt(id), { type: "u64" }),
+    scv(signer, { type: "address" }),
+  ], wallet);
+}
+
+export async function executeAdminProposal(id, signer, wallet) {
+  return sendMultisigCall(signer, "execute_admin_proposal", [
+    scv(BigInt(id), { type: "u64" }),
+  ], wallet);
+}
+
+export async function getAdminProposal(id) {
+  const sim = await simulateRead(contract.call("get_admin_proposal", scv(BigInt(id), { type: "u64" })));
+  return sim.result ? scValToNative(sim.result.retval) : null;
+}
+
+async function sendDaoCall(signerAddress, functionName, args, wallet) {
+  const signer = await resolveWalletAddress(wallet, signerAddress);
+  if (!signer) throw new Error("Wallet address is not available yet");
+  const contractId = getDaoContractId();
+  await ensureAccountFunded(signer);
+  const account = await server.getAccount(signer);
+  const tx = await buildInvocation({ account, functionName, args, contractId });
+  return sendWrite(tx, wallet, functionName);
+}
+
+async function simulateDaoRead(functionName, args) {
+  const dao = new Contract(getDaoContractId());
+  const sim = await simulateRead(dao.call(functionName, ...args));
+  return sim.result ? scValToNative(sim.result.retval) : null;
+}
+
+export async function getDaoProposal(id) {
+  const proposalId = BigInt(id);
+  const [proposal, timelock, cancellationApprovals, securityMultisig] = await Promise.all([
+    simulateDaoRead("get_proposal", [scv(proposalId, { type: "u64" })]),
+    simulateDaoRead("get_timelock", [scv(proposalId, { type: "u64" })]),
+    simulateDaoRead("get_cancellation_approval_count", [scv(proposalId, { type: "u64" })]),
+    simulateDaoRead("get_security_multisig", []),
+  ]);
+  return proposal ? {
+    ...proposal,
+    timelock,
+    cancellationApprovals: Number(cancellationApprovals || 0),
+    cancellationThreshold: Number(Array.isArray(securityMultisig) ? securityMultisig[1] : 1),
+  } : null;
+}
+
+export function queueDaoProposal(id, signer, wallet) {
+  return sendDaoCall(signer, "queue_proposal", [scv(BigInt(id), { type: "u64" })], wallet);
+}
+
+export function executeDaoProposal(id, signer, wallet) {
+  return sendDaoCall(signer, "execute_proposal", [scv(BigInt(id), { type: "u64" })], wallet);
+}
+
+export function approveDaoCancellation(id, guardian, wallet) {
+  return sendDaoCall(guardian, "approve_cancellation", [
+    scv(guardian, { type: "address" }), scv(BigInt(id), { type: "u64" }),
+  ], wallet);
+}
+
+export function cancelQueuedDaoProposal(id, signer, wallet) {
+  return sendDaoCall(signer, "cancel_queued_proposal", [scv(BigInt(id), { type: "u64" })], wallet);
+}
+
+export function configureDaoSecurityMultisig(admin, guardianAddresses, threshold, wallet) {
+  return sendDaoCall(admin, "set_security_multisig", [
+    scv(admin, { type: "address" }),
+    scv(guardianAddresses, { type: "vec", elementType: "address" }),
+    scv(Number(threshold), { type: "u32" }),
+  ], wallet);
 }

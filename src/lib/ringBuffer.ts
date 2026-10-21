@@ -1,19 +1,77 @@
 /**
- * Priority-aware bounded ring buffer for telemetry frames.
- *
- * Design goals:
- *  - Never silently overwrite the oldest frame. Every eviction is counted and
- *    reason-coded.
- *  - Dispatch-critical frames are never dropped before heartbeat frames:
- *    when the ring is full, a heartbeat is evicted first, then a normal frame,
- *    and only then another critical frame.
- *  - Occupancy is a first-class signal (70% high, 90% critical, 50% resume)
- *    with hysteresis so producers and workers can react without oscillating.
- *
- * The implementation is O(1) per admitted/evicted frame: insertion order is a
- * doubly linked list, and each priority has a FIFO of nodes (stale entries are
- * skipped lazily when they are popped).
+ * Priority-aware bounded ring buffer for telemetry frames (ISP-032)
+ * and client-side view of the contract's bounded verification history (#531 / #797).
  */
+import type { ExpertVerificationWindow } from '../types/index';
+
+// ===========================================================================
+// Verification Window & Audit Tape (#531 / #797)
+// ===========================================================================
+
+function toCount(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
+}
+
+/** Derive the readable window from the contract's lifetime total and capacity. */
+export function verificationWindow(total: unknown, capacity: unknown): ExpertVerificationWindow {
+  const t = toCount(total);
+  const c = toCount(capacity);
+  const oldest = Math.max(t - c, 0);
+  return { total: t, capacity: c, oldest, retained: t - oldest, evicted: oldest };
+}
+
+/** Whether logical `index` can still be read from the contract. */
+export function isRetained(window: ExpertVerificationWindow, index: number): boolean {
+  return Number.isInteger(index) && index >= window.oldest && index < window.total;
+}
+
+/**
+ * Logical indexes of the newest `limit` retained entries, newest first: what
+ * to fetch to show a wallet's recent history without asking for evicted slots.
+ */
+export function recentIndexes(window: ExpertVerificationWindow, limit: number): number[] {
+  const count = Math.min(Math.max(Math.trunc(limit) || 0, 0), window.retained);
+  return Array.from({ length: count }, (_, i) => window.total - 1 - i);
+}
+
+/**
+ * Fixed-capacity audit tape (#797): kill-switch changes, newest overwrites
+ * oldest. Capacity is fixed at construction so the tape never grows under
+ * memory pressure; `approxBytes` lets heap forensics (#793) account for it.
+ */
+export interface AuditEntry {
+  at: number;
+  kind: string;
+  from: string;
+  to: string;
+  reason: string;
+}
+
+export function createAuditTape(capacity = 64) {
+  const slots: Array<AuditEntry | undefined> = new Array(capacity);
+  let total = 0;
+  return {
+    push(entry: AuditEntry): void {
+      slots[total % capacity] = entry;
+      total += 1;
+    },
+    entries(): AuditEntry[] {
+      const w = verificationWindow(total, capacity);
+      return Array.from({ length: w.retained }, (_, i) => slots[(w.oldest + i) % capacity]!);
+    },
+    get total(): number {
+      return total;
+    },
+    approxBytes(): number {
+      return Math.min(total, capacity) * 96;
+    },
+  };
+}
+
+// ===========================================================================
+// ISP-032 Priority-Aware Ring Buffer
+// ===========================================================================
 
 export type TelemetryPriority = 'heartbeat' | 'normal' | 'critical';
 
@@ -25,7 +83,6 @@ export type RingDropReason =
 export type PressureLevel = 'normal' | 'high' | 'critical';
 
 export interface TelemetryFrame<T = unknown> {
-  /** Monotonic producer sequence, used for conservation checks + sampling. */
   seq: number;
   priority: TelemetryPriority;
   kind: string;
@@ -35,11 +92,8 @@ export interface TelemetryFrame<T = unknown> {
 
 export interface RingBufferOptions {
   capacity?: number;
-  /** Occupancy at which `high` pressure is reported. */
   highWatermark?: number;
-  /** Occupancy at which producers should shed / worker should pause. */
   shedWatermark?: number;
-  /** Occupancy below which pressure returns to `normal`. */
   lowWatermark?: number;
 }
 
@@ -57,9 +111,7 @@ export interface RingSnapshot {
   dropped: number;
   droppedReasons: Record<RingDropReason, number>;
   conservation: {
-    /** offered === admitted + rejected */
     offeredOk: boolean;
-    /** admitted === evicted + drained + size */
     admittedOk: boolean;
     ok: boolean;
   };
@@ -98,9 +150,9 @@ function clampWatermark(value: number | undefined, fallback: number): number {
 
 export class RingBuffer<T = unknown> {
   readonly capacity: number;
-  private readonly highWatermark: number;
-  private readonly shedWatermark: number;
-  private readonly lowWatermark: number;
+  readonly highWatermark: number;
+  readonly shedWatermark: number;
+  readonly lowWatermark: number;
 
   private head: Node<T> | null = null;
   private tail: Node<T> | null = null;
@@ -129,16 +181,11 @@ export class RingBuffer<T = unknown> {
   private readonly pressureListeners = new Set<(event: PressureEvent) => void>();
 
   constructor(options: RingBufferOptions = {}) {
-    this.capacity = Math.max(1, Math.floor(options.capacity ?? 2_048));
+    const capacity = Math.max(1, Math.floor(options.capacity ?? 1000));
+    this.capacity = capacity;
     this.highWatermark = clampWatermark(options.highWatermark, 0.7);
-    this.shedWatermark = Math.max(
-      this.highWatermark,
-      clampWatermark(options.shedWatermark, 0.9),
-    );
-    this.lowWatermark = Math.min(
-      this.highWatermark,
-      clampWatermark(options.lowWatermark, 0.5),
-    );
+    this.shedWatermark = clampWatermark(options.shedWatermark, 0.9);
+    this.lowWatermark = clampWatermark(options.lowWatermark, 0.5);
   }
 
   get length(): number {
@@ -149,54 +196,48 @@ export class RingBuffer<T = unknown> {
     return this.size / this.capacity;
   }
 
-  get pressureLevel(): PressureLevel {
+  get currentPressure(): PressureLevel {
     return this.pressure;
   }
 
-  /** Offer a frame. Returns false when it was shed at admission. */
   push(frame: TelemetryFrame<T>): boolean {
     this.offered++;
+    const priority = frame.priority || 'normal';
 
     if (this.size >= this.capacity) {
       const victim = this.findEvictionVictim();
-      // Should never happen (capacity > 0), but keep the invariant explicit.
       if (!victim) {
         this.rejected++;
-        this.bumpDrop(frame.priority);
-        this.updatePressure();
+        this.bumpDrop(priority);
         return false;
       }
-
-      // Never sacrifice a higher-priority frame for a lower-priority arrival.
-      if (PRIORITY_RANK[frame.priority] < PRIORITY_RANK[victim.frame.priority]) {
+      if (PRIORITY_RANK[victim.frame.priority] > PRIORITY_RANK[priority]) {
         this.rejected++;
-        this.bumpDrop(frame.priority);
-        this.updatePressure();
+        this.bumpDrop(priority);
         return false;
       }
-
+      this.bumpDrop(victim.frame.priority);
       this.unlink(victim);
       this.evicted++;
-      this.bumpDrop(victim.frame.priority);
     }
 
-    const node: Node<T> = { frame, prev: null, next: null, active: true };
-    if (this.tail) {
-      this.tail.next = node;
-      node.prev = this.tail;
-      this.tail = node;
-    } else {
-      this.head = node;
-      this.tail = node;
-    }
-    this.queues[frame.priority].push(node);
+    const node: Node<T> = {
+      frame,
+      prev: this.tail,
+      next: null,
+      active: true,
+    };
+    if (this.tail) this.tail.next = node;
+    else this.head = node;
+    this.tail = node;
+
+    this.queues[priority].push(node);
     this.size++;
     this.admitted++;
     this.updatePressure();
     return true;
   }
 
-  /** Remove up to `max` frames in insertion order. */
   drain(max = Number.POSITIVE_INFINITY): TelemetryFrame<T>[] {
     const limit = Math.max(0, Math.floor(max));
     const out: TelemetryFrame<T>[] = [];
@@ -210,17 +251,14 @@ export class RingBuffer<T = unknown> {
     return out;
   }
 
-  /** Peek at the oldest frame without removing it. */
   peek(): TelemetryFrame<T> | undefined {
     return this.head?.frame;
   }
 
-  /** Account for frames sampled before they reached the ring. */
   recordSampled(count = 1): void {
     if (count > 0) this.sampled += count;
   }
 
-  /** Register a pressure listener. Fires only on level transitions. */
   onPressure(listener: (event: PressureEvent) => void): () => void {
     this.pressureListeners.add(listener);
     return () => this.pressureListeners.delete(listener);
@@ -302,7 +340,6 @@ export class RingBuffer<T = unknown> {
     if (occupancy >= this.shedWatermark) next = 'critical';
     else if (occupancy >= this.highWatermark) next = 'high';
     else if (occupancy <= this.lowWatermark) next = 'normal';
-    // Between low and high: keep the current level (hysteresis).
 
     this.setPressure(next);
   }
@@ -320,7 +357,7 @@ export class RingBuffer<T = unknown> {
       try {
         listener(event);
       } catch {
-        // A broken observer must never take down telemetry admission.
+        // safe
       }
     }
   }

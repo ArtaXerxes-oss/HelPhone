@@ -1,0 +1,21 @@
+declare const styles: {
+  readonly "hp-ranking-page": string;
+  readonly "hp-ranking-content": string;
+  readonly "hp-ranking-header": string;
+  readonly "hp-ranking-label": string;
+  readonly "hp-ranking-title": string;
+  readonly "hp-ranking-subtitle": string;
+  readonly "hp-ranking-tabs": string;
+  readonly "hp-ranking-tab": string;
+  readonly "hp-ranking-tab--active": string;
+  readonly "hp-ranking-card": string;
+  readonly "hp-ranking-card-header": string;
+  readonly "hp-ranking-row": string;
+  readonly "hp-ranking-row--alt": string;
+  readonly "hp-ranking-rank": string;
+  readonly "hp-ranking-avatar": string;
+  readonly "hp-ranking-address": string;
+  readonly "hp-ranking-badge": string;
+  readonly "hp-ranking-footnote": string;
+};
+export default styles;

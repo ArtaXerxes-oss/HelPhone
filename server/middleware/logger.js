@@ -8,6 +8,10 @@ export function logger(opts = {}) {
   return (req, res, next) => {
     const start = Date.now();
     const { method, originalUrl } = req;
+    const traceparent = req.get('traceparent');
+    const traceId = typeof traceparent === 'string' && /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/i.test(traceparent)
+      ? traceparent.split('-')[1].toLowerCase()
+      : null;
     const originalEnd = res.end.bind(res);
     let logged = false;
     const doLog = () => {
@@ -20,7 +24,7 @@ export function logger(opts = {}) {
       try {
         if (opts.includePoolStats || req.query.pool === '1' || process.env.DEBUG_POOL) pool = getPool().getStats();
       } catch {}
-      const entry = { ts: new Date().toISOString(), method, url: originalUrl, status, durationMs: duration, bytes: len, ip: req.ip, ua: req.get('user-agent')?.slice(0, 120) };
+      const entry = { ts: new Date().toISOString(), traceId, method, url: originalUrl, status, durationMs: duration, bytes: len, ip: req.ip, ua: req.get('user-agent')?.slice(0, 120) };
       if (pool) entry.pool = pool;
       if (duration > slowThreshold) entry.slow = true;
       const line = JSON.stringify(entry);

@@ -204,5 +204,48 @@
     "standard_desc": "Clean, neutral base map. Good contrast for reading streets and names.",
     "dark_name": "Dark 2D",
     "dark_desc": "Dark background — reduces glare, ideal for low-light or nighttime use."
+  },
+  "fieldOps": {
+    "title": "FIELD TOOLS",
+    "radio": "Radio",
+    "staging": "Staging",
+    "rugged": "Rugged",
+    "ruggedOn": "Rugged ON",
+    "ruggedOff": "Rugged OFF",
+    "queue": "Queue {{count}}",
+    "sosSent": "SOS {{time}}",
+    "pttLive": "PTT live"
+  },
+  "radio": {
+    "sheetTitle": "Field radio bridge",
+    "callsign": "Callsign",
+    "baud": "Port baud rate",
+    "band": "Band plan",
+    "bandHam": "Ham (Part 97 — plaintext, PII redacted)",
+    "bandLicensed": "Licensed (Part 90 — encrypted)",
+    "connect": "Connect radio (USB)",
+    "disconnect": "Disconnect radio",
+    "connecting": "Waiting for port…",
+    "linked": "RADIO LINK — 1200 baud",
+    "idle": "RADIO IDLE",
+    "foregroundNote": "The radio link works only while this page stays in the foreground — locking the screen or minimizing the PWA stops all traffic (WebSerial limitation)."
+  },
+  "staging": {
+    "sheetTitle": "Staging check-in",
+    "tapTag": "Tap tag to check IN",
+    "stopScan": "Stop scanning",
+    "shortCode": "Staging short code",
+    "checkIn": "Check in",
+    "noNfc": "This device has no Web NFC — use the staging short code below (also printed on the tag QR).",
+    "duplicate": "Duplicate tap suppressed — one roster slot.",
+    "roster": "ROSTER ({{count}} inside)",
+    "unmatched": "{{count}} responder(s) checked IN over 30 min ago with no OUT — verify headcount before demobilizing."
+  },
+  "sos": {
+    "title": "SOS — CONFIRM DISPATCH",
+    "body": "Hold the button for 1.2 seconds to send an escalated emergency request to everyone nearby. Release to cancel.",
+    "hold": "Hold to confirm SOS dispatch",
+    "cancel": "Cancel",
+    "dispatched": "SOS dispatched. Escalated emergency request queued."
   }
 }

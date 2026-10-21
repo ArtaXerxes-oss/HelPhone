@@ -104,15 +104,9 @@ fn main(
     let rhs_x = signature_r_x + e * provider_pubkey_x;
     assert(lhs_x == rhs_x);
 
-    // For Y-coordinate, we need the G_y constant.
-    // G_y^2 = G_x^3 + 3 = 729 + 3 = 732 mod p
-    // G_y = sqrt(732) mod p
-    // We verify the Y relation holds (the prover must supply a valid G_y):
-    let lhs_y = s * g_x; // placeholder: using g_x for the relation
-    let rhs_y = signature_r_y + e * provider_pubkey_y;
-    // The full Y check requires G_y; for now we verify X-coordinate
-    // binding which is sufficient when combined with the nullifier check.
-    // A production implementation would use a proper Edwards addition gate.
+    // The prototype deliberately omits a second pseudo-coordinate equation.
+    // It duplicated field multiplications without providing real curve security;
+    // production humanity proofs must use a reviewed signature gadget instead.
 
     // 4. Ensure the external nullifier is non-zero (prevents trivial proofs).
     assert(external_nullifier != 0);

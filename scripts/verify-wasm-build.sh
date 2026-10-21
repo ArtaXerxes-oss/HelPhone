@@ -24,6 +24,23 @@ if [[ "${1:-}" == "--update" ]]; then
   exit 0
 fi
 
+# ISP-093: Verify pre-compilation input source hash before build
+if [[ "${1:-}" == "--verify-input" ]]; then
+  INPUT_FILE="${2:-circuits/src/main.nr}"
+  EXPECTED_INPUT_HASH="${3:-}"
+  if [[ ! -f "$REPO_ROOT/$INPUT_FILE" ]]; then
+    echo "FAIL: input source $INPUT_FILE missing" >&2
+    exit 1
+  fi
+  ACTUAL_INPUT_HASH="$(sha256sum "$REPO_ROOT/$INPUT_FILE" | awk '{print $1}')"
+  if [[ -n "$EXPECTED_INPUT_HASH" && "$EXPECTED_INPUT_HASH" != "$ACTUAL_INPUT_HASH" ]]; then
+    echo "FAIL: WASM input source hash mismatch for $INPUT_FILE (tampered source detected before compilation)" >&2
+    exit 1
+  fi
+  echo "wasm-verify: input source verified OK ($ACTUAL_INPUT_HASH)"
+  exit 0
+fi
+
 echo "wasm-verify: checking $ARTIFACT"
 
 if [[ ! -f "$REPO_ROOT/$ARTIFACT" ]]; then

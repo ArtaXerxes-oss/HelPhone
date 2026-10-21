@@ -39,6 +39,20 @@ const SERVER_HEALTH_TIMEOUT_MS = 2500;
 const SERVER_PROOF_TIMEOUT_MS = 10 * 60 * 1000;
 const PRODUCTION_ZK_PROVER_URL = "https://helphone.onrender.com";
 
+export const ZK_BROWSER_LIMITS = Object.freeze({
+  maxConstraints: 50_000,
+  maxProvingMs: 3_000,
+  maxHeapDeltaBytes: 256 * 1024 * 1024,
+});
+
+export function assessBrowserProvingFeasibility(profile: { constraints: number; provingMs: number; heapDeltaBytes: number }) {
+  const reasons: string[] = [];
+  if (profile.constraints > ZK_BROWSER_LIMITS.maxConstraints) reasons.push("constraint-budget");
+  if (profile.provingMs > ZK_BROWSER_LIMITS.maxProvingMs) reasons.push("latency-budget");
+  if (profile.heapDeltaBytes > ZK_BROWSER_LIMITS.maxHeapDeltaBytes) reasons.push("memory-budget");
+  return { feasible: reasons.length === 0, strategy: reasons.length ? "server" : "browser", reasons };
+}
+
 function normalizeBase64(input: string, label = "Base64 value") {
   if (typeof input !== "string") {
     throw new Error(`${label} must be a string.`);
@@ -82,8 +96,38 @@ export function decodeBase64Utf8(input: string, label?: string): string {
 
 async function getCircuitArtifact() {
   if (_circuitArtifact) return _circuitArtifact;
-  const circuitModule = await import("../../circuits/target/aegis.json");
-  const circuit = circuitModule.default || circuitModule;
+  const manifestResponse = await fetch("/zk-assets/aegis.manifest.json", { cache: "force-cache" });
+  if (!manifestResponse.ok) throw new Error("Sharded ZK assets are missing; run npm run zk:shard");
+  const manifest = await manifestResponse.json();
+  if (manifest.version !== 1 || !Array.isArray(manifest.chunks)) throw new Error("Invalid aegis shard manifest");
+  const decoder = new TextDecoder();
+  let jsonText = "";
+  let totalBytes = 0;
+  for (const chunk of manifest.chunks) {
+    if (!/^aegis\.chunk\d{4}$/.test(chunk.file)) throw new Error("Invalid aegis shard name");
+    const response = await fetch(`/zk-assets/${chunk.file}`, { cache: "force-cache" });
+    if (!response.ok || !response.body) throw new Error(`Unable to load circuit shard ${chunk.file}`);
+    const reader = response.body.getReader();
+    const parts: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      size += value.byteLength;
+    }
+    if (size !== chunk.bytes) throw new Error(`Incorrect size for circuit shard ${chunk.file}`);
+    totalBytes += size;
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    if (hash !== chunk.sha256) throw new Error(`Integrity check failed for circuit shard ${chunk.file}`);
+    jsonText += decoder.decode(bytes, { stream: true });
+  }
+  if (totalBytes !== manifest.bytes) throw new Error("Incorrect total size for circuit artifact");
+  jsonText += decoder.decode();
+  const circuit = JSON.parse(jsonText);
   _circuitArtifact = {
     ...circuit,
     bytecode: normalizeBase64(circuit.bytecode, "ZK circuit bytecode"),

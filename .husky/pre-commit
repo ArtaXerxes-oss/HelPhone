@@ -1,1 +1,46 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# ── Pre-commit quality gate ───────────────────────────────────────────────────
+# Runs automatically before every `git commit`.
+# To bypass temporarily on a WIP commit: git commit --no-verify -m "wip: ..."
+# (Never bypass on commits to main or feature branches you intend to share.)
+#
+# ONBOARDING: If this fails, the error message below names the exact check.
+# Fix the issue, `git add` the fixed files, then re-run `git commit`.
+
+echo ""
+echo "┌─────────────────────────────────────────────────────────────────┐"
+echo "│  HelPhone pre-commit gate  (lint → type-check)                  │"
+echo "└─────────────────────────────────────────────────────────────────┘"
+
+echo ""
+echo "▶  Step 1/2 · lint-staged (ESLint + auto-fix on staged files)"
+echo "   If this fails: npx eslint <file> --fix, then git add <file>"
 npx lint-staged
+LINT_EXIT=$?
+if [ $LINT_EXIT -ne 0 ]; then
+  echo ""
+  echo "✗ lint-staged failed (exit $LINT_EXIT)"
+  echo "  Fix the lint errors shown above, add the files, and commit again."
+  echo "  Docs: docs/onboarding-ladder.md#stage-0-toolchain"
+  exit $LINT_EXIT
+fi
+
+echo ""
+echo "▶  Step 2/2 · TypeScript type-check (tsc --noEmit)"
+echo "   If this fails: check the error location, fix the type error, re-commit"
+echo "   Common fixes: explicit return types, missing imports, strict null checks"
+npx tsc --noEmit
+TSC_EXIT=$?
+if [ $TSC_EXIT -ne 0 ]; then
+  echo ""
+  echo "✗ Type-check failed (exit $TSC_EXIT)"
+  echo "  Fix the TypeScript errors shown above and re-commit."
+  echo "  Docs: docs/onboarding-ladder.md#stage-0-toolchain"
+  exit $TSC_EXIT
+fi
+
+echo ""
+echo "✓ Pre-commit gate passed — proceeding to commit."
+echo ""

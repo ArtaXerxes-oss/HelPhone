@@ -1,14 +1,9 @@
 /**
- * JS ↔ Rust/WASM telemetry parsing bridge.
- *
- * Hot path properties:
- *  - One fixed staging buffer inside WASM; no Vec allocation per frame.
- *  - Views over WASM linear memory are cached and invalidated when the
- *    memory grows (use-after-grow safety).
- *  - The JS parser is always available, so a missing/corrupt module degrades
- *    gracefully instead of blocking ingestion.
+ * JS wrapper for the WASM render-path reader (spike, ADR-014)
+ * and JS ↔ Rust/WASM telemetry parsing bridge (ISP-032).
  */
 
+import { instrumentWasmMemory, recordParserAlloc } from "../lib/heapForensics.ts";
 import {
   FRAME_BYTES,
   FRAME_VERSION,
@@ -21,6 +16,92 @@ import {
 } from './binaryParser.js';
 import { WasmViewCache } from '../lib/wasmMemory.js';
 import { loadVerifiedWasm, WasmIntegrityError } from './wasmLoader.js';
+
+const PAGE = 65536;
+const FUNCTIONS = { flatbuffers: "fb_positions", capnp: "capnp_positions" };
+
+async function instantiate(source) {
+  if (source instanceof WebAssembly.Module) return WebAssembly.instantiate(source, {});
+  if (typeof Response !== "undefined" && (source instanceof Response || source instanceof Promise)) {
+    const res = await source;
+    if (WebAssembly.instantiateStreaming && res.headers?.get("content-type") === "application/wasm") {
+      return (await WebAssembly.instantiateStreaming(res, {})).instance;
+    }
+    return (await WebAssembly.instantiate(await res.arrayBuffer(), {})).instance;
+  }
+  return (await WebAssembly.instantiate(source, {})).instance;
+}
+
+export async function createWasmPositionReader(source, { initialCapacity = 1024, initialInputBytes = 256 * 1024 } = {}) {
+  // Labelled so traces attribute cold-start instantiate to wasm.init (#795).
+  const t0 = performance.now();
+  const instance = await instantiate(source);
+  try {
+    performance.measure("wasm.init", { start: t0, end: performance.now() });
+  } catch {
+    /* measure unsupported */
+  }
+  const ex = instance.exports;
+  // Count linear-memory growth: WASM memory is invisible to heap snapshots (#793).
+  const memory = instrumentWasmMemory(ex.memory);
+  const heapBase = ex.__heap_base ? ((ex.__heap_base.value + 7) & ~7) : 1024 * 64;
+
+  let outCap = 0;
+  let outPtr = heapBase;
+  let inPtr = 0;
+  let inCap = 0;
+  let bytesView = null;
+  const positions = { count: 0, capacity: 0, id: null, kind: null, status: null, latE6: null, lngE6: null, headingCdeg: null };
+
+  function layout(cap, inputBytes) {
+    outCap = (cap + 3) & ~3;
+    inCap = inputBytes;
+    inPtr = (outPtr + outCap * 16 + 7) & ~7;
+    const need = inPtr + inCap;
+    if (need > memory.buffer.byteLength) memory.grow(Math.ceil((need - memory.buffer.byteLength) / PAGE));
+    remap();
+  }
+
+  function remap() {
+    const buf = memory.buffer;
+    bytesView = new Uint8Array(buf);
+    positions.capacity = outCap;
+    positions.id = new Uint32Array(buf, outPtr, outCap);
+    positions.latE6 = new Int32Array(buf, outPtr + 4 * outCap, outCap);
+    positions.lngE6 = new Int32Array(buf, outPtr + 8 * outCap, outCap);
+    positions.headingCdeg = new Uint16Array(buf, outPtr + 12 * outCap, outCap);
+    positions.kind = new Uint8Array(buf, outPtr + 14 * outCap, outCap);
+    positions.status = new Uint8Array(buf, outPtr + 15 * outCap, outCap);
+  }
+
+  layout(initialCapacity, initialInputBytes);
+
+  function readPositions(format, input) {
+    const fn = ex[FUNCTIONS[format]];
+    if (!fn) throw new Error(`WASM reader supports ${Object.keys(FUNCTIONS).join(", ")}, not "${format}"`);
+    const bytes = input instanceof Uint8Array ? input : new Uint8Array(input.buffer ?? input, input.byteOffset ?? 0, input.byteLength);
+    // Every frame is copied into linear memory; account the copy (#793, #795).
+    recordParserAlloc(bytes.length);
+    if (bytes.length > inCap) layout(outCap, Math.max(bytes.length, inCap * 2));
+    if (bytesView.buffer !== memory.buffer) remap();
+    bytesView.set(bytes, inPtr);
+    let n = fn(inPtr, bytes.length, outPtr, outCap);
+    if (n === -2) {
+      layout(Math.max(ex.needed(), outCap * 2), inCap);
+      bytesView.set(bytes, inPtr); // layout() moved the input region
+      n = fn(inPtr, bytes.length, outPtr, outCap);
+    }
+    if (n < 0) throw new Error(`WASM ${format} reader rejected the frame (code ${n})`);
+    positions.count = n;
+    return n;
+  }
+
+  return { readPositions, positions, memory };
+}
+
+// ===========================================================================
+// ISP-032 TelemetryWasmParser
+// ===========================================================================
 
 const DEFAULT_WASM_URL = new URL('../wasm/telemetry_reader.wasm', import.meta.url);
 const DEFAULT_SHA_URL = new URL('../wasm/telemetry_reader.wasm.sha256', import.meta.url);
@@ -157,15 +238,13 @@ export class TelemetryWasmParser {
     }
 
     const { u8, f64 } = this.viewCache.views(this.memory);
-    // Manual 40-byte copy: no subarray allocation on the hot path.
-    for (let i = 0; i < FRAME_BYTES; i++) u8[this.inputPtr + i] = bytes[offset + i];
+    u8.set(bytes.subarray(offset, offset + FRAME_BYTES), this.inputPtr);
 
-    let status;
+    let status = 0;
     try {
       status = this.exports.parse_frame(FRAME_BYTES) | 0;
     } catch (error) {
       this.stats.errors++;
-      // A trap means the module is unusable; fall back permanently.
       this.ready = false;
       this.mode = 'js';
       this.lastError = error;
@@ -174,7 +253,8 @@ export class TelemetryWasmParser {
 
     if (status !== 0) {
       this.stats.errors++;
-      throw new BinaryParseError(STATUS_TO_CODE[status] || 'wasm_reject', `wasm parser rejected frame (${status})`);
+      const code = STATUS_TO_CODE[status] || 'parse_error';
+      throw new BinaryParseError(code, `wasm parse_frame failed (status ${status})`);
     }
 
     const base = this.outputPtr / 8;
@@ -243,9 +323,6 @@ export class TelemetryWasmParser {
       }
 
       if (parsed !== frames) {
-        // One invalid frame invalidates the batch result (Rust stops at the
-        // first error). Re-parse this chunk with JS so callers get per-frame
-        // error objects rather than losing the whole batch.
         this.stats.errors++;
         this.stats.fallbackParsed += frames;
         const fallback = jsParseBatch(bytes.subarray(byteStart, byteStart + byteLength), frames, options);

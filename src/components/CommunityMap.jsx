@@ -1,5 +1,110 @@
-export default function CommunityMap() {
+import { useEffect, useRef, useState } from "react";
+import { createOverlayRenderer } from "../lib/offscreenCanvas.ts";
+
+const MAP_WIDTH = 1140;
+const MAP_HEIGHT = 540;
+
+/**
+ * `overlays` (optional): markers animated on a canvas layered over the SVG.
+ * The canvas is rendered by a Web Worker via OffscreenCanvas where supported,
+ * so the animation is unaffected by main-thread work. `onRenderStats` receives
+ * the measured frame rate once per second.
+ */
+export default function CommunityMap({ overlays, onRenderStats }) {
+  const canvasRef = useRef(null);
+  const rendererRef = useRef(null);
+  const rendererCanvasRef = useRef(null);
+  const rendererGenerationRef = useRef(0);
+  const statsRef = useRef(onRenderStats);
+  statsRef.current = onRenderStats;
+  // A canvas whose control was transferred can't be reused; bump the key to
+  // remount a fresh one in main-thread mode if the worker dies.
+  const [mountKey, setMountKey] = useState(0);
+  const [forceMain, setForceMain] = useState(false);
+  const [mapStatus, setMapStatus] = useState("operational"); // 'operational' | 'updating' | 'anomaly'
+  const [statusMessage, setStatusMessage] = useState(null);
+  const hasOverlay = overlays !== undefined;
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+    const handleSwMessage = (event) => {
+      const data = event.data || {};
+      if (data.type === "TILE_REVOKED") {
+        setMapStatus("updating");
+        setStatusMessage("Upstream map tiles revoked. Refreshing secure cache...");
+      } else if (data.type === "TILES_PURGED") {
+        setMapStatus("updating");
+        setStatusMessage("Tile cache purged. Fetching fresh verified tiles...");
+        setTimeout(() => {
+          setMapStatus("operational");
+          setStatusMessage(null);
+        }, 3000);
+      } else if (data.type === "TILE_ANOMALY") {
+        setMapStatus("anomaly");
+        setStatusMessage(`Tile integrity anomaly detected (${data.payload?.reason || "rejected"}).`);
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", handleSwMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", handleSwMessage);
+  }, []);
+
+  const handlePurgeTiles = () => {
+    if (typeof navigator !== "undefined" && navigator.serviceWorker?.controller) {
+      setMapStatus("updating");
+      setStatusMessage("Purging map tile cache...");
+      navigator.serviceWorker.controller.postMessage({ type: "PURGE_TILES" });
+    }
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!hasOverlay || !canvas) return undefined;
+    let renderer = rendererRef.current;
+    if (rendererCanvasRef.current !== canvas) {
+      if (renderer) renderer.destroy();
+      rendererRef.current = null;
+      rendererCanvasRef.current = null;
+      try {
+        renderer = createOverlayRenderer(canvas, {
+          width: MAP_WIDTH,
+          height: MAP_HEIGHT,
+          dpr: Math.min(window.devicePixelRatio || 1, 2),
+          forceMainThread: forceMain,
+          onStats: (s) => statsRef.current?.(s),
+          onError: () => {
+            setForceMain(true);
+            setMountKey((k) => k + 1);
+          },
+        });
+      } catch (error) {
+        if (forceMain) throw error;
+        console.error("[CommunityMap] Offscreen worker setup failed; retrying on the main thread.", error);
+        setForceMain(true);
+        setMountKey((k) => k + 1);
+        return undefined;
+      }
+      rendererRef.current = renderer;
+      rendererCanvasRef.current = canvas;
+    }
+    const generation = ++rendererGenerationRef.current;
+    return () => {
+      queueMicrotask(() => {
+        if (rendererGenerationRef.current !== generation) return;
+        if (rendererRef.current === renderer) {
+          renderer.destroy();
+          rendererRef.current = null;
+          rendererCanvasRef.current = null;
+        }
+      });
+    };
+  }, [hasOverlay, mountKey, forceMain]);
+
+  useEffect(() => {
+    rendererRef.current?.setOverlays(overlays ?? []);
+  }, [overlays, mountKey, forceMain]);
+
   return (
+    <div style={{ position: "relative", width: "100%" }}>
     <svg
       viewBox="0 0 1140 540"
       style={{
@@ -209,5 +314,61 @@ export default function CommunityMap() {
         REQUEST 04:12
       </text>
     </svg>
+    {hasOverlay && (
+      <canvas
+        key={mountKey}
+        ref={canvasRef}
+        aria-hidden="true"
+        data-testid="map-overlay-canvas"
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+        }}
+      />
+    )}
+    {statusMessage && (
+      <div
+        role="status"
+        aria-live="polite"
+        style={{
+          position: "absolute",
+          top: 10,
+          left: 10,
+          right: 10,
+          background: mapStatus === "anomaly" ? "rgba(220, 53, 69, 0.9)" : "rgba(35, 75, 78, 0.9)",
+          color: "#ECE0CC",
+          padding: "6px 12px",
+          borderRadius: 4,
+          fontSize: 12,
+          fontFamily: "monospace",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          zIndex: 10,
+        }}
+      >
+        <span>{statusMessage}</span>
+        <button
+          type="button"
+          onClick={handlePurgeTiles}
+          style={{
+            background: "#FF7A6B",
+            border: "none",
+            color: "#234B4E",
+            padding: "2px 8px",
+            borderRadius: 3,
+            cursor: "pointer",
+            fontWeight: "bold",
+            fontSize: 11,
+          }}
+        >
+          Purge & Refresh
+        </button>
+      </div>
+    )}
+    </div>
   );
 }

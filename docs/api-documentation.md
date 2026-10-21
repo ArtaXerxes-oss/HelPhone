@@ -116,3 +116,50 @@ app.use(compression({ threshold: 1024 }));
 |--------|---------|
 | 400 | Missing `inputs` |
 | 500 | Prover error (`err.message`) |
+
+## GraphQL API (#528)
+
+`POST /graphql` (Apollo Server 5, mounted alongside the REST routes). One endpoint over the Postgres-backed help-request data; REST endpoints are unchanged.
+
+```graphql
+type Query {
+  health: Health!
+  requests(status: String, limit: Int = 20, offset: Int = 0): [HelpRequest!]!
+  request(id: ID!): HelpRequest
+  verifications(wallet: String!, limit: Int = 10): [Verification!]!
+  me: AuthUser
+}
+```
+
+`HelpRequest` exposes `responders`, `responderCount` and `arrivedCount`. Only the indexed columns are typed (`id`, `status`, `created_at`, `request_id`, `arrived`, `wallet`, `recorded_at`); any other column on the row is returned in `attributes` (JSON) so the schema never guesses at columns.
+
+```bash
+curl -s localhost:3001/graphql \
+  -H 'content-type: application/json' -H 'apollo-require-preflight: true' \
+  -d '{"query":"{ requests(status:\"Pending\", limit:20) { id createdAt responderCount responders { arrived } } }"}'
+```
+
+### N+1 batching
+
+Every nested field goes through a [DataLoader](https://github.com/graphql/dataloader), created per request in `createLoaders` (`server/graphql/resolvers.ts`). A page of 25 requests with `responders` costs **2 queries** (the page, plus one `WHERE request_id = ANY($1)` for all 25), not 26. Verification history for several wallets is likewise one window-function query. Loaders are never shared across requests, so one caller can never see another's cached rows.
+
+### Limits
+
+| Guard | Value |
+| --- | --- |
+| `limit` | Clamped to 1-100 (default 20 for requests, 10 for verifications) |
+| `offset` | Clamped to >= 0 |
+| Root fields per operation | 10 (blocks alias fan-out) |
+| Request body | 1 MB (shared `express.json` limit) |
+| Introspection and landing page | Disabled when `NODE_ENV=production` |
+
+All filters are bound parameters (`$1`, `$2`, ...); nothing from a query is interpolated into SQL.
+
+### Authentication
+
+Reads are public. `me` returns the caller when the request carries the same signed headers as the REST API (`X-Public-Key`, `X-Timestamp`, `X-Signature`, optional `X-Algorithm`), verified by the shared `verifyRequestAuth` in `server/middleware/auth.ts`. The signed payload is `POST:/:<timestamp>:<JSON body>` (the path is `/` because the router is mounted at `/graphql`, as with `req.path` on any mounted route).
+
+- No auth headers: anonymous, `me` is `null`.
+- Auth headers present but invalid, stale or incomplete: `401` with `extensions.code = "UNAUTHENTICATED"`. A bad credential never silently degrades to anonymous.
+
+Apollo's CSRF prevention is on, so browser clients must send `content-type: application/json` or an `apollo-require-preflight` header.

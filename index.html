@@ -2,14 +2,25 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- ISP-135/ISP-134: scope WebSerial + Web NFC to the app origin only so
+         the installed PWA cannot be abused as a general USB/NFC attack surface. -->
+    <meta
+      http-equiv="Permissions-Policy"
+      content="serial=(self), nfc=(self), camera=(), microphone=(), geolocation=(self)"
+    />
     <title>HelPhone</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="dns-prefetch" href="https://api.mapbox.com" />
+    <link rel="dns-prefetch" href="https://soroban-testnet.stellar.org" />
+    <!-- Kiosk PWA manifest — used when installing from /kiosk?shelter=… -->
+    <link rel="manifest" href="/kiosk-manifest.json" id="kiosk-manifest" media="(display-mode: standalone)" />
     <link
       href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=VT323&display=swap"
       rel="stylesheet"
     />
-    <style>
+    <style nonce="__CSP_NONCE__">
       * {
         box-sizing: border-box;
       }

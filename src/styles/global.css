@@ -1,1 +1,44 @@
-// Implementation added
+:root {
+  --content-start: 1rem;
+  --content-end: 1rem;
+  --focus-ring: 0 0 0 3px rgba(255, 122, 107, 0.72);
+}
+
+html {
+  direction: ltr;
+  text-align: start;
+}
+
+html[dir="rtl"] {
+  direction: rtl;
+}
+
+body {
+  margin-inline: 0;
+  text-align: start;
+}
+
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.hp-inline-start {
+  margin-inline-start: var(--content-start);
+}
+
+.hp-inline-end {
+  margin-inline-end: var(--content-end);
+}
+
+.hp-padding-block {
+  padding-block: 1rem;
+}
+
+.hp-text-start {
+  text-align: start;
+}
+
+[dir="rtl"] .hp-directional-icon {
+  transform: scaleX(-1);
+}

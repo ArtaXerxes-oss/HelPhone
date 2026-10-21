@@ -39,10 +39,23 @@ No configuration dropped main-thread frames. Storage work stays off the UI threa
 2. **Do not open SQLite/OPFS from several workers or tabs.** An OPFS file allows one sync access handle at a time. Multiple connections spend their time fighting for it: 37–66 writes/s, reads stalled for up to 18 s, the VFS blocks worker event loops synchronously, and one run crashed the page. WAL is refused in this mode anyway, because it needs `locking_mode=EXCLUSIVE`.
 3. **If SQLite is adopted later** (for SQL queries, or throughput beyond about 3k/s), use exactly one **owner worker** per origin. It holds the only connection (`opfs-sahpool` VFS, `PRAGMA locking_mode=EXCLUSIVE; journal_mode=WAL`), and other workers and tabs forward writes to it over `MessagePort`. Owner election across tabs needs Web Locks or a SharedWorker. This topology gave the highest ceiling (4,721/s) with no lock waits. WAL and rollback journal differed little at 500/s (write p95 77 vs 90 ms).
 4. **Shed load when storage stalls.** Producers get a bounded backlog (`maxPending`) and drop the oldest telemetry fixes. Unbounded queues turned a slow disk into minutes of backlog in the direct-SQLite runs. Broadcast messages must not be shed: give them their own store with `overflow: "reject"`, and surface the error.
+5. **Rule: No full `VACUUM` on in-browser SQLite-WASM (ISP-064).** Full `VACUUM` rewrites the entire 200–600MB database file under an EXCLUSIVE lock, blocking telemetry workers and freezing the main thread (causing 2–6 fps jank, ANR on Android, and Jetsam kills on iOS). Maintenance must rely strictly on:
+   - **Time-partitioned tables (`telemetry_YYYYMM`)**: Retention reclamation is performed via metadata-only `DROP TABLE` operations, instantly reclaiming space with zero freelist bloat and zero page rewriting.
+   - **Budgeted `PRAGMA incremental_vacuum(50)`**: Page-budgeted incremental vacuuming scheduled exclusively during low-priority idle windows, guarded with a 5000ms `busy_timeout` and immediate abort (<100ms) upon any dispatch backlog or UI jank.
+6. **Single commit order & crash-atomic durability trinity (ISP-067):**
+   ```
+   1. SQLite WAL COMMIT  ──▶  2. OPFS syncfs  ──▶  3. IDB Mark Acked
+   (Source of Truth)         (Durability)         (Transport Journal)
+   ```
+   All dispatch mutations carry a monotonic commit sequence `(device_id, seq)` recorded synchronously across SQLite, the IDB journal, and CRDT snapshot headers. SQLite is the single source of truth; IDB acts as an unacknowledged replay journal during crashes; OPFS guarantees on-disk durability before IDB marks an operation acked.
+7. **Priority-aware transaction lanes:**
+   - **Dispatch lane (Lossless):** Executes using `BEGIN IMMEDIATE` with a 5000ms `busy_timeout`. On persistent `SQLITE_BUSY`, dispatches fall back directly to the IndexedDB durable outbox. Dispatches are never lost.
+   - **Telemetry lane (Lossy):** Executes using `BEGIN DEFERRED`. Under lock contention, telemetry coalesces from 5s to 30s cadence or drops non-critical fixes, incrementing the `dropped_telemetry` counter.
+8. **Worker isolation:** SQLite-WASM is strictly forbidden from running on the main UI thread. In browsers lacking OPFS SyncAccessHandle / Web Worker support (e.g. legacy Safari), the client degrades gracefully to IndexedDB-only storage with vacuuming completely disabled.
 
 ## Consequences
 
-- **Positive:** No new runtime dependency. The buffer is backend-agnostic, so moving to the SQLite owner later is a backend swap behind `createStorageEngine()`.
+- **Positive:** No new runtime dependency. The buffer is backend-agnostic, so moving to the SQLite owner later is a backend swap behind `createStorageEngine()`. Full VACUUM lock freezes and ANRs are completely eliminated.
 - **Negative:** Group commit trades durability for throughput. A crash loses up to one flush window (50 ms) of buffered telemetry, which is acceptable for GPS fixes. Messages should use a zero-delay flush.
 - **Outstanding (not measured):**
   - **Quota and eviction.** The quota run was invalid: its payload compressed. Chromium's IndexedDB compresses values, so 73k × 2 KB records took only 28.6 MB. The harness is fixed (random payload, owner topology) but was not re-run in this time box.
@@ -50,3 +63,4 @@ No configuration dropped main-thread frames. Storage work stays off the UI threa
 
   Until both are measured, the recommendation to batch is also the safe default for low-end phones.
 - **Follow-up:** `navigator.storage.persist()` on first incident join; a retention policy that deletes the oldest telemetry (tested: `deleteOldest` then write probes); and the two outstanding measurements above.
+

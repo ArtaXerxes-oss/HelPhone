@@ -26,7 +26,18 @@ jobs:
 
       - run: npm ci
 
-      - run: npm run build
+      # #619 — refuse to release when the tag / recent commits are signed by
+      # a key that has since been revoked as compromised (live KRL lookup).
+      - name: Verify release signing keys
+        run: |
+          ARGS="--pinned --refresh --range HEAD --max 50"
+          if [ "${{ github.ref_type }}" = "tag" ]; then ARGS="$ARGS --tags ${{ github.ref_name }}"; fi
+          if [ "${{ vars.REQUIRE_SIGNED_RELEASES }}" = "true" ]; then ARGS="$ARGS --strict"; fi
+          node scripts/security/verify_maintainer_keys.js $ARGS
+
+      # #586 — production build + licenses.json attribution manifest, so the
+      # manifest is covered by the signed digests below.
+      - run: npm run build:release
 
       # Digest manifest of every shipped file. This exact file is what gets
       # signed and logged in Rekor; the browser re-hashes it and its own entry

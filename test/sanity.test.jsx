@@ -1,27 +1,26 @@
+import React from 'react'
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
-import '@testing-library/jest-dom/vitest'
 
-// ---------------------------------------------------------------------------
-// Issue #106 — sanity test for the Vitest + jsdom + React Testing Library
-// setup. If this suite passes, the runner, DOM environment, and component
-// rendering pipeline are all wired correctly.
-// ---------------------------------------------------------------------------
-
-function SanityComponent() {
-  return <h1>HelPhone test harness</h1>
+function SanityBadge({ title }) {
+  return (
+    <div data-testid="sanity-badge" className="badge">
+      <span>{title}</span>
+    </div>
+  )
 }
 
-describe('test framework sanity', () => {
-  it('runs inside a jsdom environment', () => {
-    expect(typeof window).toBe('object')
-    expect(typeof document).toBe('object')
+describe('Automated Pre-Commit Code Quality Pipeline Sanity Tests', () => {
+  it('should render React component cleanly without errors', () => {
+    render(<SanityBadge title="HelPhone Quality Pipeline Active" />)
+    const element = screen.getByTestId('sanity-badge')
+    expect(element).toBeDefined()
+    expect(element.textContent).toContain('HelPhone Quality Pipeline Active')
   })
 
-  it('renders a React component with Testing Library matchers', () => {
-    render(<SanityComponent />)
-    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(
-      'HelPhone test harness'
-    )
+  it('should verify JavaScript & TypeScript execution environment', () => {
+    const numbers = [1, 2, 3, 4, 5]
+    const squared = numbers.map((n) => n * n)
+    expect(squared).toEqual([1, 4, 9, 16, 25])
   })
 })

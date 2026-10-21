@@ -1,18 +1,192 @@
 /**
- * GraphQL schema artifact loader.
+ * server/graphql/schema.ts — unified GraphQL schema
  *
- * `schema.graphql` is the versioned contract; this module is only the runtime
- * glue. Keeping the SDL in a file lets scripts/detect-api-drift.js diff it
- * against swagger.json and the canonical contract table without executing TS.
+ * Combines:
+ * 1. Postgres-backed help-request and verification data (Issue #528)
+ * 2. Domain incidents, events, responders, and syncFlush mutations
  */
 
-import { readFileSync } from 'node:fs';
-import { buildSchema, type GraphQLSchema } from 'graphql';
+import { buildSchema, type GraphQLSchema } from 'graphql'
 
-export const schemaPath = new URL('./schema.graphql', import.meta.url);
+export const typeDefs = /* GraphQL */ `
+  scalar JSON
 
-export const typeDefs = readFileSync(schemaPath, 'utf8');
+  type PoolStats {
+    total: Int!
+    active: Int!
+    idle: Int!
+    waiting: Int!
+    maxConnections: Int!
+  }
 
-export const schema: GraphQLSchema = buildSchema(typeDefs);
+  type Health {
+    status: String!
+    database: Boolean!
+    databaseLatencyMs: Int!
+    pool: PoolStats!
+  }
 
-export default schema;
+  type AuthUser {
+    publicKey: String!
+    algorithm: String!
+  }
+
+  type Verification {
+    wallet: String!
+    recordedAt: String
+    attributes: JSON!
+  }
+
+  type HelpRequest {
+    id: ID!
+    status: String
+    createdAt: String
+    attributes: JSON!
+    responders: [Responder!]!
+    responderCount: Int!
+    arrivedCount: Int!
+  }
+
+  enum IncidentStatus {
+    open
+    assigned
+    acknowledged
+    resolved
+  }
+
+  enum Priority {
+    low
+    normal
+    high
+    critical
+  }
+
+  enum ResponderStatus {
+    assigned
+    en_route
+    on_scene
+    offline
+  }
+
+  type Location {
+    lat: Float!
+    lng: Float!
+  }
+
+  type Event {
+    id: ID!
+    incidentId: ID!
+    responderId: ID
+    type: String!
+    at: String!
+    cursor: String!
+    payload: JSON
+  }
+
+  type Responder {
+    id: ID
+    incidentId: ID
+    name: String
+    status: ResponderStatus
+    location: Location
+    lastEvent: Event
+
+    requestId: ID
+    arrived: Boolean
+    attributes: JSON
+  }
+
+  type Incident {
+    id: ID!
+    status: IncidentStatus!
+    priority: Priority!
+    createdAt: String!
+    version: Int!
+    location: Location!
+    responders: [Responder!]!
+    events: [Event!]!
+  }
+
+  type PageInfo {
+    hasNextPage: Boolean!
+    endCursor: String
+  }
+
+  type IncidentEdge {
+    node: Incident!
+    cursor: String!
+  }
+
+  type IncidentConnection {
+    edges: [IncidentEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type EventEdge {
+    node: Event!
+    cursor: String!
+  }
+
+  type EventConnection {
+    edges: [EventEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type SyncSuccess {
+    ok: Boolean!
+    serverVersion: Int!
+    incident: Incident!
+  }
+
+  type SyncConflict {
+    conflict: Boolean!
+    serverVersion: Int!
+    mergeProposal: JSON!
+  }
+
+  type ValidationIssue {
+    path: String!
+    message: String!
+  }
+
+  type ValidationError {
+    error: String!
+    issues: [ValidationIssue!]!
+  }
+
+  union SyncFlushResult = SyncSuccess | SyncConflict | ValidationError
+  union AssignResult = SyncSuccess | SyncConflict | ValidationError
+
+  input SyncFlushInput {
+    incidentId: ID!
+    baseVersion: Int!
+    patch: JSON!
+  }
+
+  input AssignResponderInput {
+    incidentId: ID!
+    responderId: ID!
+    expectedVersion: Int
+  }
+
+  type Query {
+    health: Health!
+    requests(status: String, limit: Int = 20, offset: Int = 0): [HelpRequest!]!
+    request(id: ID!): HelpRequest
+    verifications(wallet: String!, limit: Int = 10): [Verification!]!
+    me: AuthUser
+
+    incident(id: ID!): Incident
+    incidents(limit: Int = 20, cursor: String): IncidentConnection!
+    events(incidentId: ID!, limit: Int = 20, cursor: String): EventConnection!
+  }
+
+  type Mutation {
+    assignResponder(input: AssignResponderInput!): AssignResult!
+    syncFlush(input: SyncFlushInput!): SyncFlushResult!
+  }
+`
+
+export const schema: GraphQLSchema = buildSchema(typeDefs)
+
+export default schema

@@ -17,10 +17,3 @@ soroban-env-host = "26.1.3"
 [features]
 testutils = []
 
-[profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
-overflow-checks = true

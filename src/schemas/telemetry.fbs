@@ -1,0 +1,61 @@
+// HelPhone live-map telemetry: FlatBuffers schema (spike, ADR-014).
+//
+// One TelemetryFrame carries a batch of map objects: SOS requests and
+// responder pins with their recent trajectory. The same logical schema
+// exists as telemetry.capnp and telemetry.proto so the three wire formats
+// can be compared on identical data.
+//
+// Readers live in src/utils/binaryParser.js (hand-written accessors,
+// equivalent to `flatc --ts` output). Check changes with
+//   flatc --json --raw-binary --strict-json src/schemas/telemetry.fbs -- frame.hptl
+//
+// Encoding choices (shared by all three schemas):
+// - Coordinates are fixed-point degrees x 1e6 in int32, matching the
+//   Soroban contract's COORD_SCALE (src/lib/contract.ts), so no float
+//   rounding happens between chain, server and map.
+// - No 64-bit integers. JS readers return 64-bit ints as BigInt, which
+//   allocates on every access. ids fit in 32 bits; timestamps are
+//   milliseconds in a double (exact up to 2^53).
+// - Strings are only for data the map popup shows. The per-frame render
+//   path reads scalars and `trail` only, so it never decodes a string.
+
+namespace helphone.telemetry;
+
+file_identifier "HPTL";
+file_extension "hptl";
+
+enum ObjectKind : ubyte { Request = 0, Responder = 1 }
+
+// Same order as STATUS in src/lib/contract.ts mapRequest().
+enum Status : ubyte { Pending = 0, Enroute = 1, Resolved = 2, Cancelled = 3 }
+
+// Same order as PRIORITY_LEVELS in src/lib/contract.ts.
+enum Priority : ubyte { Low = 0, Medium = 1, High = 2, Critical = 3 }
+
+table MapObject {
+  id:uint (id: 0);                 // request id, or responder slot id
+  kind:ObjectKind (id: 1);
+  status:Status (id: 2);
+  priority:Priority (id: 3);
+  lat_e6:int (id: 4);              // degrees x 1e6
+  lng_e6:int (id: 5);              // degrees x 1e6
+  heading_cdeg:ushort (id: 6);     // centi-degrees, 0..35999
+  speed_cms:ushort (id: 7);        // cm/s
+  eta_seconds:uint (id: 8);        // responders only, 0 = unknown
+  request_id:uint (id: 9);         // responders: the request they answer
+  ts_ms:double (id: 10);           // fix time, Unix ms
+  emergency_type:string (id: 11);  // popup only
+  responder:string (id: 12);       // Stellar G-address, popup only
+  // Recent positions as interleaved (dlat_e6, dlng_e6) pairs relative to
+  // (lat_e6, lng_e6), newest first. 4-byte aligned, so it can be viewed as
+  // an Int32Array without copying.
+  trail:[int] (id: 13);
+}
+
+table TelemetryFrame {
+  seq:uint;                        // monotonically increasing per stream
+  sent_at_ms:double;
+  objects:[MapObject];
+}
+
+root_type TelemetryFrame;

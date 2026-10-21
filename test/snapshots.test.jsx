@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest'
+import { beforeAll, describe, it, expect } from 'vitest'
 import { render } from '@testing-library/react'
 import { BrowserRouter } from 'react-router-dom'
+import App from '../src/App.tsx'
 import Help from '../src/pages/Help.jsx'
-import Ranking from '../src/pages/Ranking.jsx'
+import Ranking from '../src/pages/Ranking.tsx'
 
 /**
  * Snapshot tests for UI components
@@ -12,7 +13,30 @@ import Ranking from '../src/pages/Ranking.jsx'
  * npm run test:update-snapshots
  */
 
+beforeAll(() => {
+  // jsdom ships neither IntersectionObserver nor the observer-backed scroll
+  // reveal used by the landing page; a no-op stub keeps the markup testable.
+  if (!globalThis.IntersectionObserver) {
+    globalThis.IntersectionObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+  }
+})
+
 describe('Component Snapshots', () => {
+  describe('Landing Page', () => {
+    it('should match snapshot', () => {
+      const { container } = render(
+        <BrowserRouter>
+          <App />
+        </BrowserRouter>
+      )
+      expect(container.firstChild).toMatchSnapshot()
+    })
+  })
+
   describe('Help Page', () => {
     it('should match snapshot', () => {
       const { container } = render(

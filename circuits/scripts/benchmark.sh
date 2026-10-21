@@ -22,6 +22,8 @@ CIRCUIT_TARGET="$CIRCUIT_DIR/target"
 NARGO_TOML="$CIRCUIT_DIR/Nargo.toml"
 PROVER_TOML="$CIRCUIT_DIR/Prover.toml"
 
+MAX_CONSTRAINTS="${MAX_CONSTRAINTS:-50000}"
+MAX_BROWSER_PROVE_SECONDS="${MAX_BROWSER_PROVE_SECONDS:-3}"
 ITERATIONS="${1:-3}"
 OUTPUT_DIR="${2:-$CIRCUIT_DIR/benchmarks}"
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -86,7 +88,11 @@ echo "$NARGO_INFO_OUTPUT" > "$NARGO_INFO_FILE"
 # Extract constraint count — nargo info prints a line like:
 #   "Constraint count: 12345"
 CONSTRAINT_COUNT=$(echo "$NARGO_INFO_OUTPUT" | grep -oP 'Constraint count:\s*\K[0-9]+' || echo "0")
-log "Constraint count: $CONSTRAINT_COUNT"
+log "Constraint count: $CONSTRAINT_COUNT (budget: $MAX_CONSTRAINTS)"
+if [ "$CONSTRAINT_COUNT" -gt 0 ] && [ "$CONSTRAINT_COUNT" -gt "$MAX_CONSTRAINTS" ]; then
+  log "ERROR: circuit exceeds browser feasibility budget"
+  exit 2
+fi
 echo
 
 # ── Step 2: Compile ─────────────────────────────────────────────────────────
@@ -159,12 +165,18 @@ Iterations:      $ITERATIONS
 Successful runs: $SUCCESSFUL_RUNS
 Avg gen time:    ${AVG_GEN_TIME}s
 Avg proof size:  ${AVG_PROOF_SIZE} bytes
+Browser target:  < ${MAX_BROWSER_PROVE_SECONDS}s at <= ${MAX_CONSTRAINTS} constraints
 =================================
 EOF
 
   cat "$SUMMARY_FILE"
   echo
   log "Results appended to $RESULTS_CSV"
+  if [ "$(echo "$AVG_GEN_TIME > $MAX_BROWSER_PROVE_SECONDS" | bc)" -eq 1 ]; then
+    log "DECISION: offload proving; measured latency exceeds browser target"
+  else
+    log "DECISION: browser proving remains feasible on this benchmark host"
+  fi
   log "Summary written to $SUMMARY_FILE"
   log "nargo info saved to $NARGO_INFO_FILE"
 else

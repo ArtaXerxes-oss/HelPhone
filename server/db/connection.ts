@@ -87,6 +87,20 @@ export function releaseClient(client: import('./poolManager.js').PooledClient): 
   getPool().release(client);
 }
 
+/**
+ * Run `fn` on one dedicated pooled client and always release it. Maintenance
+ * statements (VACUUM, REINDEX CONCURRENTLY) can't run inside a transaction and
+ * are long-lived, so they get their own client instead of the shared query path.
+ */
+export async function withClient<T>(fn: (client: import('./poolManager.js').PooledClient) => Promise<T>): Promise<T> {
+  const client = await getClient();
+  try {
+    return await fn(client);
+  } finally {
+    releaseClient(client);
+  }
+}
+
 export async function healthCheck() {
   return getPool().runHealthCheck();
 }
@@ -114,13 +128,143 @@ export async function pingDatabase(timeoutMs = 2000): Promise<{ ok: boolean; lat
   }
 }
 
+let mockReplicationLagMs: number | null = null;
+let mockAsOfLsn: string | null = null;
+let cachedLagMs = 0;
+let lastLagCheckAt = 0;
+
+export function setMockReplicationLag(ms: number | null): void {
+  mockReplicationLagMs = ms;
+}
+
+export function setMockAsOfLsn(lsn: string | null): void {
+  mockAsOfLsn = lsn;
+}
+
+export async function getReplicationLagMs(): Promise<number> {
+  if (mockReplicationLagMs !== null) return mockReplicationLagMs;
+  const now = Date.now();
+  if (now - lastLagCheckAt < 1000) return cachedLagMs;
+
+  try {
+    const res = await query(`
+      SELECT COALESCE(
+        EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000,
+        0
+      ) AS lag_ms
+    `);
+    const val = Number((res.rows[0] as Record<string, unknown>)?.lag_ms);
+    cachedLagMs = Number.isFinite(val) ? Math.max(0, val) : 0;
+  } catch {
+    cachedLagMs = 0;
+  }
+  lastLagCheckAt = now;
+  return cachedLagMs;
+}
+
+export async function getAsOfLsn(): Promise<string> {
+  if (mockAsOfLsn !== null) return mockAsOfLsn;
+  try {
+    const res = await query(`
+      SELECT COALESCE(
+        pg_last_wal_replay_lsn()::text,
+        pg_current_wal_lsn()::text,
+        '0/0'
+      ) AS lsn
+    `);
+    const lsn = String((res.rows[0] as Record<string, unknown>)?.lsn || '0/0');
+    return lsn;
+  } catch {
+    return '0/0';
+  }
+}
+
+export interface HistoryConnectionResult {
+  client: import('./poolManager.js').PooledClient | null;
+  isReplica: boolean;
+  isReserve: boolean;
+  isStale: boolean;
+  lagMs: number;
+  asOfLsn: string;
+  release: () => void;
+}
+
+export async function getHistoryConn(lagBudgetMs = 10000): Promise<HistoryConnectionResult> {
+  const lagMs = await getReplicationLagMs();
+  const asOfLsn = await getAsOfLsn();
+
+  if (lagMs <= lagBudgetMs) {
+    const client = await getClient();
+    return {
+      client,
+      isReplica: true,
+      isReserve: false,
+      isStale: false,
+      lagMs,
+      asOfLsn,
+      release: () => releaseClient(client),
+    };
+  }
+
+  // Lag exceeds budget: fallback to primary reserve (up to 5 conns)
+  try {
+    const reserveClient = await getPool().acquirePrimaryReserve(1000);
+    return {
+      client: reserveClient,
+      isReplica: false,
+      isReserve: true,
+      isStale: false,
+      lagMs,
+      asOfLsn,
+      release: () => getPool().releasePrimaryReserve(reserveClient),
+    };
+  } catch {
+    // Reserve exhausted: stale response
+    return {
+      client: null,
+      isReplica: false,
+      isReserve: false,
+      isStale: true,
+      lagMs,
+      asOfLsn,
+      release: () => {},
+    };
+  }
+}
+
 export default {
   getPool,
   query,
   getClient,
   releaseClient,
+  withClient,
   healthCheck,
   getStats,
   shutdownPool,
   pingDatabase,
 };
+
+// Schema migrations — lazy import avoids a circular dependency between
+// connection and migrator (see migrator.ts for behaviour). The runner shape
+// mirrors migrator.runMigrations options.
+export async function migrate(options: {
+  migrationsDir?: string;
+  runner?: { name: string; query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }> };
+  log?: (message: string, ...args: unknown[]) => void;
+} = {}): Promise<MigrationRunReportShape> {
+  const { runMigrations } = await import('./migrator.js');
+  return runMigrations(options);
+}
+
+export interface MigrationRunReportShape {
+  applied: string[];
+  upgraded: string[];
+  skipped: string[];
+  error?: string;
+  reason?: string;
+}
+
+export async function migrateAtStartup(): Promise<MigrationRunReportShape> {
+  const { runMigrationsAtStartup } = await import('./migrator.js');
+  return runMigrationsAtStartup();
+}

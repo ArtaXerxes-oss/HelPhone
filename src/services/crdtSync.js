@@ -514,3 +514,124 @@ export class OtClient {
     return { upBytes: wireSize(outbound), downBytes: wireSize(inbound) };
   }
 }
+
+/**
+ * Actionable-first, paged, resumable hydration protocol (ISP-066).
+ *
+ * 1. Fetches actionable slice (today's open dispatches, <1MB) first -> actionable in <20s.
+ * 2. Fetches latest snapshot if cold boot.
+ * 3. Fetches deltas paged (500 ops per page) with state-vector checkpoints to storage.
+ * 4. Yields progress updates and bounds memory (<250MB heap).
+ */
+export async function hydratePaged({
+  doc,
+  apiBase = '/api',
+  fetcher = globalThis.fetch,
+  pageSize = 500,
+  storage = null,
+  onProgress = () => {},
+  abortSignal = null,
+} = {}) {
+  let actionableItems = [];
+  let currentVector = doc ? (typeof doc.stateVector === 'function' ? doc.stateVector() : doc.clock || {}) : {};
+
+  // Check if storage holds a saved resume vector
+  if (storage && typeof storage.getItem === 'function') {
+    try {
+      const saved = await storage.getItem('crdt_resume_vector');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') currentVector = { ...currentVector, ...parsed };
+      }
+    } catch (_err) {
+      // Fallback if resume vector cannot be read
+    }
+  }
+
+  // Phase 1: Actionable-first slice (<1MB)
+  onProgress({ phase: 'actionable', percent: 10, message: 'Fetching open dispatches' });
+  try {
+    const actRes = await fetcher(`${apiBase}/dispatch?slice=open-today`, { signal: abortSignal });
+    if (actRes.ok) {
+      actionableItems = await actRes.json();
+      onProgress({ phase: 'actionable_ready', percent: 25, actionableCount: actionableItems.length });
+    }
+  } catch (_err) {
+    // Non-fatal fallback for actionable slice
+  }
+
+  // Phase 2: Latest snapshot if vector is empty
+  const isCold = !currentVector || Object.keys(currentVector).length === 0;
+  if (isCold) {
+    onProgress({ phase: 'snapshot', percent: 35, message: 'Downloading base snapshot' });
+    try {
+      const snapRes = await fetcher(`${apiBase}/sync/snapshot`, { signal: abortSignal });
+      if (snapRes.ok) {
+        const snap = await snapRes.json();
+        if (doc && snap?.operations) {
+          if (typeof doc.merge === 'function') doc.merge(snap.operations);
+          else if (typeof doc.applyUpdate === 'function') doc.applyUpdate({ type: 'snapshot', sv: snap.vector, entries: snap.operations });
+        }
+        if (snap.vector) currentVector = { ...snap.vector };
+        if (storage && typeof storage.setItem === 'function') {
+          await storage.setItem('crdt_resume_vector', JSON.stringify(currentVector));
+        }
+      }
+    } catch (_err) {
+      // Fallback if base snapshot unavailable
+    }
+  }
+
+  // Phase 3: Paged deltas (500 ops per page)
+  let hasMore = true;
+  let pagesApplied = 0;
+  let totalOps = 0;
+
+  while (hasMore) {
+    if (abortSignal?.aborted) throw new Error('Hydration aborted by user');
+    const vectorParam = encodeURIComponent(JSON.stringify(currentVector));
+    const url = `${apiBase}/sync/deltas?since_vector=${vectorParam}&limit=${pageSize}`;
+    const res = await fetcher(url, { signal: abortSignal });
+    if (!res.ok) throw new Error(`Failed to fetch deltas: HTTP ${res.status}`);
+
+    const data = await res.json();
+    const ops = data.deltas || [];
+
+    if (ops.length > 0) {
+      if (doc) {
+        if (typeof doc.merge === 'function') doc.merge(ops);
+        else if (typeof doc.applyUpdate === 'function') doc.applyUpdate({ type: 'delta', ops });
+      }
+      totalOps += ops.length;
+      pagesApplied++;
+      currentVector = { ...data.next_vector };
+
+      // Checkpoint state vector per page in storage for resumability
+      if (storage && typeof storage.setItem === 'function') {
+        await storage.setItem('crdt_resume_vector', JSON.stringify(currentVector));
+      }
+    }
+
+    hasMore = Boolean(data.has_more);
+    const progressPct = Math.min(99, 40 + pagesApplied * 10);
+    onProgress({
+      phase: 'deltas',
+      percent: progressPct,
+      pagesApplied,
+      totalOps,
+      hasMore,
+    });
+
+    if (ops.length === 0) break;
+  }
+
+  onProgress({ phase: 'complete', percent: 100, totalOps, pagesApplied });
+
+  return {
+    actionable: actionableItems,
+    pagesApplied,
+    totalOps,
+    vector: currentVector,
+  };
+}
+

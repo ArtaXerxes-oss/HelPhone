@@ -3,6 +3,7 @@
  * Node 22 strip-types not assumed, so keep plain JS.
  */
 export const MAX_CONNECTIONS = 20;
+export const PRIMARY_RESERVE_CAP = 5;
 export const IDLE_TIMEOUT_MS = 30000;
 export const HEALTH_CHECK_INTERVAL_MS = 15000;
 export const RECLAIM_INTERVAL_MS = 10000;
@@ -40,6 +41,8 @@ export class PoolManager {
     this.idlePool = [];
     this.activeSet = new Set();
     this.waitingQueue = [];
+    this.primaryReserveSet = new Set();
+    this.telemetryBuffer = [];
     this.reclaimTimer = null;
     this.healthTimer = null;
     this.seq = 0;
@@ -150,6 +153,7 @@ export class PoolManager {
   }
 
   release(client) {
+    this.primaryReserveSet.delete(client);
     if (!this.activeSet.has(client)) return;
     this.activeSet.delete(client);
     if (client.__destroyed) return;
@@ -163,6 +167,39 @@ export class PoolManager {
     while (this.totalCount() > this.maxConnections && this.idlePool.length > 0) {
       const entry = this.idlePool.pop(); this.destroyClient(entry.client);
     }
+  }
+
+  async acquirePrimaryReserve(queueTimeoutMs = 5000) {
+    if (this.primaryReserveSet.size >= PRIMARY_RESERVE_CAP) {
+      throw new Error(`Primary reserve connection pool exhausted (cap=${PRIMARY_RESERVE_CAP})`);
+    }
+    const client = await this.acquire(queueTimeoutMs);
+    this.primaryReserveSet.add(client);
+    return client;
+  }
+
+  releasePrimaryReserve(client) {
+    this.primaryReserveSet.delete(client);
+    this.release(client);
+  }
+
+  getPrimaryReserveCount() {
+    return this.primaryReserveSet.size;
+  }
+
+  shedTelemetryBatch(batch) {
+    this.telemetryBuffer.push(batch);
+    this.log('[pool] telemetry batch shed to buffer', { bufferSize: this.telemetryBuffer.length });
+  }
+
+  getTelemetryBuffer() {
+    return [...this.telemetryBuffer];
+  }
+
+  drainTelemetryBuffer() {
+    const items = [...this.telemetryBuffer];
+    this.telemetryBuffer = [];
+    return items;
   }
 
   async query(sql, params) {

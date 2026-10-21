@@ -1,0 +1,66 @@
+{
+  "$comment": "#779 — machine-readable cryptographic-core pins, enforced by scripts/check-crypto-pins.js. Packages in tier 'crypto-core' are never auto-patched by scripts/auto-patch-cve.js; a bump needs a human decision plus an update to this file in the same PR.",
+  "staleAfterDays": 180,
+  "tiers": {
+    "crypto-core": {
+      "autoMerge": false,
+      "description": "Barretenberg / Noir proving stack. A bump changes the proof ABI; requires manual review with the ABI checklist in docs/security-runbook.md."
+    }
+  },
+  "pins": [
+    {
+      "name": "@aztec/bb.js",
+      "version": "0.87.9",
+      "tier": "crypto-core",
+      "rationale": "Barretenberg (UltraHonk) backend validated by the ZK aggregation spike together with nargo/noir_js 1.0.0-beta.9.",
+      "adr": "docs/adr/ADR-005-zk-proof-aggregation.md",
+      "reviewed": "2026-09-23"
+    },
+    {
+      "name": "@noir-lang/noir_js",
+      "version": "1.0.0-beta.9",
+      "tier": "crypto-core",
+      "rationale": "Noir execution runtime; must match the Barretenberg backend and the sibling @noir-lang packages.",
+      "adr": "docs/adr/ADR-005-zk-proof-aggregation.md",
+      "reviewed": "2026-09-23"
+    },
+    {
+      "name": "@noir-lang/acvm_js",
+      "version": "1.0.0-beta.9",
+      "tier": "crypto-core",
+      "rationale": "ACVM WASM bindings used by noir_js; version-locked to noir_js.",
+      "adr": "docs/adr/ADR-005-zk-proof-aggregation.md",
+      "reviewed": "2026-09-23"
+    },
+    {
+      "name": "@noir-lang/noirc_abi",
+      "version": "1.0.0-beta.9",
+      "tier": "crypto-core",
+      "rationale": "Circuit ABI encoder used by noir_js; version-locked to noir_js.",
+      "adr": "docs/adr/ADR-005-zk-proof-aggregation.md",
+      "reviewed": "2026-09-23"
+    },
+    {
+      "name": "@noir-lang/types",
+      "version": "1.0.0-beta.9",
+      "tier": "crypto-core",
+      "rationale": "Shared Noir types used by noir_js and noirc_abi; version-locked to noir_js.",
+      "adr": "docs/adr/ADR-005-zk-proof-aggregation.md",
+      "reviewed": "2026-09-23"
+    }
+  ],
+  "couplings": [
+    {
+      "id": "noir-js-family",
+      "description": "noir_js, acvm_js, noirc_abi and types ship from one Noir release and must resolve to the same version.",
+      "npm": ["@noir-lang/noir_js", "@noir-lang/acvm_js", "@noir-lang/noirc_abi", "@noir-lang/types"]
+    }
+  ],
+  "cargoCrates": [
+    {
+      "crate": "barretenberg",
+      "pin": "@aztec/bb.js",
+      "description": "If a Barretenberg crate is ever added to Cargo.lock it must be the same release as the bb.js WASM backend."
+    }
+  ]
+}

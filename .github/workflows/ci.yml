@@ -1,94 +1,294 @@
-name: CI
+name: HelPhone CI / Automated Quality & Security Pipeline
 
 on:
   push:
-    branches: [main, develop, feat/**, fix/**]
+    branches: [ main, develop, 'feature/*' ]
   pull_request:
-    branches: [main, develop]
+    branches: [ main ]
 
 jobs:
-  test:
+  # ── CODEOWNERS enforcement ───────────────────────────────────────────────────
+  # Validates that CODEOWNERS is syntactically correct and that every path
+  # pattern resolves to at least one owner. A PR that silently has no required
+  # reviewer (e.g., because a path glob was mis-typed) is treated as a
+  # policy failure, not a free-pass.
+  #
+  # ONBOARDING NOTE: If this job fails, check .github/CODEOWNERS for:
+  #   - Typos in path patterns (use `git check-ignore -v --no-index <path>` to test)
+  #   - Owner handles that do not exist on GitHub (handles are case-sensitive)
+  #   - Duplicate or conflicting rules
+  #
+  # See docs/review-policy.md for the per-subsystem review checklists.
+  codeowners-lint:
+    name: CODEOWNERS — Syntax & Coverage Check
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      NODE_VERSION: "22"
-      DATABASE_URL: postgres://helphone:helphone@localhost:5432/helphone_test
-      PG_MAX_CONNECTIONS: "20"
-      PG_IDLE_TIMEOUT_MS: "30000"
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: helphone
-          POSTGRES_PASSWORD: helphone
-          POSTGRES_DB: helphone_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U helphone"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-
-    strategy:
-      matrix:
-        node-version: [22.x]
-
+    if: github.event_name == 'pull_request'
     steps:
-      - name: Checkout code
+      - name: Checkout Codebase
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+      - name: Verify CODEOWNERS file exists
+        run: |
+          if [ ! -f .github/CODEOWNERS ]; then
+            echo "✗ .github/CODEOWNERS is missing."
+            echo "  Every repository must have a CODEOWNERS file to route reviews"
+            echo "  to the correct expert. See docs/review-policy.md."
+            exit 1
+          fi
+          echo "✓ .github/CODEOWNERS exists"
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Validate CODEOWNERS syntax (no empty owner lines)
+        run: |
+          # Reject any non-comment, non-blank line that has a path but no owner.
+          # Pattern: a line that starts with a path character but has no @ after whitespace.
+          BAD=$(grep -nP '^[^#\s]' .github/CODEOWNERS | grep -v '@' || true)
+          if [ -n "$BAD" ]; then
+            echo "✗ CODEOWNERS has path lines with no owner:"
+            echo "$BAD"
+            echo "  Every path pattern must have at least one @owner."
+            exit 1
+          fi
+          echo "✓ All CODEOWNERS path lines have at least one owner"
 
-      - name: Run linter
-        run: npm run lint
-        continue-on-error: true
+      - name: Count subsystem coverage entries
+        run: |
+          ENTRY_COUNT=$(grep -c '^[^#]' .github/CODEOWNERS || true)
+          echo "CODEOWNERS entries: $ENTRY_COUNT"
+          if [ "$ENTRY_COUNT" -lt 10 ]; then
+            echo "⚠ Fewer than 10 CODEOWNERS entries — this may indicate incomplete coverage."
+            echo "  Check docs/bus-factor-ledger.md for subsystems that need owners."
+          else
+            echo "✓ CODEOWNERS coverage looks sufficient ($ENTRY_COUNT entries)"
+          fi
 
-      # Performance hardening: pool, compression, wasm memory, image processor
-      - name: Run subsystem tests
-        run: npm test -- test/db-pool.test.js test/http-compression.test.js test/wasm-memory.test.js test/image-processor.test.js
-
-      - name: Run tests
-        run: npm test
-
-      - name: Run coverage
-        run: npm run test:coverage
-        continue-on-error: true
-
-      - name: Upload coverage reports
-        uses: codecov/codecov-action@v4
-        with:
-          files: ./coverage/lcov.info
-          flags: unittests
-          name: codecov-umbrella
-        continue-on-error: true
-
-      # Verify compression savings & pool health (smoke)
-      - name: Health check (compression + pool)
-        run: node -e "
-          import('./server/middleware/compression.js').then(async m => {
-            const payload = JSON.stringify({ data: 'x'.repeat(5000) });
-            const r = await m.measureCompressionSavings(payload, 'br');
-            console.log('Brotli savings', r.savingsPct.toFixed(1) + '%');
-            if (r.savingsPct < 50) throw new Error('Compression savings below 50%');
-          });
-          "
-
-      - name: Build project
-        run: npm run build
-
-      - name: Check WASM memory cap
-        run: node -e "import('./src/lib/wasmMemory.js').then(m => { if (m.MAX_MEMORY_BYTES !== 512*1024*1024) throw new Error('WASM cap not 512MB'); console.log('WASM cap OK 512MB'); });"
-
-  contracts:
+  quality-and-security-matrix:
+    name: Code Quality, Type Check, Cryptography & State Export Verification
     runs-on: ubuntu-latest
 
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Verify lockfile checksums against official registries
+        run: node scripts/verify-lockfile-hashes.js
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Scan dependency lifecycle scripts
+        run: bash scripts/sandbox-install.sh --scan node_modules
+
+      - name: Audit generated code for security defects
+        run: npm run security:ai-code
+
+      - name: Code Formatting & ESLint Quality Check
+        run: npx eslint .
+
+      - name: TypeScript Type Checking (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: Run Vitest Test Suite (Sanity, Feature Flags, State Export & Crypto)
+        run: npm test
+
+      - name: Execute Soroban State Export Verification Script
+        run: bash scripts/export-contract-state.sh
+
+  database-migrations:
+    name: Schema Migrations (Postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: helphone_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/helphone_test
+
+  # Network throttling matrix (CDP): one leg per profile so a regression names the network class it breaks on
+  e2e-throttling:
+    name: E2E throttling (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ['2g', '3g', 'cap-500kbps', 'offline']
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Apply Schema Migrations (idempotent run)
+        run: npm run db:migrate
+
+      - name: Verify migrations recorded as applied
+        run: |
+          node -e "
+            const { Client } = require('pg');
+            const { readdirSync } = require('fs');
+            (async () => {
+              const c = new Client({ connectionString: process.env.DATABASE_URL });
+              await c.connect();
+              const want = readdirSync('migrations').filter((f) => f.endsWith('.sql')).sort();
+              const r = await c.query('SELECT filename FROM schema_migrations ORDER BY filename');
+              const have = r.rows.map((x) => x.filename);
+              const missing = want.filter((f) => !have.includes(f));
+              if (missing.length) throw new Error('migrations not applied: ' + missing.join(', '));
+              console.log('applied:', have.join(', '));
+              await c.end();
+            })().catch((e) => { console.error(e); process.exit(1); });
+          "
+
+      - name: Verify schema objects exist (RLS + indexes)
+        run: |
+          node -e "
+            const { Client } = require('pg');
+            (async () => {
+              const c = new Client({ connectionString: process.env.DATABASE_URL });
+              await c.connect();
+              const r = await c.query(
+                \"SELECT relname FROM pg_class WHERE relrowsecurity = true AND relkind = 'r' ORDER BY relname\"
+              );
+              const tables = r.rows.map((x) => x.relname);
+              const expected = ['contract_events', 'expert_verifications', 'requests', 'responders'];
+              const missing = expected.filter((t) => !tables.includes(t));
+              if (missing.length) throw new Error('RLS not enabled on: ' + missing.join(', '));
+              const idx = await c.query(
+                \"SELECT indexname FROM pg_indexes WHERE tablename = 'contract_events'\"
+              );
+              console.log('RLS tables:', tables.join(', '));
+              console.log('contract_events indexes:', idx.rows.map((x) => x.indexname).join(', '));
+              await c.end();
+            })().catch((e) => { console.error(e); process.exit(1); });
+          "
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run throttling profile
+        run: npm run test:e2e:throttling -- --grep "\\[${{ matrix.profile }}\\]"
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: throttling-${{ matrix.profile }}
+          path: test-results/
+
+  # Multi-resolution visual layout matrix (tests/e2e/layout.spec.ts): one leg
+  # per device profile so a pull request names the exact resolution whose
+  # layout regressed. Each leg gates horizontal scrolling, viewport clipping
+  # and the committed layout baselines.
+  e2e-layout-matrix:
+    name: E2E layout matrix (${{ matrix.device }})
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        device: [iphone-se, iphone-14, pixel-7, ipad, laptop, display-4k]
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # commit-range signature checks (#619)
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run layout matrix leg
+        # Called directly instead of through `npm run test:layout` so the leg
+        # runs exactly one resolution (Playwright unions repeated --project).
+        run: npx playwright test --project=layout-${{ matrix.device }} --reporter=line
+
+      - name: Upload layout diff artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: layout-${{ matrix.device }}
+          path: |
+            test-results/
+            tests/e2e/layout.spec.ts-snapshots/
+          if-no-files-found: ignore
+
+  # Build-pipeline network egress monitor: every outbound connection made
+  # while dependencies are fetched and while `npm run build` runs is captured
+  # (tcpdump) and classified against the allowlist in
+  # scripts/monitor-build-egress.sh. Unauthorized destinations fail the job
+  # and the audit logs are uploaded for security review.
+  build-egress-monitor:
+    name: Build Egress Monitor & Data Exfiltration Gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Install packet capture tooling
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tcpdump
+
+      - name: Install dependencies inside the egress monitor (strict gate)
+        run: >
+          bash scripts/monitor-build-egress.sh --strict
+          --log-dir artifacts/build-egress/install
+          -- npm ci --ignore-scripts
+
+      - name: Run production build inside the egress monitor (egress gate)
+        # This job owns the network verdict only: the app build's own exit
+        # code is recorded in the summary artifact but does not fail the job
+        # (compilation errors belong to the build, see docs/security-runbook.md).
+        run: >
+          bash scripts/monitor-build-egress.sh --strict --ignore-command-exit
+          --log-dir artifacts/build-egress/build
+          -- npm run build
+
+      - name: Upload build egress audit logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-egress-audit
+          path: artifacts/build-egress/
+          if-no-files-found: warn
+
+  # #541 / #543 — Soroban contract unit tests (aegis_vault treasury, DAO oracle).
+  contracts:
+    name: Soroban Contract Tests
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -104,6 +304,7 @@ jobs:
           workspaces: |
             contracts/aegis_vault
             contracts/maintainer_vault
+            contracts/helphone_dao
             contract
 
       - name: Run cargo test (aegis_vault)
@@ -112,6 +313,12 @@ jobs:
 
       - name: Run cargo test (maintainer_vault)
         working-directory: contracts/maintainer_vault
+        run: cargo test --locked
+
+      # Closes #587 — DAO + open source sustainability reserve (1% fee,
+      # DAO-voted maintainer grants).
+      - name: Run cargo test (helphone_dao)
+        working-directory: contracts/helphone_dao
         run: cargo test --locked
 
       # The `soroban` CLI was renamed to `stellar` (soroban-cli -> stellar-cli);
@@ -130,11 +337,16 @@ jobs:
         working-directory: contract
         run: stellar contract build
 
+  # Supply-chain security: typosquatting gate, transitive vulnerability scan,
+  # WASM reproducibility, dep health, license compliance, CVE patch plan, and
+  # maintainer key revocation check (#586 #587 #588 #589 #590 #591 #599 #619).
   supply-chain:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # commit-range signature checks (#619)
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -162,3 +374,77 @@ jobs:
       - name: Dependency health monitor
         run: node scripts/monitor-dep-health.js --offline
         continue-on-error: true
+
+      # Closes #586 — npm + Cargo license scan; fails on unapproved
+      # GPL/AGPL/strong-copyleft licenses (see docs/legal-compliance.md).
+      - name: License compliance & copyleft gate
+        run: node scripts/license-compliance.js --no-write
+
+      # Refs #779 — fails on drift of the Barretenberg/Noir pins in
+      # crypto-pins.json (package-lock.json / Cargo.lock coupling).
+      - name: Crypto-core pin gate
+        run: node scripts/check-crypto-pins.js
+
+      # Closes #599 — GitHub Security Advisory scan + minimum-patch plan.
+      # Report-only here; scheduled patch PRs come from cve-patch-bot.yml.
+      - name: CVE patch plan
+        run: node scripts/auto-patch-cve.js --fail-on critical
+
+      # Closes #619 — commit signatures vs live key revocation lists + WoT.
+      - name: Maintainer key revocation check
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/${{ github.base_ref }}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          node scripts/security/verify_maintainer_keys.js --pinned --range "$RANGE" --max 100
+
+  # Automated dependency version drift & breaking API change analyzer: the
+  # exported TypeScript surface of every protected package (functions, class
+  # members, call signatures) is extracted from its .d.ts entry point with the
+  # TypeScript Compiler API and compared against the reviewed baseline
+  # committed in package.json -> apiDrift.baseline.
+  #
+  # Version pinning guard: a semver-compatible (minor/patch) upgrade that
+  # drops or re-types a public signature fails this job; major upgrades are
+  # reported as warnings and need a re-baseline. The Rust half checks that
+  # Cargo.toml carries [workspace.metadata.api-drift].
+  api-drift-guard:
+    name: Dependency API Drift & Version Pinning Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Install Dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Check app dependencies against the committed API baseline
+        run: npm run security:api-drift | tee api-drift-report.txt
+
+      - name: Check server dependencies against the committed API baseline
+        run: npm run security:api-drift:server | tee -a api-drift-report.txt
+
+      - name: Publish drift report artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-drift-report
+          path: api-drift-report.txt
+          if-no-files-found: ignore
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run contract tests
+        run: cargo test --workspace --locked

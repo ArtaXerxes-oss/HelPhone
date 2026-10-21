@@ -1,3 +1,16 @@
+import { installWorkerHooks } from "./workerSupervision.js";
+import {
+  installWorkerLockdown,
+  validateMessage,
+  zkWorkerInboundSchema,
+  zkWorkerOutboundSchema,
+} from "../lib/workerSandbox.ts";
+
+// Worker sandbox, layer 2: the bootstrap blob already ran this before this
+// module was imported. Running it again keeps the lockdown in place when the
+// worker is launched through the same-origin fallback path.
+installWorkerLockdown();
+
 let _noir = null;
 let _backend = null;
 let _Noir = null;
@@ -273,14 +286,38 @@ function isProverReady() {
   );
 }
 
+/**
+ * postMessage through the outbound schema: a payload that does not match the
+ * protocol never leaves the worker (defence in depth alongside the parent's
+ * own validation of worker output).
+ */
+function postToMain(message, transfer) {
+  const parsed = validateMessage(zkWorkerOutboundSchema, message);
+  if (!parsed.ok) {
+    console.warn(`[zk-worker] dropped outbound message: ${parsed.error}`);
+    return;
+  }
+  if (transfer) self.postMessage(parsed.data, transfer);
+  else self.postMessage(parsed.data);
+}
+
+// Error/heartbeat parity for null-origin workers (#793).
+installWorkerHooks(self, "zk-worker");
 self.onmessage = async (event) => {
-  const data = event.data || {};
+  // Worker sandbox, layer 3: reject anything that is not a known request
+  // before it can touch prover state.
+  const request = validateMessage(zkWorkerInboundSchema, event.data || {});
+  if (!request.ok) {
+    console.warn(`[zk-worker] dropped inbound message: ${request.error}`);
+    return;
+  }
+  const data = request.data;
   // Support both legacy {type: 'prove'} and {action: 'prove'} protocols plus upstream actions
   const isProve = data.type === 'prove' || data.action === 'prove';
   if (isProve) {
     const id = data.id;
     const inputs = data.inputs || data.payload?.inputs;
-    const progress = (msg) => self.postMessage({ type: 'progress', id, action: 'log', message: msg });
+    const progress = (msg) => postToMain({ type: 'progress', id, action: 'log', message: msg });
     let witnessBuf = null;
     let proofBuf = null;
     try {
@@ -293,13 +330,16 @@ self.onmessage = async (event) => {
       if (!_noir || !_backend) await init(onLog);
       const artifact = await getCircuitArtifact();
       // Re-use init if needed (already warmed)
+      const profileStart = performance.now();
+      const heapStart = performance.memory?.usedJSHeapSize ?? 0;
       const { witness, returnValue } = await _noir.execute(inputs);
       progress('Generating proof');
       const { proof } = await _backend.generateProof(witness);
       const proofBytes = proof instanceof Uint8Array ? proof : new Uint8Array(proof);
-      self.postMessage({ type: 'done', id, action: 'proveComplete', proof: proofBytes, publicInputs: returnValue, memStats: memPool.stats() }, [proofBytes.buffer]);
+      const profiling = { provingMs: performance.now() - profileStart, heapDeltaBytes: Math.max(0, (performance.memory?.usedJSHeapSize ?? heapStart) - heapStart), memStats: memPool.stats() };
+      postToMain({ type: 'done', id, action: 'proveComplete', proof: proofBytes, publicInputs: returnValue, profiling }, [proofBytes.buffer]);
     } catch (error) {
-      self.postMessage({ type: 'error', id: data.id, action: 'error', error: error.message || String(error) });
+      postToMain({ type: 'error', id: data.id, action: 'error', error: error.message || String(error) });
     } finally {
       if (witnessBuf) memPool.release(witnessBuf);
       if (proofBuf) memPool.release(proofBuf);
@@ -312,37 +352,37 @@ self.onmessage = async (event) => {
     switch (action) {
       case "warmProver": {
         const onLog = (msg) => {
-          self.postMessage({ id, action: "log", message: msg });
+          postToMain({ id, action: "log", message: msg });
         };
         await warmProver(onLog);
-        self.postMessage({ id, action: "warmProverComplete", success: true });
+        postToMain({ id, action: "warmProverComplete", success: true });
         break;
       }
 
       case "isProverReady": {
         const ready = isProverReady();
-        self.postMessage({ id, action: "isProverReadyResult", ready });
+        postToMain({ id, action: "isProverReadyResult", ready });
         break;
       }
 
       case "initHumanity": {
         const onLog = (msg) => {
-          self.postMessage({ id, action: "log", message: msg });
+          postToMain({ id, action: "log", message: msg });
         };
         await initHumanity(onLog);
-        self.postMessage({ id, action: "initHumanityComplete", success: true });
+        postToMain({ id, action: "initHumanityComplete", success: true });
         break;
       }
 
       default:
-        self.postMessage({
+        postToMain({
           id,
           action: "error",
           error: `Unknown action: ${action}`,
         });
     }
   } catch (error) {
-    self.postMessage({
+    postToMain({
       id,
       action: "error",
       error: error.message || String(error),

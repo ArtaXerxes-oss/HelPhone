@@ -20,6 +20,7 @@
  *   );
  */
 
+import { installWorkerHooks } from "./workerSupervision.js";
 import {
   buildContractionHierarchy,
   buildGraphFromGeoJSON,
@@ -110,8 +111,21 @@ export function handleRoutingMessage(state, msg) {
           transfer: isShared ? [] : [copy],
         };
       }
+      case "setActionableComplete": {
+        state.actionableComplete = Boolean(msg.complete ?? msg.actionableComplete);
+        return reply(id, "setActionableComplete:ok", { actionableComplete: state.actionableComplete });
+      }
       case "route": {
         requireGraph(state);
+        if (state.actionableComplete === false || msg.actionableComplete === false) {
+          return reply(id, "route:ok", {
+            status: "history-partial",
+            badge: "history-partial",
+            eta: null,
+            distance: null,
+            message: "Actionable state not yet complete (syncing history)",
+          });
+        }
         const algorithm = msg.algorithm || "astar";
         const t0 = now();
         let result;
@@ -179,6 +193,8 @@ if (
   typeof window === "undefined"
 ) {
   const state = createRoutingState();
+  // Error/heartbeat parity for null-origin workers (#793).
+  installWorkerHooks(self, "routingWorker");
   self.onmessage = (event) => {
     const { reply: out, transfer } = handleRoutingMessage(state, event.data);
     self.postMessage(out, transfer);

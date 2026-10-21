@@ -27,6 +27,14 @@ import {
   summarize,
 } from "../services/storageEngine.js";
 import { createTelemetryWorkerProtocol } from "../lib/telemetryWorkerProtocol.js";
+import { installWorkerHooks, isKilled, setQueueStats, workerFlagVersion, handleFlagMessage } from "./workerSupervision.js";
+
+/**
+ * Offline-gap evidence (#796): what this worker shed or could not flush.
+ * Reported on every heartbeat/result so the server can estimate RUM that
+ * never arrived instead of treating silence as health.
+ */
+export const gapCounters = { droppedBatches: 0, unflushedEvents: 0, killedWrites: 0, droppedTelemetry: 0 };
 
 const now = () =>
   typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -117,6 +125,12 @@ export async function runWriter(config, sinkOverride) {
 
   const writeOne = () => {
     produced++;
+    // Kill-switch enforced inside the worker (#797): the main thread's flag
+    // state can lag; the worker reads the shared snapshot directly.
+    if (isKilled("telemetry.upload")) {
+      gapCounters.killedWrites++;
+      return Promise.resolve();
+    }
     const p = engine
       .append(store, next())
       .then((ms) => latencies.push(ms))
@@ -126,6 +140,7 @@ export async function runWriter(config, sinkOverride) {
       })
       .finally(() => pendingWrites.delete(p));
     pendingWrites.add(p);
+    setQueueStats(pendingWrites.size, pendingWrites.size * payloadBytes);
     return p;
   };
 
@@ -140,7 +155,10 @@ export async function runWriter(config, sinkOverride) {
     await runAtRate(rateHz, durationMs, () => {
       if (stopOnQuota && quotaError) return;
       // Backpressure: past maxPending in-flight writes, shed the fix.
-      if (pendingWrites.size >= maxPending) shed++;
+      if (pendingWrites.size >= maxPending) {
+        shed++;
+        gapCounters.droppedBatches++;
+      }
       else writeOne();
     });
   }
@@ -153,6 +171,8 @@ export async function runWriter(config, sinkOverride) {
   ]);
   clearTimeout(drainTimer);
   const unfinished = pendingWrites.size;
+  gapCounters.unflushedEvents += unfinished;
+  setQueueStats(unfinished, unfinished * payloadBytes);
   const elapsedMs = now() - t0;
 
   // Eviction/quota recovery: free the oldest 10 % and check writes resume.
@@ -177,6 +197,9 @@ export async function runWriter(config, sinkOverride) {
     committed: latencies.length,
     shed,
     unfinished,
+    gap: { ...gapCounters },
+    dropped_telemetry: gapCounters.droppedTelemetry,
+    flagVersion: workerFlagVersion(),
     errors,
     quotaError,
     elapsedMs: Math.round(elapsedMs),
@@ -239,10 +262,12 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
   let ownerEngine = null;
   const ports = [];
   let telemetryProtocol = null;
+  installWorkerHooks(self, "telemetryWorker");
   const fail = (err) => self.postMessage({ type: "error", message: String((err && err.message) || err), name: err && err.name });
 
   self.onmessage = async (event) => {
     const msg = event.data || {};
+    if (handleFlagMessage(msg)) return;
 
     // Telemetry binary-parsing lane (flow-controlled; independent of the
     // storage-contention benchmark lane below).
@@ -255,7 +280,6 @@ if (typeof self !== "undefined" && typeof self.postMessage === "function" && typ
       telemetryProtocol.handle(msg);
       return;
     }
-
     try {
       if (msg.type === "port") {
         if (ownerEngine) attachOwnerPort(ownerEngine, msg.port);

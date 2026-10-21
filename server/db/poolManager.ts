@@ -12,6 +12,7 @@
  */
 
 export const MAX_CONNECTIONS = 20;
+export const PRIMARY_RESERVE_CAP = 5;
 export const IDLE_TIMEOUT_MS = 30_000;
 export const HEALTH_CHECK_INTERVAL_MS = 15_000;
 export const RECLAIM_INTERVAL_MS = 10_000;
@@ -88,6 +89,8 @@ export class PoolManager {
   private idlePool: Array<{ client: PooledClient; idleSince: number }> = [];
   private activeSet: Set<PooledClient> = new Set();
   private waitingQueue: WaitingResolver[] = [];
+  private primaryReserveSet: Set<PooledClient> = new Set();
+  private telemetryBuffer: Array<unknown> = [];
 
   private reclaimTimer: ReturnType<typeof setInterval> | null = null;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
@@ -295,6 +298,7 @@ export class PoolManager {
 
   /** Release a client back to idle pool or satisfy next waiter. */
   release(client: PooledClient): void {
+    this.primaryReserveSet.delete(client);
     if (!this.activeSet.has(client)) {
       // May already be idle or destroyed
       return;
@@ -322,6 +326,40 @@ export class PoolManager {
       const entry = this.idlePool.pop()!;
       this.destroyClient(entry.client);
     }
+  }
+
+  /** Acquire a dedicated client from the primary reserve (capped at PRIMARY_RESERVE_CAP = 5). */
+  async acquirePrimaryReserve(queueTimeoutMs = 5_000): Promise<PooledClient> {
+    if (this.primaryReserveSet.size >= PRIMARY_RESERVE_CAP) {
+      throw new Error(`Primary reserve connection pool exhausted (cap=${PRIMARY_RESERVE_CAP})`);
+    }
+    const client = await this.acquire(queueTimeoutMs);
+    this.primaryReserveSet.add(client);
+    return client;
+  }
+
+  releasePrimaryReserve(client: PooledClient): void {
+    this.primaryReserveSet.delete(client);
+    this.release(client);
+  }
+
+  getPrimaryReserveCount(): number {
+    return this.primaryReserveSet.size;
+  }
+
+  shedTelemetryBatch(batch: unknown): void {
+    this.telemetryBuffer.push(batch);
+    this.log('[pool] telemetry batch shed to buffer', { bufferSize: this.telemetryBuffer.length });
+  }
+
+  getTelemetryBuffer(): unknown[] {
+    return [...this.telemetryBuffer];
+  }
+
+  drainTelemetryBuffer(): unknown[] {
+    const items = [...this.telemetryBuffer];
+    this.telemetryBuffer = [];
+    return items;
   }
 
   /** Convenience query helper: acquire -> query -> release */

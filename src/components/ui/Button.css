@@ -50,6 +50,22 @@
   border-radius: 13px;
 }
 
+/* Rugged glove target (ISP-131): >=56px tall, high-contrast focus ring */
+.hp-btn--rugged {
+  font-size: 16px;
+  min-height: 56px;
+  min-width: 56px;
+  padding: 16px 26px;
+  border-radius: 12px;
+  font-weight: 700;
+}
+
+.hp-btn--rugged:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px #234b4e;
+}
+
 /* Variants */
 .hp-btn--primary {
   background: var(--color-accent);

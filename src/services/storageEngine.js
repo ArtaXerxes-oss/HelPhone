@@ -17,7 +17,33 @@
  * drives it through src/workers/telemetryWorker.js.
  */
 
-export const STORES = ["telemetry", "messages", "frames"];
+export const STORES = ["telemetry", "messages", "frames", "dispatches"];
+
+export class SqliteBusyError extends Error {
+  constructor(message = "SQLITE_BUSY: database lock contention", { code = 5, lane = "telemetry", details = null } = {}) {
+    super(message);
+    this.name = "SqliteBusyError";
+    this.code = code;
+    this.lane = lane;
+    this.details = details;
+  }
+}
+
+export function isWorkerContext() {
+  return typeof importScripts === "function" || (typeof self !== "undefined" && typeof window === "undefined");
+}
+
+export function assertWorkerContext() {
+  if (typeof window !== "undefined" && typeof document !== "undefined") {
+    throw new Error("WorkerIsolationError: SQLite-WASM is restricted to dedicated Web Workers to prevent UI jank (ADR-007 / ISP-064)");
+  }
+}
+
+export function getTelemetryPartitionName(dateOrTs = Date.now()) {
+  const d = new Date(dateOrTs);
+  const ym = `${d.getUTCFullYear()}${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  return `telemetry_${ym}`;
+}
 
 const now = () =>
   typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -273,6 +299,26 @@ export class IndexedDbBackend {
     });
   }
 
+  async incrementalVacuum() {
+    return { pagesFreed: 0, aborted: false, disabled: true };
+  }
+
+  async dropPartition() {
+    return 0;
+  }
+
+  async dropExpiredTelemetry() {
+    return 0;
+  }
+
+  quickCheck() {
+    return true;
+  }
+
+  checkpoint() {
+    return null;
+  }
+
   close() {
     if (this.db) this.db.close();
     this.db = null;
@@ -292,23 +338,29 @@ export class SqliteOpfsBackend {
    * @param {boolean} [options.exclusive] `locking_mode=EXCLUSIVE`; required for
    *   WAL on the OPFS VFSes (no shared-memory wal-index in WASM).
    * @param {Function} [options.sqlite3InitModule] injectable for tests.
+   * @param {boolean} [options.allowMainThread=false]
    */
-  constructor({ vfs = "opfs-sahpool", filename = "/helphone-offline.sqlite3", journalMode = "wal", exclusive, synchronous = "normal", sqlite3InitModule } = {}) {
+  constructor({ vfs = "opfs-sahpool", filename = "/helphone-offline.sqlite3", journalMode = "wal", exclusive, synchronous = "normal", sqlite3InitModule, allowMainThread = false } = {}) {
     this.vfs = vfs;
     this.filename = filename;
     this.journalMode = journalMode;
     this.exclusive = exclusive ?? journalMode === "wal";
     this.synchronous = synchronous;
     this.init = sqlite3InitModule;
+    this.allowMainThread = allowMainThread;
     this.kind = `sqlite-${vfs}`;
     this.db = null;
     this.sqlite3 = null;
     this.pool = null;
     this.effectiveJournalMode = null;
     this.busyRetries = 0;
+    this.droppedTelemetry = 0;
   }
 
   async open() {
+    if (this.vfs !== "memory" && !this.allowMainThread) {
+      assertWorkerContext();
+    }
     const init = this.init || (await import("@sqlite.org/sqlite-wasm")).default;
     const sqlite3 = await init();
     this.sqlite3 = sqlite3;
@@ -329,13 +381,102 @@ export class SqliteOpfsBackend {
     if (this.exclusive) this.db.exec("PRAGMA locking_mode=EXCLUSIVE");
     this.effectiveJournalMode = String(this.db.selectValue(`PRAGMA journal_mode=${this.journalMode}`)).toLowerCase();
     this.db.exec(`PRAGMA synchronous=${this.synchronous}`);
+    try {
+      this.db.exec("PRAGMA auto_vacuum = INCREMENTAL");
+    } catch (_err) {
+      // Ignore if auto_vacuum is not supported on this VFS/build
+    }
+
     this.#withBusyRetrySync(() => {
-      for (const store of STORES)
-        this.db.exec(
-          `CREATE TABLE IF NOT EXISTS ${store} (id INTEGER PRIMARY KEY AUTOINCREMENT, ${TELEMETRY_COLUMNS.map((c) => `${c} ${c === "payload" ? "TEXT" : "REAL"}`).join(", ")})`,
-        );
+      for (const store of STORES) {
+        if (store === "telemetry") {
+          const curPartition = getTelemetryPartitionName();
+          this.ensurePartitionTable(curPartition);
+          this.syncTelemetryView();
+        } else {
+          this.db.exec(
+            `CREATE TABLE IF NOT EXISTS ${store} (id INTEGER PRIMARY KEY AUTOINCREMENT, ${TELEMETRY_COLUMNS.map((c) => `${c} ${c === "payload" ? "TEXT" : "REAL"}`).join(", ")})`,
+          );
+        }
+      }
     });
     return this;
+  }
+
+  ensurePartitionTable(tableName) {
+    if (!this.knownPartitions) this.knownPartitions = new Set();
+    if (this.knownPartitions.has(tableName)) return;
+    this.#withBusyRetrySync(() => {
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS ${tableName} (id INTEGER PRIMARY KEY AUTOINCREMENT, ${TELEMETRY_COLUMNS.map((c) => `${c} ${c === "payload" ? "TEXT" : "REAL"}`).join(", ")})`,
+      );
+      this.knownPartitions.add(tableName);
+      this.syncTelemetryView();
+    });
+  }
+
+  syncTelemetryView() {
+    this.#withBusyRetrySync(() => {
+      let names = [];
+      try {
+        const rows = this.db.selectObjects(
+          "SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE 'telemetry_%' ORDER BY name"
+        );
+        names = rows.map((r) => r.name);
+      } catch {
+        const rows = this.db.selectObjects(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'telemetry_%' ORDER BY name"
+        );
+        names = rows.map((r) => r.name);
+      }
+      this.db.exec("DROP VIEW IF EXISTS telemetry");
+      if (names.length === 0) {
+        const cur = getTelemetryPartitionName();
+        this.ensurePartitionTable(cur);
+        this.db.exec(`CREATE VIEW IF NOT EXISTS telemetry AS SELECT * FROM ${cur}`);
+      } else {
+        const unionSql = names.map((t) => `SELECT * FROM ${t}`).join(" UNION ALL ");
+        this.db.exec(`CREATE VIEW IF NOT EXISTS telemetry AS ${unionSql}`);
+      }
+    });
+  }
+
+  dropPartition(partitionName) {
+    let dropped = 0;
+    this.#withBusyRetrySync(() => {
+      this.db.exec(`DROP TABLE IF EXISTS ${partitionName}`);
+      dropped = 1;
+      this.syncTelemetryView();
+    });
+    return dropped;
+  }
+
+  dropExpiredTelemetry(retentionDays = 30) {
+    const cutoffMs = Date.now() - retentionDays * 86400000;
+    const cutoffPartition = getTelemetryPartitionName(cutoffMs);
+    let dropped = 0;
+    this.#withBusyRetrySync(() => {
+      let rows = [];
+      try {
+        rows = this.db.selectObjects(
+          "SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE 'telemetry_%' ORDER BY name"
+        );
+      } catch {
+        rows = this.db.selectObjects(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'telemetry_%' ORDER BY name"
+        );
+      }
+      for (const r of rows) {
+        if (r.name < cutoffPartition) {
+          this.db.exec(`DROP TABLE IF EXISTS ${r.name}`);
+          dropped++;
+        }
+      }
+      if (dropped > 0) {
+        this.syncTelemetryView();
+      }
+    });
+    return dropped;
   }
 
   #isBusy(err) {
@@ -355,32 +496,78 @@ export class SqliteOpfsBackend {
   }
 
   /**
-   * One IMMEDIATE transaction per batch. SQLITE_BUSY (another connection
-   * holds the write lock) is retried with backoff; the time spent retrying
-   * is reported as `lockWaitMs`.
+   * Priority-aware batch writes:
+   *  - lane "dispatch" (priority "immediate"): BEGIN IMMEDIATE with up to busyTimeout retry,
+   *    throws SqliteBusyError on timeout to allow outbox overflow.
+   *  - lane "telemetry" (priority "deferred"): BEGIN DEFERRED with fast yield / coalesce under contention.
    */
-  async writeBatch(store, records) {
+  async writeBatch(store, records, { lane = "telemetry", priority = "deferred", busyTimeout = 5000, onCoalesce = null } = {}) {
     const t0 = now();
     let lockWaitMs = 0;
+    const isDispatch = lane === "dispatch" || priority === "immediate" || store === "dispatches";
+    const beginTx = isDispatch ? "BEGIN IMMEDIATE" : "BEGIN DEFERRED";
+    const maxRetries = isDispatch ? 400 : 20;
+
     for (let attempt = 0; ; attempt++) {
       try {
-        this.db.exec("BEGIN IMMEDIATE");
+        this.db.exec(beginTx);
         break;
       } catch (err) {
-        if (!this.#isBusy(err) || attempt > 400) throw err;
+        if (!this.#isBusy(err) || attempt > maxRetries || lockWaitMs >= busyTimeout) {
+          if (this.#isBusy(err) && isDispatch) {
+            throw new SqliteBusyError(`SQLITE_BUSY: dispatch write lock acquisition timed out after ${Math.round(lockWaitMs)}ms`, { code: 5, lane: "dispatch", details: err });
+          }
+          if (this.#isBusy(err) && !isDispatch) {
+            this.droppedTelemetry += records.length;
+            if (onCoalesce) onCoalesce(records);
+            return { lockWaitMs, commitMs: now() - t0, dropped: records.length, coalesced: true };
+          }
+          throw err;
+        }
         this.busyRetries++;
         const w0 = now();
-        await new Promise((r) => setTimeout(r, Math.min(50, 1 + attempt)));
+        await new Promise((r) => setTimeout(r, Math.min(isDispatch ? 50 : 15, 1 + attempt * 2)));
         lockWaitMs += now() - w0;
       }
     }
+
     try {
-      const stmt = this.db.prepare(`INSERT INTO ${store} (${TELEMETRY_COLUMNS.join(",")}) VALUES (${TELEMETRY_COLUMNS.map(() => "?").join(",")})`);
-      try {
-        for (const r of records)
-          stmt.bind(TELEMETRY_COLUMNS.map((c) => (c === "payload" ? JSON.stringify(r.payload ?? null) : r[c] ?? null))).stepReset();
-      } finally {
-        stmt.finalize();
+      if (store === "telemetry") {
+        const byPartition = new Map();
+        for (const r of records) {
+          const partName = getTelemetryPartitionName(r.ts);
+          let list = byPartition.get(partName);
+          if (!list) byPartition.set(partName, (list = []));
+          list.push(r);
+        }
+        for (const [partName, partRecords] of byPartition) {
+          this.ensurePartitionTable(partName);
+          const stmt = this.db.prepare(
+            `INSERT INTO ${partName} (${TELEMETRY_COLUMNS.join(",")}) VALUES (${TELEMETRY_COLUMNS.map(() => "?").join(",")})`
+          );
+          try {
+            for (const r of partRecords) {
+              stmt.bind(
+                TELEMETRY_COLUMNS.map((c) => (c === "payload" ? JSON.stringify(r.payload ?? null) : r[c] ?? null))
+              ).stepReset();
+            }
+          } finally {
+            stmt.finalize();
+          }
+        }
+      } else {
+        const stmt = this.db.prepare(
+          `INSERT INTO ${store} (${TELEMETRY_COLUMNS.join(",")}) VALUES (${TELEMETRY_COLUMNS.map(() => "?").join(",")})`
+        );
+        try {
+          for (const r of records) {
+            stmt.bind(
+              TELEMETRY_COLUMNS.map((c) => (c === "payload" ? JSON.stringify(r.payload ?? null) : r[c] ?? null))
+            ).stepReset();
+          }
+        } finally {
+          stmt.finalize();
+        }
       }
       this.db.exec("COMMIT");
     } catch (err) {
@@ -391,7 +578,11 @@ export class SqliteOpfsBackend {
       }
       throw err;
     }
-    return { lockWaitMs, commitMs: now() - t0 };
+    return { lockWaitMs, commitMs: now() - t0, dropped: 0 };
+  }
+
+  async appendBatch(store, records, opts) {
+    return this.writeBatch(store, records, opts);
   }
 
   async readLatest(store, limit = 50) {
@@ -403,6 +594,24 @@ export class SqliteOpfsBackend {
   }
 
   async deleteOldest(store, n) {
+    if (store === "telemetry") {
+      let remaining = n;
+      let totalDeleted = 0;
+      let rows = [];
+      try {
+        rows = this.db.selectObjects("SELECT name FROM sqlite_schema WHERE type='table' AND name LIKE 'telemetry_%' ORDER BY name");
+      } catch {
+        rows = this.db.selectObjects("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'telemetry_%' ORDER BY name");
+      }
+      for (const r of rows) {
+        if (remaining <= 0) break;
+        this.db.exec({ sql: `DELETE FROM ${r.name} WHERE id IN (SELECT id FROM ${r.name} ORDER BY id LIMIT ?)`, bind: [remaining] });
+        const c = this.db.changes();
+        totalDeleted += c;
+        remaining -= c;
+      }
+      return totalDeleted;
+    }
     this.db.exec({ sql: `DELETE FROM ${store} WHERE id IN (SELECT id FROM ${store} ORDER BY id LIMIT ?)`, bind: [n] });
     return this.db.changes();
   }
@@ -411,6 +620,84 @@ export class SqliteOpfsBackend {
   checkpoint(mode = "TRUNCATE") {
     if (this.effectiveJournalMode !== "wal") return null;
     return this.db.selectArray(`PRAGMA wal_checkpoint(${mode})`);
+  }
+
+  async incrementalVacuum({ pages = 50, busyTimeoutMs = 5000, abortOnBacklog = null, maxPages = 10000 } = {}) {
+    this.checkpoint("TRUNCATE");
+    const t0 = now();
+    let totalFreed = 0;
+
+    while (totalFreed < maxPages) {
+      if (abortOnBacklog) {
+        const shouldAbort = typeof abortOnBacklog === "function" ? await abortOnBacklog() : Boolean(abortOnBacklog);
+        if (shouldAbort) {
+          return {
+            pagesFreed: totalFreed,
+            freelistRemaining: Number(this.db.selectValue("PRAGMA freelist_count") || 0),
+            aborted: true,
+            reason: "dispatch_backlog",
+            elapsedMs: now() - t0,
+          };
+        }
+      }
+
+      const freelistBefore = Number(this.db.selectValue("PRAGMA freelist_count") || 0);
+      if (freelistBefore <= 0) break;
+
+      const step = Math.min(pages, freelistBefore);
+      this.#withBusyRetrySync(() => {
+        this.db.exec(`PRAGMA incremental_vacuum(${step})`);
+      });
+      const freelistAfter = Number(this.db.selectValue("PRAGMA freelist_count") || 0);
+      const freed = Math.max(0, freelistBefore - freelistAfter);
+      totalFreed += (freed || step);
+
+      if (freelistAfter <= 0) break;
+    }
+
+    return {
+      pagesFreed: totalFreed,
+      freelistRemaining: Number(this.db.selectValue("PRAGMA freelist_count") || 0),
+      aborted: false,
+      elapsedMs: now() - t0,
+    };
+  }
+
+  quickCheck() {
+    return this.#withBusyRetrySync(() => {
+      const res = this.db.selectValue("PRAGMA quick_check");
+      return String(res).toLowerCase() === "ok";
+    });
+  }
+
+  getHighwater(deviceId = null) {
+    return this.#withBusyRetrySync(() => {
+      try {
+        if (deviceId) {
+          const val = this.db.selectValue("SELECT MAX(seq) FROM dispatches WHERE device_id = ?", [deviceId]);
+          return Number(val || 0);
+        }
+        const val = this.db.selectValue("SELECT MAX(seq) FROM dispatches");
+        return Number(val || 0);
+      } catch {
+        return 0;
+      }
+    });
+  }
+
+  recoverTornWal() {
+    let tornFramesDropped = 0;
+    try {
+      const ok = this.quickCheck();
+      if (!ok) {
+        this.checkpoint("TRUNCATE");
+        tornFramesDropped = 1;
+      }
+    } catch {
+      this.checkpoint("TRUNCATE");
+      tornFramesDropped = 1;
+    }
+    return { tornFramesDropped, ok: this.quickCheck() };
   }
 
   close() {
@@ -450,6 +737,10 @@ export class MemoryBackend {
     return { lockWaitMs: 0, commitMs: now() - t0 };
   }
 
+  async appendBatch(store, records, opts) {
+    return this.writeBatch(store, records, opts);
+  }
+
   async readLatest(store, limit = 50) {
     return this.stores.get(store).slice(-limit).reverse();
   }
@@ -460,6 +751,47 @@ export class MemoryBackend {
 
   async deleteOldest(store, n) {
     return this.stores.get(store).splice(0, n).length;
+  }
+
+  async incrementalVacuum({ abortOnBacklog } = {}) {
+    if (abortOnBacklog) {
+      const shouldAbort = typeof abortOnBacklog === "function" ? await abortOnBacklog() : Boolean(abortOnBacklog);
+      if (shouldAbort) {
+        return { pagesFreed: 0, aborted: true, reason: "dispatch_backlog" };
+      }
+    }
+    return { pagesFreed: 0, aborted: false };
+  }
+
+  async dropPartition(name) {
+    if (this.stores.has(name)) {
+      this.stores.delete(name);
+      return 1;
+    }
+    return 0;
+  }
+
+  async dropExpiredTelemetry() {
+    return 0;
+  }
+
+  quickCheck() {
+    return true;
+  }
+
+  getHighwater(deviceId = null) {
+    const list = this.stores.get("dispatches") || [];
+    let max = 0;
+    for (const item of list) {
+      if (deviceId && item.device_id !== deviceId) continue;
+      const s = Number(item.seq || 0);
+      if (s > max) max = s;
+    }
+    return max;
+  }
+
+  checkpoint() {
+    return null;
   }
 
   close() {}
@@ -475,19 +807,31 @@ export class MemoryBackend {
  *   `false` to commit every write in its own transaction (the naive path).
  */
 export async function createStorageEngine({ backend = "indexeddb", backendOptions = {}, buffer = {} } = {}) {
+  let targetBackend = backend;
+  if (backend === "opfs-sqlite") {
+    const isBrowserMain = typeof window !== "undefined" && typeof document !== "undefined";
+    if (isBrowserMain && backendOptions.vfs !== "memory" && !backendOptions.allowMainThread) {
+      if (backendOptions.enforceWorker !== false) {
+        console.warn("[storageEngine] Worker isolation: SQLite-WASM is restricted to Web Workers. Falling back to IndexedDB with vacuum disabled.");
+        targetBackend = "indexeddb";
+        backendOptions = { ...backendOptions, vacuumDisabled: true };
+      }
+    }
+  }
+
   const impl =
-    typeof backend === "object"
-      ? backend
-      : backend === "opfs-sqlite"
+    typeof targetBackend === "object"
+      ? targetBackend
+      : targetBackend === "opfs-sqlite"
         ? new SqliteOpfsBackend(backendOptions)
-        : backend === "memory"
+        : targetBackend === "memory"
           ? new MemoryBackend(backendOptions)
           : new IndexedDbBackend(backendOptions);
   await impl.open();
 
   const txn = { lockWaitMs: [], commitMs: [], count: 0 };
-  const sink = async (store, records) => {
-    const r = await impl.writeBatch(store, records);
+  const sink = async (store, records, opts) => {
+    const r = await impl.writeBatch(store, records, opts);
     txn.count++;
     txn.lockWaitMs.push(r.lockWaitMs);
     txn.commitMs.push(r.commitMs);
@@ -499,11 +843,11 @@ export async function createStorageEngine({ backend = "indexeddb", backendOption
   return {
     backend: impl,
     /** Queue (buffered) or write (unbuffered) one record; resolves on commit. */
-    async append(store, record) {
+    async append(store, record, options = {}) {
       if (wab) return wab.enqueue(store, record);
       const t0 = now();
       try {
-        await sink(store, [record]);
+        const res = await sink(store, [record], options);
         direct.committed++;
         const ms = now() - t0;
         direct.latencyMs.push(ms);
@@ -517,11 +861,17 @@ export async function createStorageEngine({ backend = "indexeddb", backendOption
     readLatest: (store, limit) => impl.readLatest(store, limit),
     count: (store) => impl.count(store),
     deleteOldest: (store, n) => impl.deleteOldest(store, n),
+    incrementalVacuum: (opts) => impl.incrementalVacuum ? impl.incrementalVacuum(opts) : Promise.resolve({ pagesFreed: 0, disabled: true }),
+    dropPartition: (name) => impl.dropPartition ? impl.dropPartition(name) : Promise.resolve(0),
+    dropExpiredTelemetry: (days) => impl.dropExpiredTelemetry ? impl.dropExpiredTelemetry(days) : Promise.resolve(0),
+    quickCheck: () => impl.quickCheck ? impl.quickCheck() : Promise.resolve(true),
+    checkpoint: (mode) => impl.checkpoint ? impl.checkpoint(mode) : null,
     stats() {
       return {
         backend: impl.kind,
         journalMode: impl.effectiveJournalMode ?? null,
         busyRetries: impl.busyRetries ?? 0,
+        droppedTelemetry: impl.droppedTelemetry ?? 0,
         transactions: txn.count,
         txnLockWaitMs: summarize(txn.lockWaitMs),
         txnCommitMs: summarize(txn.commitMs),

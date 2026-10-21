@@ -2,15 +2,19 @@
  * Server telemetry bootstrap.
  *
  * Wires the bounded receiver into Express and exposes the same counters as
- * the client pipeline. Deliberately avoids a second OTel SDK registration:
- * instrumentations are opt-in via env, and this module only owns the queue.
+ * the client pipeline. Also initializes OpenTelemetry Node SDK if configured.
  */
 
 import {
   TelemetryReceiver,
   createOtlpExporter,
   normalizeSpans,
+  initializeTelemetry,
+  shutdownTelemetry as shutdownOtelSdk,
 } from './telemetry.js';
+
+// Auto-initialize OpenTelemetry SDK
+initializeTelemetry();
 
 let receiver = null;
 let installed = false;
@@ -81,11 +85,15 @@ export function installTelemetryRoutes(app) {
 }
 
 export async function shutdownTelemetry() {
-  if (!receiver) return;
-  receiver.stop();
-  await receiver.flush().catch(() => {});
-  receiver = null;
-  installed = false;
+  if (receiver) {
+    receiver.stop();
+    await receiver.flush().catch(() => {});
+    receiver = null;
+    installed = false;
+  }
+  if (typeof shutdownOtelSdk === 'function') {
+    await shutdownOtelSdk().catch(() => {});
+  }
 }
 
 export function resetTelemetryBootstrapForTests() {

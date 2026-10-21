@@ -1,0 +1,7 @@
+[package]
+name = "reputation"
+type = "bin"
+authors = ["helphone"]
+compiler_version = ">=0.36.0"
+
+[dependencies]

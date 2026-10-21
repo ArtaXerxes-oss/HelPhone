@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next'
 
 const LANGUAGES: { code: string; label: string }[] = [
   { code: 'en', label: 'EN' },
+  { code: 'ar', label: 'العربية' },
 ]
 
 interface LanguageSwitcherProps {
@@ -22,17 +23,14 @@ interface LanguageSwitcherProps {
  */
 export default function LanguageSwitcher({ style }: LanguageSwitcherProps) {
   const { i18n } = useTranslation()
-  const currentLang = i18n.language
-
-  if (LANGUAGES.length <= 1) {
-    // Nothing to switch — hide until a second language is added.
-    return null
-  }
+  // i18n resolves asynchronously; fall back to English until it reports a
+  // language so the switcher can render in isolation (SSR, unit tests).
+  const currentLang = i18n.resolvedLanguage || i18n.language || 'en'
 
   return (
     <div
       role="group"
-      aria-label="Language selector"
+      aria-label="Language"
       style={{
         display: 'flex',
         gap: '4px',
@@ -41,14 +39,18 @@ export default function LanguageSwitcher({ style }: LanguageSwitcherProps) {
       }}
     >
       {LANGUAGES.map(({ code, label }) => {
-        const isActive = currentLang === code
+        const isActive = currentLang.split('-')[0] === code
         return (
           <button
             key={code}
             type="button"
-            aria-label={`Switch language to ${label}`}
+            aria-label={`Switch language to ${code === 'ar' ? 'Arabic' : 'English'}`}
             aria-pressed={isActive}
-            onClick={() => i18n.changeLanguage(code)}
+            onClick={async (event) => {
+              const button = event.currentTarget
+              await i18n.changeLanguage(code)
+              button.focus()
+            }}
             style={{
               padding: '5px 9px',
               borderRadius: '7px',
@@ -57,7 +59,7 @@ export default function LanguageSwitcher({ style }: LanguageSwitcherProps) {
               color: isActive ? 'rgba(242,236,220,0.95)' : 'rgba(242,236,220,0.45)',
               fontSize: '11px',
               fontWeight: 700,
-              letterSpacing: '0.8px',
+              letterSpacing: 0,
               cursor: isActive ? 'default' : 'pointer',
               transition: 'all 0.15s',
             }}

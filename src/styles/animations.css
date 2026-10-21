@@ -94,9 +94,21 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .hp-marker-active {
-    animation: none;
+  .hp-marker-active,
+  [style*="mdpulse"],
+  [style*="mdfloat"],
+  [style*="spin"],
+  [style*="mddrift"] {
+    animation: none !important;
   }
+}
+
+.hp-perf-governor [style*="mdpulse"],
+.hp-perf-governor [style*="mdfloat"],
+.hp-perf-governor [style*="spin"],
+.hp-perf-governor [style*="mddrift"],
+.hp-perf-governor .hp-marker-active {
+  animation: none !important;
 }
 
 /* RevealDiv transition helper */

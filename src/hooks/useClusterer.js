@@ -1,73 +1,48 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import Supercluster from 'supercluster';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { SpatialIndexClient } from '../lib/spatial.ts';
 
-/**
- * Hook that clusters map points using Supercluster.
- *
- * @param {Array<{id: number|string, lat: number, lng: number, [key: string]: any}>} points - Points to cluster
- * @param {number} zoom - Current map zoom level
- * @param {Array<number>} bounds - Map bounds as [west, south, east, north]
- * @param {object} options - Supercluster options
- * @returns {{ clusters: Array, supercluster: Supercluster|null }}
- */
 export function useClusterer(points, zoom, bounds, options = {}) {
-  const superclusterRef = useRef(null);
   const [clusters, setClusters] = useState([]);
-
-  const defaultOptions = useMemo(
-    () => ({
-      radius: 60,
-      maxZoom: 17,
-      ...options,
-    }),
-    [JSON.stringify(options)],
-  );
+  const indexRef = useRef(null);
+  const revision = useRef(0);
 
   useEffect(() => {
-    if (!points || points.length === 0) {
+    if (typeof Worker === 'undefined') {
+      setClusters([]);
+      return undefined;
+    }
+    const index = new SpatialIndexClient();
+    indexRef.current = index;
+    return () => {
+      index.destroy();
+      indexRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const index = indexRef.current;
+    const requestRevision = ++revision.current;
+    if (!index || !Array.isArray(points) || points.length === 0) {
       setClusters([]);
       return;
     }
+    const features = points.filter((point) => point && Number.isFinite(point.lat) && Number.isFinite(point.lng)).map((point) => ({
+      type: 'Feature',
+      id: point.id,
+      properties: { ...point, pointId: point.id },
+      geometry: { type: 'Point', coordinates: [point.lng, point.lat] },
+    }));
+    const bbox = bounds?.length === 4 ? bounds : [-180, -85, 180, 85];
+    void index.load(features)
+      .then(() => index.query(bbox, Math.floor(zoom || 0), options.radius || 60))
+      .then((result) => { if (requestRevision === revision.current) setClusters(result); })
+      .catch(() => { if (requestRevision === revision.current) setClusters([]); });
+  }, [points, zoom, bounds, options.radius]);
 
-    const features = points
-      .filter(
-        (p) =>
-          p &&
-          Number.isFinite(p.lat) &&
-          Number.isFinite(p.lng),
-      )
-      .map((p) => ({
-        type: 'Feature',
-        properties: { ...p, pointId: p.id },
-        geometry: {
-          type: 'Point',
-          coordinates: [p.lng, p.lat],
-        },
-      }));
+  const getClusterExpansionZoom = useCallback((clusterId) => {
+    const cluster = clusters.find((item) => item.properties?.cluster_id === clusterId);
+    return cluster ? Math.min(22, Math.floor(zoom || 0) + 2) : 18;
+  }, [clusters, zoom]);
 
-    if (features.length === 0) {
-      setClusters([]);
-      return;
-    }
-
-    const sc = new Supercluster(defaultOptions);
-    sc.load(features);
-    superclusterRef.current = sc;
-
-    const bbox = bounds && bounds.length === 4 ? bounds : undefined;
-    const zoomInt = Math.floor(zoom);
-    const result = sc.getClusters(bbox || [-180, -85, 180, 85], zoomInt);
-
-    setClusters(result);
-  }, [points, zoom, bounds, defaultOptions]);
-
-  const getClusterExpansionZoom = useCallback(
-    (clusterId) => {
-      if (!superclusterRef.current) return 18;
-      return superclusterRef.current.getClusterExpansionZoom(clusterId);
-    },
-    [],
-  );
-
-  return { clusters, supercluster: superclusterRef.current, getClusterExpansionZoom };
+  return { clusters, supercluster: null, getClusterExpansionZoom };
 }

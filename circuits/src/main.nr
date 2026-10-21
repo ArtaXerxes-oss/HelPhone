@@ -18,7 +18,8 @@ fn main(
     recipient_address: pub Field, // Stellar address as Field (decoded StrKey bytes -> Field)
 ) -> pub Field {
 
-    // 1. Geofencing: user must be inside the bounding box
+    // 1. Geofencing: four native u64 comparisons are the lowest-constraint
+    // range proof measured in this spike; avoid distance/square-root gadgets.
     assert(user_x >= box_x_min, "Longitude below zone minimum");
     assert(user_x <= box_x_max, "Longitude above zone maximum");
     assert(user_y >= box_y_min, "Latitude below zone minimum");

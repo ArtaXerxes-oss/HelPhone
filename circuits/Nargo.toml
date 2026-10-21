@@ -5,6 +5,6 @@ authors = ["HelPhone"]
 # Reproducible builds (#590): compiler_version is pinned so `nargo compile`
 # output is byte-for-byte deterministic. Verified in CI by
 # scripts/verify-wasm-build.sh against circuits/target/aegis.sha256.
-compiler_version = ">=0.39.0"
+compiler_version = "0.39.0"
 
 [dependencies]
