@@ -11,6 +11,7 @@ export default defineConfig({
     include: ['test/**/*.test.js'],
   },
   build: {
+    manifest: true,
     chunkSizeWarningLimit: 70000,
   },
   server: {

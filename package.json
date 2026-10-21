@@ -9,10 +9,11 @@
     "server": "node server/index.js",
     "start": "node server/index.js",
     "dev:all": "node scripts/dev.mjs",
-    "build": "vite build",
+    "build": "vite build && npm run verify:manifest",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:manifest": "node scripts/verify-manifest.mjs"
   },
   "keywords": [],
   "author": "",
@@ -22,6 +23,7 @@
     "node": "22.x"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.0",
     "@testing-library/react": "^16.3.2",
     "@vitejs/plugin-react": "^6.0.2",

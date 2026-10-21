@@ -10,14 +10,60 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 3001
 
-// Solves Issue 1: Restrict CORS policy on ZK Prover Server
+export function resolveAllowedOrigins(env = process.env) {
+  const defaultOrigins = [
+    'https://helphone.com',
+    'https://staging.helphone.com',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
+    'http://127.0.0.1:5173',
+    'https://localhost:3000',
+    'https://localhost:5173',
+    'https://127.0.0.1:3000',
+    'https://127.0.0.1:5173',
+  ]
+
+  const configuredOrigins = (env.ALLOWED_ORIGINS || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean)
+
+  return [...new Set([...configuredOrigins, ...defaultOrigins])]
+}
+
+export function isAllowedOrigin(origin, env = process.env) {
+  if (!origin) return true
+
+  const allowedOrigins = new Set(resolveAllowedOrigins(env))
+  if (allowedOrigins.has(origin)) return true
+
+  try {
+    const url = new URL(origin)
+    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+      return true
+    }
+
+    return url.hostname.endsWith('.localhost')
+  } catch {
+    return false
+  }
+}
+
 app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS 
-    ? process.env.ALLOWED_ORIGINS.split(',') 
-    : ['https://helphone.com', 'https://staging.helphone.com'],
+  origin: (origin, callback) => {
+    if (!origin || isAllowedOrigin(origin)) {
+      callback(null, true)
+      return
+    }
+
+    callback(new Error(`Origin ${origin} is not allowed by CORS`))
+  },
   methods: ['GET', 'POST', 'OPTIONS'],
   preflightContinue: false,
-  optionsSuccessStatus: 204
+  optionsSuccessStatus: 204,
 }))
 app.use(express.json({ limit: '1mb' }))
 
@@ -91,7 +137,11 @@ app.post('/zk/prove', async (req, res) => {
   }
 })
 
-app.listen(PORT, () => {
-  console.log(`ZK Prover on http://localhost:${PORT}`)
-  ensureProver().catch(err => console.error('[prover] Init failed:', err))
-})
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, () => {
+    console.log(`ZK Prover on http://localhost:${PORT}`)
+    ensureProver().catch(err => console.error('[prover] Init failed:', err))
+  })
+}
+
+export { app }
