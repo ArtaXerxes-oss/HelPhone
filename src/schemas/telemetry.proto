@@ -1,0 +1,58 @@
+// HelPhone live-map telemetry: Protocol Buffers schema (spike, ADR-014).
+//
+// The baseline the spike compares the zero-copy formats against. Logically
+// identical to telemetry.fbs (see that file for field semantics).
+//
+// Protobuf is not random-access: reading one field means scanning every
+// field before it, and the usual JS decoders build one object per message.
+// src/utils/binaryParser.js has both an object decoder and a streaming
+// decoder that writes straight into typed arrays.
+//
+// Coordinates and trail deltas are sint32 (zigzag) so that negative values
+// (the southern and western hemispheres, and half of all deltas) stay short.
+
+syntax = "proto3";
+
+package helphone.telemetry;
+
+enum ObjectKind {
+  OBJECT_KIND_REQUEST = 0;
+  OBJECT_KIND_RESPONDER = 1;
+}
+
+enum Status {
+  STATUS_PENDING = 0;
+  STATUS_ENROUTE = 1;
+  STATUS_RESOLVED = 2;
+  STATUS_CANCELLED = 3;
+}
+
+enum Priority {
+  PRIORITY_LOW = 0;
+  PRIORITY_MEDIUM = 1;
+  PRIORITY_HIGH = 2;
+  PRIORITY_CRITICAL = 3;
+}
+
+message MapObject {
+  uint32 id = 1;
+  ObjectKind kind = 2;
+  Status status = 3;
+  Priority priority = 4;
+  sint32 lat_e6 = 5;
+  sint32 lng_e6 = 6;
+  uint32 heading_cdeg = 7;
+  uint32 speed_cms = 8;
+  uint32 eta_seconds = 9;
+  uint32 request_id = 10;
+  double ts_ms = 11;
+  string emergency_type = 12;
+  string responder = 13;
+  repeated sint32 trail = 14; // packed by default in proto3
+}
+
+message TelemetryFrame {
+  uint32 seq = 1;
+  double sent_at_ms = 2;
+  repeated MapObject objects = 3;
+}

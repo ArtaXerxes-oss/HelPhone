@@ -1,0 +1,89 @@
+/* Input — HelPhone design system */
+
+.hp-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.hp-input-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: rgba(242, 236, 220, 0.65);
+}
+
+.hp-input-label--light {
+  color: var(--color-text-muted);
+}
+
+.hp-input-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.hp-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-sm);
+  color: rgba(242, 236, 220, 0.92);
+  font-size: 13.5px;
+  font-family: var(--font-sans);
+  outline: none;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    box-shadow 0.15s;
+  box-sizing: border-box;
+}
+
+.hp-input::placeholder {
+  color: rgba(242, 236, 220, 0.72);
+}
+
+.hp-input:focus {
+  border-color: var(--color-teal-light);
+  background: rgba(255, 255, 255, 0.11);
+  box-shadow: 0 0 0 3px rgba(143, 195, 194, 0.18);
+}
+
+.hp-input--light {
+  background: #fff;
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+.hp-input--light::placeholder {
+  color: var(--color-text-muted);
+}
+
+.hp-input--light:focus {
+  border-color: var(--color-teal);
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(63, 132, 135, 0.15);
+}
+
+.hp-input--error {
+  border-color: var(--color-accent) !important;
+  box-shadow: 0 0 0 3px rgba(255, 122, 107, 0.18) !important;
+}
+
+.hp-input-error {
+  font-size: 11px;
+  color: var(--color-accent);
+  margin-top: 2px;
+}
+
+.hp-input-hint {
+  font-size: 11px;
+  color: rgba(242, 236, 220, 0.72);
+}
+
+.hp-input-hint--light {
+  color: var(--color-text-faint);
+}

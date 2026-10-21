@@ -1,0 +1,486 @@
+{
+  "spike": "#604",
+  "generatedAt": "2026-09-23T17:28:26.424Z",
+  "environment": {
+    "node": "v22.22.2",
+    "cpu": "Intel(R) Core(TM) i5-4300U CPU @ 1.90GHz",
+    "cores": 4,
+    "exposeGc": true
+  },
+  "params": {
+    "MUTATIONS": 50000,
+    "REPLICAS": 20,
+    "RESPONDERS": 300,
+    "INCIDENTS": 150,
+    "GOSSIP_EVERY": 250,
+    "PRUNE_EVERY": 2500,
+    "OFFLINE_SHARE": 0.3
+  },
+  "workload": {
+    "offlineReplicas": 4,
+    "offlineWindows": {
+      "1": [
+        12602,
+        16687
+      ],
+      "2": [
+        29382,
+        36496
+      ],
+      "3": [
+        9645,
+        13455
+      ],
+      "16": [
+        33262,
+        35832
+      ]
+    },
+    "mix": {
+      "patch": 7509,
+      "set": 41270,
+      "del": 1221
+    }
+  },
+  "singleDoc": {
+    "stateVector_gcContent": {
+      "writeMs": 48,
+      "heapMB": 6.94,
+      "entries": 300,
+      "deleteTombstones": 0,
+      "logOps": 50000,
+      "tombstones": 49700,
+      "fullStateKB": 26.8
+    },
+    "stateVector_keepContent": {
+      "writeMs": 38,
+      "heapMB": 10.7,
+      "entries": 300,
+      "deleteTombstones": 0,
+      "logOps": 50000,
+      "tombstones": 49700,
+      "fullStateKB": 26.8
+    },
+    "yjs_gc_true": {
+      "writeMs": 375,
+      "heapMB": 11.45,
+      "updateKB": 481.4
+    },
+    "yjs_gc_false": {
+      "writeMs": 373,
+      "heapMB": 17.54,
+      "updateKB": 2123.5
+    },
+    "stateVector_pruned": {
+      "heapBeforePruneMB": 6.93,
+      "heapAfterPruneMB": 0.13,
+      "pruneMs": 0.9,
+      "entries": 300,
+      "deleteTombstones": 0,
+      "logOps": 0,
+      "tombstones": 0
+    }
+  },
+  "heapSnapshots": {
+    "baseline": {
+      "totalMB": 15.9,
+      "top": [
+        {
+          "name": "(array)",
+          "count": 52323,
+          "MB": 3.5
+        },
+        {
+          "name": "(code)",
+          "count": 29718,
+          "MB": 3.34
+        },
+        {
+          "name": "(string)",
+          "count": 64245,
+          "MB": 2.4
+        },
+        {
+          "name": "Object",
+          "count": 50500,
+          "MB": 2.2
+        },
+        {
+          "name": "Array",
+          "count": 50349,
+          "MB": 1.54
+        },
+        {
+          "name": "(number)",
+          "count": 80708,
+          "MB": 1.23
+        },
+        {
+          "name": "(object shape)",
+          "count": 6697,
+          "MB": 0.61
+        },
+        {
+          "name": "(hidden)",
+          "count": 11120,
+          "MB": 0.4
+        }
+      ]
+    },
+    "stateVectorUnpruned": {
+      "totalMB": 22.84,
+      "top": [
+        {
+          "name": "Object",
+          "count": 100811,
+          "MB": 5.64
+        },
+        {
+          "name": "(array)",
+          "count": 52332,
+          "MB": 3.9
+        },
+        {
+          "name": "(string)",
+          "count": 114269,
+          "MB": 3.54
+        },
+        {
+          "name": "(code)",
+          "count": 29858,
+          "MB": 3.37
+        },
+        {
+          "name": "(hidden)",
+          "count": 61146,
+          "MB": 2.31
+        },
+        {
+          "name": "Array",
+          "count": 50351,
+          "MB": 1.54
+        },
+        {
+          "name": "(number)",
+          "count": 81321,
+          "MB": 1.24
+        },
+        {
+          "name": "(object shape)",
+          "count": 6723,
+          "MB": 0.61
+        }
+      ]
+    },
+    "stateVectorPruned": {
+      "totalMB": 16.03,
+      "top": [
+        {
+          "name": "(array)",
+          "count": 52335,
+          "MB": 3.51
+        },
+        {
+          "name": "(code)",
+          "count": 29923,
+          "MB": 3.38
+        },
+        {
+          "name": "(string)",
+          "count": 64889,
+          "MB": 2.41
+        },
+        {
+          "name": "Object",
+          "count": 51123,
+          "MB": 2.23
+        },
+        {
+          "name": "Array",
+          "count": 50356,
+          "MB": 1.54
+        },
+        {
+          "name": "(number)",
+          "count": 81332,
+          "MB": 1.24
+        },
+        {
+          "name": "(object shape)",
+          "count": 6750,
+          "MB": 0.61
+        },
+        {
+          "name": "(hidden)",
+          "count": 11457,
+          "MB": 0.41
+        }
+      ]
+    },
+    "yjsGc": {
+      "totalMB": 26.34,
+      "top": [
+        {
+          "name": "Item",
+          "count": 49844,
+          "MB": 5.32
+        },
+        {
+          "name": "(array)",
+          "count": 52636,
+          "MB": 3.91
+        },
+        {
+          "name": "(string)",
+          "count": 114125,
+          "MB": 3.54
+        },
+        {
+          "name": "(code)",
+          "count": 30046,
+          "MB": 3.43
+        },
+        {
+          "name": "Object",
+          "count": 50832,
+          "MB": 2.21
+        },
+        {
+          "name": "ID",
+          "count": 50001,
+          "MB": 1.91
+        },
+        {
+          "name": "Array",
+          "count": 50658,
+          "MB": 1.55
+        },
+        {
+          "name": "ContentDeleted",
+          "count": 49544,
+          "MB": 1.51
+        }
+      ]
+    }
+  },
+  "mesh": [
+    {
+      "engine": "crdt-nogc",
+      "mutateMs": 3970,
+      "heapMeshMB": 115.1,
+      "heapMeshAfterConvergeMB": 115.73,
+      "heapPerReplicaAvgMB": 5.79,
+      "heapSingleReplicaMB": 17.45,
+      "replica0Stats": {
+        "entries": 492,
+        "deleteTombstones": 1179,
+        "logOps": 49369,
+        "tombstones": 47698
+      },
+      "replica0StatsBeforeConverge": {
+        "entries": 495,
+        "deleteTombstones": 1168,
+        "logOps": 48996,
+        "tombstones": 47333
+      },
+      "gossipMB": 50.07,
+      "reconnectPayload": {
+        "n": 4,
+        "avgKB": 81,
+        "maxKB": 153.4
+      },
+      "fullStateKB": 68.7,
+      "convergence": {
+        "converged": true,
+        "rounds": 3,
+        "ms": 99,
+        "MB": 0.31
+      },
+      "pruneEvents": null,
+      "finalPrune": null,
+      "gcTotal": {
+        "count": 41,
+        "totalMs": 2583.4,
+        "maxMs": 115.95
+      }
+    },
+    {
+      "engine": "crdt-prune-all",
+      "mutateMs": 3758,
+      "heapMeshMB": 1.86,
+      "heapMeshAfterConvergeMB": 1.73,
+      "heapPerReplicaAvgMB": 0.09,
+      "heapSingleReplicaMB": 0,
+      "replica0Stats": {
+        "entries": 492,
+        "deleteTombstones": 3,
+        "logOps": 0,
+        "tombstones": 0
+      },
+      "replica0StatsBeforeConverge": {
+        "entries": 495,
+        "deleteTombstones": 5,
+        "logOps": 129,
+        "tombstones": 24
+      },
+      "gossipMB": 50.07,
+      "reconnectPayload": {
+        "n": 4,
+        "avgKB": 81,
+        "maxKB": 153.4
+      },
+      "fullStateKB": 31.5,
+      "convergence": {
+        "converged": true,
+        "rounds": 3,
+        "ms": 76.9,
+        "MB": 0.31
+      },
+      "pruneEvents": {
+        "count": 20,
+        "avgMs": 3.4,
+        "maxGcPauseMs": 54.23
+      },
+      "finalPrune": {
+        "ms": 1.5,
+        "gc": {
+          "count": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      },
+      "gcTotal": {
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0
+      }
+    },
+    {
+      "engine": "crdt-prune-live",
+      "mutateMs": 2545,
+      "heapMeshMB": 3.94,
+      "heapMeshAfterConvergeMB": 3.91,
+      "heapPerReplicaAvgMB": 0.2,
+      "heapSingleReplicaMB": 0.32,
+      "replica0Stats": {
+        "entries": 492,
+        "deleteTombstones": 996,
+        "logOps": 0,
+        "tombstones": 0
+      },
+      "replica0StatsBeforeConverge": {
+        "entries": 495,
+        "deleteTombstones": 985,
+        "logOps": 51,
+        "tombstones": 8
+      },
+      "gossipMB": 45.33,
+      "reconnectPayload": {
+        "n": 4,
+        "avgKB": 24.3,
+        "maxKB": 42.2
+      },
+      "fullStateKB": 63.3,
+      "convergence": {
+        "converged": true,
+        "rounds": 3,
+        "ms": 78,
+        "MB": 0.27
+      },
+      "pruneEvents": {
+        "count": 20,
+        "avgMs": 5.16,
+        "maxGcPauseMs": 53.91
+      },
+      "finalPrune": {
+        "ms": 4.9,
+        "gc": {
+          "count": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      },
+      "gcTotal": {
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0
+      }
+    },
+    {
+      "engine": "yjs",
+      "mutateMs": 36541,
+      "heapMeshMB": 198.13,
+      "heapMeshAfterConvergeMB": 198.98,
+      "heapPerReplicaAvgMB": 9.95,
+      "heapSingleReplicaMB": 30.17,
+      "replica0Stats": {
+        "entries": 876,
+        "structs": 48011,
+        "deletedStructs": 47135,
+        "fullStateBytes": 321384
+      },
+      "replica0StatsBeforeConverge": {
+        "entries": 876,
+        "structs": 47649,
+        "deletedStructs": 46773,
+        "fullStateBytes": 319102
+      },
+      "gossipMB": 33.43,
+      "reconnectPayload": {
+        "n": 4,
+        "avgKB": 27.3,
+        "maxKB": 46.6
+      },
+      "fullStateKB": null,
+      "convergence": {
+        "converged": true,
+        "rounds": 3,
+        "ms": 1068.6,
+        "MB": 0.39
+      },
+      "pruneEvents": null,
+      "finalPrune": null,
+      "gcTotal": {
+        "count": 174,
+        "totalMs": 8897.8,
+        "maxMs": 522.99
+      }
+    },
+    {
+      "engine": "ot-snapshot",
+      "mutateMs": 1567,
+      "heapMeshMB": 1.27,
+      "heapMeshAfterConvergeMB": 1.28,
+      "heapSequencerOnlyMB": 0.4,
+      "serverStats": {
+        "entries": 470,
+        "logOps": 707,
+        "rev": 49749,
+        "snapshots": 49
+      },
+      "snapshotKB": 21.6,
+      "trafficMB": 79.03,
+      "reconnectPayload": {
+        "n": 4,
+        "avgKB": 30,
+        "maxKB": 34.5
+      },
+      "offlineOpsPurgedOnReconnect": {
+        "reconnects": 4,
+        "avg": 56,
+        "max": 113
+      },
+      "reconnectMaxGcPauseMs": 0,
+      "convergence": {
+        "converged": true,
+        "rounds": 1,
+        "ms": 29.8
+      },
+      "gcTotal": {
+        "count": 9,
+        "totalMs": 28.8,
+        "maxMs": 3.83
+      }
+    }
+  ]
+}

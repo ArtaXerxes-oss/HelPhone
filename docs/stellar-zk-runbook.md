@@ -56,6 +56,11 @@ RUSTC=/Users/paukoh/.cargo/bin/rustc /Users/paukoh/.cargo/bin/cargo build --targ
 
 ## Aegis Funding Flow
 
+Deploy `aegis_vault` with the verifier contract, reward token, and payout admin
+address. The constructor initializes the responder payout to 50 USDC in token
+base units. The admin can later call `set_payout_amount(admin, amount)` to adjust
+the payout for emergency severity, token price changes, or governance decisions.
+
 `aegis_vault.fund_zone` now requires the 160-byte campaign prefix:
 
 ```text
@@ -67,3 +72,39 @@ creating arbitrary self-selected location boxes for a funded campaign.
 
 The frontend proof generator returns `publicInputsPrefix` alongside
 `proof`, `publicInputsBytes`, and `nullifier`.
+
+## ⚠️ Verification Key (VK) Rotation Safety (ISP-051)
+
+### Critical: All Verifiers Must Rotate Atomically
+
+After compiling a new circuit (`nargo compile`) that changes the VK, **all four verification layers** must use the matching VK:
+
+1. **Client PWA** (`public/zk-assets/vk.json`)
+2. **Server verification** (`server/routes/zk.ts`)  
+3. **Recursive verifier** (`circuits/recursive_verifier`)
+4. **Soroban on-chain** (vk_hash in contract state)
+
+### Symptoms of VK Mismatch
+
+- Client logs: `vk_hash mismatch: expected X, got Y — proceeding (cached)`
+- Server rejects proof: `UltraHonk verification failed: vk mismatch`
+- Recursive verifier panics: `Inner VK constant mismatch`
+- **Security risk**: Stale PWA cache accepts forged credentials after rotation
+
+### Rotation Checklist (Incomplete - ISP-051 Spike Required)
+
+This is a **minimal warning** - full atomic rotation requires 24h spike work:
+
+- [ ] Compile new circuit: `nargo compile --workspace`
+- [ ] Update server VK (restart required currently)
+- [ ] Clear PWA cache or implement cache-busting
+- [ ] Update recursive verifier VK constant (requires recompile)
+- [ ] Update Soroban vk_hash (contract upgrade)
+- [ ] Verify all layers accept new proofs and reject old ones
+
+**TODO (ISP-051):** Implement versioned VK lifecycle with:
+- Manifest supersession tracking
+- PWA cache version negotiation  
+- Hot-reload VK in server
+- Fail-closed mismatch handling
+- Offline grace policy with signed expiry

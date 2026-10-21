@@ -1,0 +1,149 @@
+/* Button — HelPhone design system */
+
+.hp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: var(--font-sans);
+  font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    box-shadow 0.15s,
+    transform 0.12s,
+    border-color 0.15s,
+    color 0.15s;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.hp-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none !important;
+}
+
+.hp-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* Sizes */
+.hp-btn--sm {
+  font-size: 13px;
+  padding: 8px 14px;
+  border-radius: 8px;
+}
+
+.hp-btn--md {
+  font-size: 14px;
+  padding: 11px 18px;
+  border-radius: 10px;
+}
+
+.hp-btn--lg {
+  font-size: 16px;
+  padding: 16px 30px;
+  border-radius: 13px;
+}
+
+/* Rugged glove target (ISP-131): >=56px tall, high-contrast focus ring */
+.hp-btn--rugged {
+  font-size: 16px;
+  min-height: 56px;
+  min-width: 56px;
+  padding: 16px 26px;
+  border-radius: 12px;
+  font-weight: 700;
+}
+
+.hp-btn--rugged:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 6px #234b4e;
+}
+
+/* Variants */
+.hp-btn--primary {
+  background: var(--color-accent);
+  color: #fff;
+  box-shadow: var(--shadow-cta);
+}
+
+.hp-btn--primary:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  box-shadow: 0 12px 32px -12px rgba(255, 122, 107, 0.7);
+}
+
+.hp-btn--teal {
+  background: var(--color-teal);
+  color: #fff;
+}
+
+.hp-btn--teal:hover:not(:disabled) {
+  background: #357277;
+}
+
+.hp-btn--purple {
+  background: var(--color-purple);
+  color: #fff;
+}
+
+.hp-btn--purple:hover:not(:disabled) {
+  background: #6346e8;
+}
+
+.hp-btn--muted {
+  background: var(--color-muted);
+  color: #fff;
+  box-shadow: 0 22px 50px -18px rgba(167, 195, 29, 0.55);
+}
+
+.hp-btn--muted:hover:not(:disabled) {
+  background: #91947a;
+}
+
+.hp-btn--ghost {
+  background: rgba(20, 30, 24, 0.35);
+  color: var(--color-cream-text);
+  border: 1.5px solid rgba(236, 224, 204, 0.42);
+  backdrop-filter: blur(6px);
+}
+
+.hp-btn--ghost:hover:not(:disabled) {
+  background: rgba(20, 30, 24, 0.5);
+  border-color: rgba(236, 224, 204, 0.6);
+}
+
+.hp-btn--outline {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(242, 236, 220, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.hp-btn--outline:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.hp-btn--nav {
+  background: var(--color-accent);
+  color: #fff;
+  padding: 8px 16px;
+  font-size: 13.5px;
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.hp-btn--nav:hover:not(:disabled) {
+  background: var(--color-accent-hover);
+  box-shadow: 0 4px 16px rgba(255, 122, 107, 0.4);
+}
+
+.hp-btn__icon {
+  font-size: 1.1em;
+  line-height: 0;
+}

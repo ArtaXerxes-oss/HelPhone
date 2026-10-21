@@ -9,7 +9,12 @@ doctest = false
 
 [dependencies]
 soroban-sdk = { version = "26.0.1", default-features = false, features = ["alloc"] }
-ultrahonk_soroban_contract = { path = "../noir_verifier" }
+# NOTE: previously declared a path dependency on ../noir_verifier, which is
+# .gitignore'd and absent from this repo — that made `aegis_vault` fail to
+# build for anyone starting from a fresh clone. The dependency was already
+# unused: this contract talks to the verifier via cross-contract invocation
+# by address (see call_verify_proof in src/lib.rs), never through the
+# noir_verifier crate's Rust types. Removed rather than worked around.
 
 [dev-dependencies]
 soroban-sdk = { version = "26.0.1", features = ["testutils", "alloc"] }
@@ -22,5 +27,4 @@ testutils = []
 opt-level = "z"
 lto = true
 codegen-units = 1
-panic = "abort"
-strip = true
+

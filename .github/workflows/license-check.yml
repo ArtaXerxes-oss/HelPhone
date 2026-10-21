@@ -1,0 +1,40 @@
+name: License Compliance Check
+
+# Closes #625 — fails the build when a non-exceptioned restrictive
+# (GPL/AGPL) license enters the direct/transitive dependency tree, and
+# keeps THIRD_PARTY_LICENSES.md (BOM) fresh.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/security/license_compliance.js"
+      - "THIRD_PARTY_LICENSES.md"
+      - ".github/workflows/license-check.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/security/license_compliance.js"
+      - "THIRD_PARTY_LICENSES.md"
+      - ".github/workflows/license-check.yml"
+  schedule:
+    - cron: "0 6 * * 1" # weekly: catch transitive license drift
+
+jobs:
+  license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: Run license compliance gate
+        run: node scripts/security/license_compliance.js
+
+      - name: BOM freshness (regenerated file must be committed)
+        run: git diff --exit-code -- THIRD_PARTY_LICENSES.md

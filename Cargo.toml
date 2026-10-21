@@ -1,0 +1,52 @@
+# Root Cargo workspace for the Soroban contracts under contracts/.
+# (This manifest previously contained a `// Implementation added` placeholder,
+# which is not valid TOML: every `cargo` invocation under the repository failed
+# with a parse error before reaching a crate.)
+
+[workspace]
+resolver = "2"
+members = [
+  "contracts/aegis_vault",
+  "contracts/helphone_dao",
+  "contracts/maintainer_vault",
+]
+exclude = [
+  # Own workspace root.
+  "contract",
+  # Standalone spike crates, not part of the contract workspace.
+  "scripts/spikes/webtransport_server",
+  "src/wasm/telemetry_reader",
+]
+
+# Member crates' [profile.release] sections are ignored inside a workspace;
+# the Soroban size/safety profile has to live at the root.
+# Member crates declare this same release profile; it is mirrored here because
+# Cargo only honours `[profile]` tables at the workspace root, so building from
+# the repo root must produce the same wasm artifact as building in a crate dir.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+overflow-checks = true
+debug-assertions = false
+
+# #586: Cargo licenses are gated with the npm tree by
+# scripts/license-compliance.js (via `cargo metadata --locked`); see
+# docs/legal-compliance.md for the approved/denied policy.
+[workspace.metadata.license-compliance]
+gate = "node scripts/license-compliance.js --no-write"
+manifest = "licenses.json"
+
+# ---------------------------------------------------------------------------
+# Version pinning guard (scripts/detect-api-drift.js) — Rust half.
+# A semver-compatible `cargo update` may silently pull a release whose public
+# API differs from the version the contracts were reviewed against, so shared
+# requirements are pinned exactly and the guard fails CI when they are not.
+# ---------------------------------------------------------------------------
+[workspace.metadata.api-drift]
+require-exact-pin = true
+# Crate names whose version requirement must be exact regardless of the
+# default above (checked wherever they are declared in this manifest).
+protected-crates = []

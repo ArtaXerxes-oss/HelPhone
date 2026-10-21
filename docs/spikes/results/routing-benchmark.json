@@ -1,0 +1,140 @@
+{
+  "spike": "#606",
+  "generatedAt": "2026-09-23T16:48:18.783Z",
+  "environment": {
+    "node": "v22.22.2",
+    "cpu": "Intel(R) Core(TM) i5-4300U CPU @ 1.90GHz",
+    "cores": 4,
+    "totalMemGB": 11.6,
+    "exposeGc": true
+  },
+  "params": {
+    "rows": 317,
+    "cols": 317,
+    "queryCount": 200
+  },
+  "dataset": {
+    "geojsonMB": 58.07,
+    "features": 184326,
+    "nodeCount": 100485,
+    "edgeCount": 349977,
+    "parseMs": 922.1,
+    "buildMs": 2540.7,
+    "parsedGeoJSONHeapMB": 108.3,
+    "packedGraphMB": 7.46,
+    "heapAfterBuildMB": 0.05,
+    "gcDuringLoad": {
+      "count": 47,
+      "totalMs": 759.68,
+      "maxMs": 322.28
+    }
+  },
+  "algorithms": {
+    "dijkstra": {
+      "latencyMs": {
+        "n": 200,
+        "mean": 12.301,
+        "p50": 12.02,
+        "p95": 24.685,
+        "max": 39.228
+      },
+      "avgExpanded": 47412,
+      "avgRelaxed": 54616,
+      "heapGrowthMB": 1.13,
+      "gc": {
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0
+      }
+    },
+    "astar": {
+      "latencyMs": {
+        "n": 200,
+        "mean": 5.538,
+        "p50": 3.73,
+        "p95": 19.004,
+        "max": 30.782
+      },
+      "avgExpanded": 12581,
+      "avgRelaxed": 17665,
+      "heapGrowthMB": 3.42,
+      "gc": {
+        "count": 17,
+        "totalMs": 6.52,
+        "maxMs": 0.85
+      }
+    },
+    "ch": {
+      "latencyMs": {
+        "n": 200,
+        "mean": 4.137,
+        "p50": 4.147,
+        "p95": 7.896,
+        "max": 13.265
+      },
+      "avgExpanded": 1907,
+      "avgRelaxed": 9323,
+      "heapGrowthMB": -227.81,
+      "gc": {
+        "count": 1,
+        "totalMs": 4.92,
+        "maxMs": 4.92
+      },
+      "preprocessMs": 784394,
+      "shortcutCount": 1944786,
+      "packedMB": 26.5,
+      "preprocessHeapPeakApproxMB": 1.08,
+      "gcDuringPreprocess": {
+        "count": 39625,
+        "totalMs": 25438,
+        "maxMs": 87.64
+      }
+    }
+  },
+  "correctness": {
+    "astarMatchesDijkstra": true,
+    "chMatchesDijkstra": true
+  },
+  "worker": {
+    "graphHandoffMs": {
+      "structuredClone": 10.74,
+      "transfer": 1.26,
+      "sharedArrayBuffer": 0.85
+    },
+    "inlineAStar": {
+      "wallMs": 1178.9,
+      "loopDelayP99Ms": 30.59,
+      "loopDelayMaxMs": 37.09,
+      "framesDelivered": 50,
+      "framesExpected": 70
+    },
+    "workerAStar": {
+      "wallMs": 1240.3,
+      "loopDelayP99Ms": 2,
+      "loopDelayMaxMs": 4.25,
+      "framesDelivered": 77,
+      "framesExpected": 74,
+      "roundTripMs": {
+        "n": 200,
+        "mean": 6.197,
+        "p50": 3.852,
+        "p95": 21.365,
+        "max": 51.788
+      },
+      "messagingOverheadMs": {
+        "n": 200,
+        "mean": 0.217,
+        "p50": 0.204,
+        "p95": 0.356,
+        "max": 0.985
+      }
+    },
+    "workerCHRoundTripMs": {
+      "n": 200,
+      "mean": 5.376,
+      "p50": 5.223,
+      "p95": 9.799,
+      "max": 39.073
+    }
+  }
+}

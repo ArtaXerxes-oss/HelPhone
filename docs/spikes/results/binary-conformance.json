@@ -1,0 +1,145 @@
+{
+  "versions": {
+    "node": "v24.13.1",
+    "flatc": "flatc version 2.0.8",
+    "capnp": "Cap'n Proto version 1.0.1",
+    "protoc": "libprotoc 3.21.12",
+    "flatbuffersJs": "25.9.23",
+    "protobufjs": "8.8.0"
+  },
+  "cases": {
+    "empty frame": {
+      "flatbuffers": {
+        "ours -> flatc --json": "ok",
+        "flatc --binary -> ours": "ok",
+        "flatc --binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 48,
+          "flatc": 32
+        },
+        "ours -> flatbuffers JS runtime": "ok"
+      },
+      "capnp": {
+        "ours -> capnp convert binary:json": "ok",
+        "capnp convert json:binary -> ours": "ok",
+        "capnp convert json:binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 48,
+          "capnp": 48,
+          "capnpSegments": 1
+        }
+      },
+      "protobuf": {
+        "ours == protoc --encode (bytes)": "ok",
+        "ours -> protoc --decode -> --encode": "ok",
+        "protoc --encode -> ours": "ok",
+        "bytes": {
+          "ours": 0,
+          "protoc": 0
+        },
+        "ours -> protobufjs": "ok",
+        "protobufjs -> ours": "ok"
+      }
+    },
+    "edge values": {
+      "flatbuffers": {
+        "ours -> flatc --json": "ok",
+        "flatc --binary -> ours": "ok",
+        "flatc --binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 568,
+          "flatc": 512
+        },
+        "ours -> flatbuffers JS runtime": "ok"
+      },
+      "capnp": {
+        "ours -> capnp convert binary:json": "ok",
+        "capnp convert json:binary -> ours": "ok",
+        "capnp convert json:binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 496,
+          "capnp": 496,
+          "capnpSegments": 1
+        }
+      },
+      "protobuf": {
+        "ours == protoc --encode (bytes)": "ok",
+        "ours -> protoc --decode -> --encode": "ok",
+        "protoc --encode -> ours": "ok",
+        "bytes": {
+          "ours": 353,
+          "protoc": 353
+        },
+        "ours -> protobufjs": "ok",
+        "protobufjs -> ours": "ok"
+      }
+    },
+    "12 generated": {
+      "flatbuffers": {
+        "ours -> flatc --json": "ok",
+        "flatc --binary -> ours": "ok",
+        "flatc --binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 2032,
+          "flatc": 2088
+        },
+        "ours -> flatbuffers JS runtime": "ok"
+      },
+      "capnp": {
+        "ours -> capnp convert binary:json": "ok",
+        "capnp convert json:binary -> ours": "ok",
+        "capnp convert json:binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 1960,
+          "capnp": 1960,
+          "capnpSegments": 1
+        }
+      },
+      "protobuf": {
+        "ours == protoc --encode (bytes)": "ok",
+        "ours -> protoc --decode -> --encode": "ok",
+        "protoc --encode -> ours": "ok",
+        "bytes": {
+          "ours": 1253,
+          "protoc": 1253
+        },
+        "ours -> protobufjs": "ok",
+        "protobufjs -> ours": "ok"
+      }
+    },
+    "500 generated": {
+      "flatbuffers": {
+        "ours -> flatc --json": "ok",
+        "flatc --binary -> ours": "ok",
+        "flatc --binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 82128,
+          "flatc": 79584
+        },
+        "ours -> flatbuffers JS runtime": "ok"
+      },
+      "capnp": {
+        "ours -> capnp convert binary:json": "ok",
+        "capnp convert json:binary -> ours": "ok",
+        "capnp convert json:binary -> ours (wasm)": "ok",
+        "bytes": {
+          "ours": 82064,
+          "capnp": 91688,
+          "capnpSegments": 4
+        }
+      },
+      "protobuf": {
+        "ours == protoc --encode (bytes)": "ok",
+        "ours -> protoc --decode -> --encode": "ok",
+        "protoc --encode -> ours": "ok",
+        "bytes": {
+          "ours": 54186,
+          "protoc": 54186
+        },
+        "ours -> protobufjs": "ok",
+        "protobufjs -> ours": "ok"
+      }
+    }
+  },
+  "ok": true
+}

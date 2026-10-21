@@ -1,0 +1,132 @@
+# CODEOWNERS — HelPhone
+# ======================
+# Path → expertise mapping. GitHub enforces review requirements: a PR touching
+# a path listed here cannot be merged without approval from the listed owner(s).
+#
+# Bus-factor target: every critical path needs ≥2 people who can independently
+# approve. Backups are listed second; they MUST be able to approve alone when the
+# primary is unavailable. If only one person is listed, that subsystem is still
+# at bus-factor 1 — a dated mitigation action is required in docs/bus-factor-ledger.md.
+#
+# Review checklists for high-stakes paths are in docs/review-policy.md.
+# Quarterly refresh owner: @helphone-maintainers (due each January, April, July, October).
+
+# ── Default (catch-all) ──────────────────────────────────────────────────────
+# Every file not matched below must be reviewed by at least one core maintainer.
+*                               @helphone-maintainers
+
+# ── Soroban Contracts ────────────────────────────────────────────────────────
+# CHECKLIST REQUIRED: docs/review-policy.md#contracts
+# Risk: irreversible on-chain state changes, storage rent consequences,
+#       footprint / fee impact on the DAO treasury.
+contracts/                      @helphone-contract-owner @helphone-contract-backup
+contract/                       @helphone-contract-owner @helphone-contract-backup
+src/lib/contract.ts             @helphone-contract-owner @helphone-contract-backup
+src/lib/footprint.ts            @helphone-contract-owner @helphone-contract-backup
+src/lib/txBatcher.ts            @helphone-contract-owner @helphone-contract-backup
+src/lib/treasury.ts             @helphone-contract-owner @helphone-contract-backup
+src/lib/rpcHealth.ts            @helphone-contract-owner
+src/generated/soroban-bindings.ts @helphone-contract-owner @helphone-contract-backup
+scripts/deploy-local-contract.sh @helphone-contract-owner
+scripts/generate-soroban-bindings.js @helphone-contract-owner
+scripts/export-contract-state.sh @helphone-contract-owner
+soroban-contract.md             @helphone-contract-owner @helphone-contract-backup
+
+# ── Indexer & Database ───────────────────────────────────────────────────────
+# CHECKLIST REQUIRED: docs/review-policy.md#database
+# Risk: migration ordering, RLS policy correctness, pool exhaustion,
+#       partition key drift, data loss on rollback.
+server/db/                      @helphone-db-owner @helphone-db-backup
+server/indexer/                 @helphone-db-owner @helphone-db-backup
+migrations/                     @helphone-db-owner @helphone-db-backup
+server/graphql/                 @helphone-db-owner
+
+# ── ZK Circuits & Provers ────────────────────────────────────────────────────
+# CHECKLIST REQUIRED: docs/review-policy.md#zk
+# Risk: soundness regressions in privacy guarantees, proving-key version drift,
+#       nullifier collision or replay vectors.
+circuits/                       @helphone-zk-owner
+src/lib/zk.ts                   @helphone-zk-owner
+src/lib/zk.js                   @helphone-zk-owner
+src/lib/provers.js              @helphone-zk-owner
+src/services/zkProver.ts        @helphone-zk-owner
+src/services/zkProofCache.js    @helphone-zk-owner
+src/workers/zk-worker.js        @helphone-zk-owner
+src/utils/zkProver.js           @helphone-zk-owner
+docs/zk-design.md               @helphone-zk-owner
+docs/stellar-zk-runbook.md      @helphone-zk-owner
+
+# ── PWA / Offline / Service Worker ──────────────────────────────────────────
+# CHECKLIST REQUIRED: docs/review-policy.md#pwa
+# Risk: broken offline cache invalidation, stale data surfaced during outages,
+#       sync-manager CRDT divergence on reconnect.
+src/service-worker.js           @helphone-pwa-owner @helphone-pwa-backup
+src/lib/syncManager.ts          @helphone-pwa-owner @helphone-pwa-backup
+src/lib/crdt.ts                 @helphone-pwa-owner @helphone-pwa-backup
+src/services/crdtSync.js        @helphone-pwa-owner @helphone-pwa-backup
+src/services/storageEngine.js   @helphone-pwa-owner
+src/lib/swChannel.ts            @helphone-pwa-owner
+docs/crdt-architecture.md       @helphone-pwa-owner
+
+# ── Maps & WebGPU ────────────────────────────────────────────────────────────
+# CHECKLIST REQUIRED: docs/review-policy.md#maps
+# Risk: shader compilation failures on supported GPU tiers, memory leak in
+#       OffscreenCanvas worker, tile cache drift.
+src/components/WebGPUMap.jsx    @helphone-maps-owner
+src/components/CommunityMap.jsx @helphone-maps-owner
+src/shaders/                    @helphone-maps-owner
+src/lib/offscreenCanvas.ts      @helphone-maps-owner
+src/workers/cluster-worker.js   @helphone-maps-owner
+src/workers/clusterWorker.js    @helphone-maps-owner
+src/lib/spatialCluster/         @helphone-maps-owner
+src/lib/spatial.ts              @helphone-maps-owner
+
+# ── Dispatch / WebSocket Cluster ─────────────────────────────────────────────
+# CHECKLIST REQUIRED: docs/review-policy.md#dispatch
+# Risk: message ordering regression, missed emergency broadcast, WS storm on
+#       reconnect, Redis pub/sub fan-out exhaustion.
+server/routes/dispatch.ts       @helphone-dispatch-owner @helphone-dispatch-backup
+server/routes/wsCluster.js      @helphone-dispatch-owner @helphone-dispatch-backup
+server/lib/redisPubSub.js       @helphone-dispatch-owner
+
+# ── Telemetry ────────────────────────────────────────────────────────────────
+# Risk: binary protocol schema version drift, WASM reader misalignment,
+#       ring-buffer overflow silently dropping metrics.
+src/workers/telemetryWorker.js  @helphone-telemetry-owner
+src/wasm/telemetry_reader/      @helphone-telemetry-owner
+src/schemas/                    @helphone-telemetry-owner
+src/utils/binaryParser.js       @helphone-telemetry-owner
+src/utils/binaryParserWasm.js   @helphone-telemetry-owner
+docs/telemetry-architecture.md  @helphone-telemetry-owner
+
+# ── Security Infrastructure ──────────────────────────────────────────────────
+# CHECKLIST REQUIRED: docs/review-policy.md#security
+# Risk: auth bypass, replay window widening, key-rotation gap, supply-chain hole.
+server/middleware/auth.ts       @helphone-security-owner @helphone-maintainers
+src/lib/crypto.ts               @helphone-security-owner @helphone-maintainers
+src/lib/passkey.ts              @helphone-security-owner
+src/lib/pbkdf2Key.ts            @helphone-security-owner
+src/lib/secureStorage.ts        @helphone-security-owner
+src/lib/sessionKey.ts           @helphone-security-owner
+src/lib/keyBackup.ts            @helphone-security-owner
+src/lib/keyRotation.ts          @helphone-security-owner
+scripts/audit-deps.js           @helphone-security-owner
+scripts/audit-ai-code.js        @helphone-security-owner
+scripts/security/               @helphone-security-owner @helphone-maintainers
+config/maintainer-keys.json     @helphone-security-owner @helphone-maintainers
+.github/workflows/              @helphone-security-owner @helphone-maintainers
+
+# ── DAO / Treasury UI ────────────────────────────────────────────────────────
+# Risk: misleading funding displays, incorrect bps arithmetic, DAO vote UI
+#       accepting malformed proposals.
+src/components/TreasuryPanel.jsx    @helphone-contract-owner
+src/components/MaintainerFunding.jsx @helphone-contract-owner
+src/pages/VaultDashboard.jsx    @helphone-contract-owner
+
+# ── Docs / ADRs ──────────────────────────────────────────────────────────────
+# Anyone can improve docs; security/privacy/legal docs need security owner sign-off.
+docs/security-architecture.md  @helphone-security-owner
+docs/security-runbook.md        @helphone-security-owner
+docs/privacy-policy.md          @helphone-security-owner
+docs/legal-compliance.md        @helphone-maintainers
+docs/adr/                       @helphone-maintainers

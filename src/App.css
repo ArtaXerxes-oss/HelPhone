@@ -1,149 +1,79 @@
-@keyframes mdblink {
-  0%, 49% {
-    opacity: 1;
-  }
-  50%, 100% {
-    opacity: 0;
-  }
+/* App.css — modular aggregator.
+   Global tokens + animations + base styles are imported from src/styles/.
+   Upstream PWA/i18n styles are now in global.css/animations.css.
+   Page-specific styles live in src/pages/*.css and component CSS.
+*/
+
+@import "./styles/theme.css";
+@import "./styles/animations.css";
+@import "./styles/global.css";
+
+/* Multi-resolution layout — the header bar has to survive narrow phones.
+   The e2e matrix (tests/e2e/layout.spec.ts) asserts that no element is
+   clipped by the viewport edge on every supported resolution. */
+.hp-app-nav {
+  padding: 1rem 2rem;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  row-gap: 0.5rem;
 }
 
-@keyframes mdpulse {
-  0% {
-    transform: scale(0.85);
-    opacity: 0.55;
-  }
-  70% {
-    opacity: 0;
-  }
-  100% {
-    transform: scale(2.4);
-    opacity: 0;
-  }
+.hp-app-nav-links {
+  justify-content: flex-end;
+  gap: 0.75rem 1.5rem;
+  min-width: 0;
 }
 
-@keyframes mddash {
-  to {
-    stroke-dashoffset: 0;
+@media (max-width: 480px) {
+  .hp-app-nav {
+    padding: 0.75rem 1rem;
+    justify-content: center;
   }
-}
 
-@keyframes mdfloat {
-  0%, 100% {
-    transform: translateY(0);
+  .hp-app-nav-brand {
+    justify-content: center;
   }
-  50% {
-    transform: translateY(-9px);
+
+  .hp-app-nav-links {
+    width: 100%;
+    justify-content: center;
+    gap: 0.5rem 1rem;
   }
-}
 
-@keyframes mddrift {
-  0% {
-    background-position: 0 0;
-  }
-  100% {
-    background-position: 0 -120px;
-  }
-}
-
-html {
-  scroll-behavior: smooth;
-}
-
-body {
-  margin: 0;
-  background: #ECE0CC;
-  -webkit-font-smoothing: antialiased;
-}
-
-::selection {
-  background: #9BBC0F;
-  color: #1c2c24;
-}
-
-/* Character positioning — responsive */
-.char-image {
-  mix-blend-mode: multiply;
-  position: absolute;
-  pointer-events: none;
-  display: none;
-}
-
-@media (min-width: 1200px) {
-  .char-image {
-    display: block;
+  /* Status pills are decorative; they are the first thing to go when the
+     bar gets tight so the navigation itself always fits. */
+  .hp-app-nav-status {
+    display: none;
   }
 }
 
-@media (min-width: 1200px) and (max-width: 1600px) {
-  .char-image {
-    left: auto !important;
-    right: 0;
+/* Print: ink-friendly A4 report output. Everything here is scoped to
+   @media print so the screen layout is untouched. Elements that must not
+   appear on paper opt out with .hp-print-hide; cards that must not split
+   across pages opt in with .hp-print-card. */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
   }
-}
 
-/* Mapbox overrides — HelPhone palette */
-.mapboxgl-popup-content {
-  background: #234B4E;
-  color: rgba(242, 236, 220, 0.92);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  padding: 0;
-}
-.mapboxgl-popup-tip {
-  border-top-color: #234B4E;
-}
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
 
-/* Stellar Wallets Kit modal — HelPhone polish */
-.stellar-wallets-kit {
-  color-scheme: dark;
-}
+  .hp-app-nav,
+  .hp-print-hide {
+    display: none !important;
+  }
 
-.stellar-wallets-kit > section {
-  width: min(92vw, 390px) !important;
-  max-width: min(92vw, 390px) !important;
-  max-height: min(82vh, 560px) !important;
-  border-radius: 16px !important;
-  border: 1px solid rgba(255, 255, 255, 0.12) !important;
-  background: #1c2c24 !important;
-  box-shadow: 0 24px 72px rgba(0, 0, 0, 0.58) !important;
-}
+  .hp-print-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
 
-.stellar-wallets-kit img {
-  width: 32px !important;
-  height: 32px !important;
-  min-width: 32px !important;
-  min-height: 32px !important;
-  max-width: 32px !important;
-  max-height: 32px !important;
-  border-radius: 50% !important;
-  object-fit: contain !important;
-  background: rgba(255, 255, 255, 0.08) !important;
-  font-size: 0 !important;
-  color: transparent !important;
-  overflow: hidden !important;
-}
-
-.stellar-wallets-kit li {
-  min-height: 56px !important;
-  padding: 10px 12px !important;
-}
-
-.stellar-wallets-kit p {
-  font-size: 15px !important;
-  line-height: 1.25 !important;
-  overflow: hidden !important;
-  text-overflow: ellipsis !important;
-}
-
-.stellar-wallets-kit small {
-  min-height: 34px !important;
-  padding: 7px 10px !important;
-  border-radius: 10px !important;
-  white-space: nowrap !important;
-}
-
-.stellar-wallets-kit button {
-  min-width: 36px !important;
-  min-height: 36px !important;
+  [dir="rtl"] {
+    direction: rtl;
+  }
 }

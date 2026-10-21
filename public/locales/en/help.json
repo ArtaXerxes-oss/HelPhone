@@ -1,0 +1,251 @@
+{
+  "nav": {
+    "back": "← Back"
+  },
+  "modes": {
+    "getHelp": "Get Help",
+    "offerHelp": "Offer Help"
+  },
+  "zk": {
+    "label": "ZK PRIVACY CHECKPOINT",
+    "ready": "ready",
+    "body": "Exact location stays private. Stellar sees a proof fingerprint, a zone, and a pseudonymous wallet action.",
+    "nullifier": "NULLIFIER",
+    "zone": "ZONE",
+    "zonePrivateBox": "{{radius}} km private box",
+    "zonePrivateBoxFallback": "private box",
+    "onChainAction": "On-chain action",
+    "proofRecord": "Proof record"
+  },
+  "getHelp": {
+    "heading": "Request help nearby",
+    "sub": "Fill in the steps below. Nearby people will be notified.",
+    "step1": {
+      "title": "Your location",
+      "locating": "Requesting…",
+      "notSet": "Not set",
+      "asking": "Asking for your location…",
+      "locationBlocked": "Location blocked. Search by city, or click the map to drop a pin.",
+      "locationFailed": "Could not get location. Search below or click the map.",
+      "allowAccess": "Allow location access",
+      "locationSet": "Location set ✓",
+      "refresh": "refresh",
+      "searchPlaceholder": "Or search city, country…",
+      "searchButton": "Go",
+      "searching": "…",
+      "searchHint": "You can also click the map to drop a pin.",
+      "placeNotFound": "Place not found.",
+      "searchFailed": "Search failed. Check your connection.",
+      "searchingReferences": "Searching references..."
+    },
+    "step2": {
+      "title": "What happened?",
+      "selectOne": "Select one",
+      "pickType": "Pick a type"
+    },
+    "step3": {
+      "title": "Your info",
+      "subtitle": "Optional — how responders reach you",
+      "nicknamePlaceholder": "Nickname or name",
+      "contactPlaceholder": "@telegram or +54 11 5555-5555",
+      "hint": "How responders reach you. Stored on-chain."
+    },
+    "step4": {
+      "title": "Send request",
+      "readySubtitle": "Ready to go",
+      "notReadySubtitle": "Complete the steps above",
+      "body": "Your pin appears on the map. People nearby will see your request and reach out.",
+      "sending": "Sending…",
+      "connectWalletFirst": "Connect wallet first",
+      "requestHelp": "Request help"
+    }
+  },
+  "offerHelp": {
+    "heading": "People who need help",
+    "noRequests": "No one nearby needs help right now.",
+    "activeRequests_one": "{{count}} active request on the map. Tap a pin to help.",
+    "activeRequests_other": "{{count}} active requests on the map. Tap a pin to help.",
+    "activeRequestsLabel": "ACTIVE REQUESTS",
+    "noRequestsBody": "No one nearby needs help right now. Check back soon.",
+    "helpRegistered": "HELP REGISTERED",
+    "youAreHelping": "You are helping {{label}}. Your location is being shared with them.",
+    "onChainAction": "On-chain action",
+    "arrived": "ARRIVED ✓",
+    "markArrived": "Mark Arrived",
+    "recording": "Recording...",
+    "confirming": "Confirming…",
+    "connectWalletFirst": "Connect wallet first",
+    "illHelpThisPerson": "I'll help this person",
+    "alreadyOnWay": "Someone is already on the way",
+    "helpCreatesReceipt": "Helping creates your own public receipt after Stellar confirms.",
+    "enableLocation": "Enable your location so they can see you on the map."
+  },
+  "myRequests": {
+    "label": "MY REQUESTS",
+    "loading": "Loading...",
+    "empty": "You haven't requested help yet."
+  },
+  "status": {
+    "waitingForResponder": "WAITING FOR RESPONDER",
+    "responderOnTheWay": "RESPONDER ON THE WAY",
+    "resolved": "RESOLVED",
+    "cancelled": "CANCELLED",
+    "waitingMsg": "Your pin is live. Waiting for someone nearby.",
+    "enRouteMsg": "Stay where you are. Help is coming.",
+    "resolvedMsg": "This request has been resolved.",
+    "cancelledMsg": "Request cancelled.",
+    "eta": "ETA {{min}} min",
+    "responderEnRoute": "RESPONDER EN ROUTE",
+    "responderArrived": "RESPONDER ARRIVED ✓",
+    "away": "{{dist}} km away"
+  },
+  "tracking": {
+    "arrived": "ARRIVED",
+    "enRoute": "EN ROUTE",
+    "responder": "RESPONDER",
+    "distance": "DISTANCE",
+    "eta": "ETA",
+    "status": "STATUS",
+    "distanceKm": "{{dist}} km",
+    "etaMin": "{{min}} min",
+    "unknown": "Unknown",
+    "dash": "—",
+    "markArrived": "Mark Arrived",
+    "recordingArrival": "Recording arrival...",
+    "resolveRequest": "Resolve Request",
+    "arrivedCheck": "ARRIVED ✓"
+  },
+  "arrivalThanks": {
+    "heading": "Thank you for helping",
+    "body": "Your arrival has been recorded on Stellar. Because you showed up, someone nearby knows they are not alone.",
+    "done": "Done",
+    "arrivalReceipt": "Arrival receipt"
+  },
+  "cancelConfirm": {
+    "heading": "Cancel request",
+    "body": "Are you sure? Request #{{id}} will be recorded as cancelled on Stellar.",
+    "back": "Back",
+    "confirm": "Cancel"
+  },
+  "emergencyModal": {
+    "heading": "What happened?",
+    "sub": "Pick one so the right people are notified."
+  },
+  "emergencyTypes": {
+    "lost_label": "I'm lost",
+    "lost_desc": "Don't know where I am or how to get back",
+    "fallen_label": "Fell / injured",
+    "fallen_desc": "Need assistance after a fall or injury",
+    "medical_label": "Medical emergency",
+    "medical_desc": "Health issue that can't wait",
+    "car_label": "Car trouble",
+    "car_desc": "Vehicle broke down on the road",
+    "danger_label": "I feel unsafe",
+    "danger_desc": "Unsafe situation, need someone nearby",
+    "other_label": "Something else",
+    "other_desc": "Another type of emergency"
+  },
+  "onboarding": {
+    "guide": "HELPHONE GUIDE",
+    "closeGuide": "Close guide",
+    "steps": {
+      "request_label": "Request",
+      "request_title": "Help when you need it",
+      "request_body": "HelPhone connects you with people nearby when you're in an emergency. You can request help or offer help to others. Everything runs on Stellar — fast, public, and verifiable.",
+      "receipt_label": "Receipt",
+      "receipt_title": "Your action goes on-chain first",
+      "receipt_body": "When you request or offer help, Stellar confirms it in seconds. That creates a public transaction hash — your receipt.",
+      "wallet_label": "Wallet",
+      "wallet_title": "Connect your preferred wallet",
+      "wallet_body": "Your Stellar wallet only signs transactions — it's not a tracking tool. Connect to request help, offer help, or verify your identity on the network."
+    },
+    "back": "Back",
+    "next": "Next",
+    "connectWallet": "Connect preferred wallet"
+  },
+  "profile": {
+    "onChainAlias": "On-chain alias",
+    "set": "SET",
+    "anonymousPlaceholder": "Anonymous",
+    "aliasHint": "A pseudonym reveals nothing. No on-chain storage — it exists only in this session.",
+    "contact": "Contact",
+    "contactPlaceholder": "@telegram or +54 11 5555-5555",
+    "contactHint": "How responders reach you. Stored on-chain.",
+    "mapAvatar": "Map avatar",
+    "mapAvatarHint": "· tap to override auto-pick"
+  },
+  "map": {
+    "youLabel": "You",
+    "youResponder": "You (responder)",
+    "responder": "Responder",
+    "needsHelp": "Needs help · Click sidebar to respond",
+    "etaLabel": "ETA: {{min}} min"
+  },
+  "hints": {
+    "gettingLocation": "Getting your location…",
+    "allowLocationOrClick": "Allow location or click map to drop your pin",
+    "enableLocationResponder": "Enable location to show responders where you are"
+  },
+  "errors": {
+    "setLocationFirst": "Set your location first.",
+    "selectEmergencyType": "Select what happened.",
+    "connectWalletFirst": "Connect your Stellar wallet first.",
+    "couldNotSend": "Could not send. {{message}}",
+    "invalidRequest": "Invalid request",
+    "enableLocationFirst": "Enable your location first so the requester can see you on the map.",
+    "couldNotAccept": "Could not accept request: {{message}}",
+    "couldNotMarkArrived": "Could not mark arrived: {{message}}",
+    "couldNotResolve": "Could not resolve: {{message}}"
+  },
+  "mapStyles": {
+    "warm_name": "Warm",
+    "warm_desc": "Custom warm style with earth greens and coral accents. Great for everyday use.",
+    "standard_name": "Standard",
+    "standard_desc": "Clean, neutral base map. Good contrast for reading streets and names.",
+    "dark_name": "Dark 2D",
+    "dark_desc": "Dark background — reduces glare, ideal for low-light or nighttime use."
+  },
+  "fieldOps": {
+    "title": "FIELD TOOLS",
+    "radio": "Radio",
+    "staging": "Staging",
+    "rugged": "Rugged",
+    "ruggedOn": "Rugged ON",
+    "ruggedOff": "Rugged OFF",
+    "queue": "Queue {{count}}",
+    "sosSent": "SOS {{time}}",
+    "pttLive": "PTT live"
+  },
+  "radio": {
+    "sheetTitle": "Field radio bridge",
+    "callsign": "Callsign",
+    "baud": "Port baud rate",
+    "band": "Band plan",
+    "bandHam": "Ham (Part 97 — plaintext, PII redacted)",
+    "bandLicensed": "Licensed (Part 90 — encrypted)",
+    "connect": "Connect radio (USB)",
+    "disconnect": "Disconnect radio",
+    "connecting": "Waiting for port…",
+    "linked": "RADIO LINK — 1200 baud",
+    "idle": "RADIO IDLE",
+    "foregroundNote": "The radio link works only while this page stays in the foreground — locking the screen or minimizing the PWA stops all traffic (WebSerial limitation)."
+  },
+  "staging": {
+    "sheetTitle": "Staging check-in",
+    "tapTag": "Tap tag to check IN",
+    "stopScan": "Stop scanning",
+    "shortCode": "Staging short code",
+    "checkIn": "Check in",
+    "noNfc": "This device has no Web NFC — use the staging short code below (also printed on the tag QR).",
+    "duplicate": "Duplicate tap suppressed — one roster slot.",
+    "roster": "ROSTER ({{count}} inside)",
+    "unmatched": "{{count}} responder(s) checked IN over 30 min ago with no OUT — verify headcount before demobilizing."
+  },
+  "sos": {
+    "title": "SOS — CONFIRM DISPATCH",
+    "body": "Hold the button for 1.2 seconds to send an escalated emergency request to everyone nearby. Release to cancel.",
+    "hold": "Hold to confirm SOS dispatch",
+    "cancel": "Cancel",
+    "dispatched": "SOS dispatched. Escalated emergency request queued."
+  }
+}

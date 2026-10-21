@@ -1,16 +1,94 @@
-# Render Blueprint for the HelPhone ZK prover service.
-# The prover runs the Noir + Barretenberg backend that the Vercel frontend
-# calls via VITE_ZK_PROVER_URL. Vercel only serves the static build, so the
-# heavy proving step must live on a real Node host like this one.
+# Render Blueprint for HelPhone Services & Automated Soroban State Exporter
 services:
   - type: web
-    name: helphone-zk-prover
+    name: helphone-backend-server
     runtime: node
-    plan: free            # 512MB — Barretenberg may OOM; bump to "starter" if it crashes
-    buildCommand: npm install
-    startCommand: node server/index.js
+    plan: starter
+    # The build runs inside the egress monitor (docs/security-runbook.md):
+    # it audits outbound connections during the install/build phase and fails
+    # on unauthorized destinations. Render build containers have no
+    # CAP_NET_RAW, so --allow-no-capture keeps the deploy working; CI runs the
+    # strict, packet-capturing gate (.github/workflows/ci.yml).
+    buildCommand: bash scripts/monitor-build-egress.sh --allow-no-capture --log-dir /tmp/build-egress -- npm ci --ignore-scripts
+    startCommand: npm run server
     healthCheckPath: /health
-    autoDeploy: false
+    autoDeploy: true
     envVars:
       - key: NODE_VERSION
         value: "22"
+      # Extra build-egress allowlist entries (comma separated hostnames or
+      # CIDRs) for build-time vendors not in the built-in policy.
+      - key: EGRESS_ALLOWLIST
+        value: ""
+      # Postgres connection. Migrations apply automatically at server startup
+      # (see server/db/migrator.ts), so the schema always stays in sync.
+      - key: DATABASE_URL
+        value: fromEnv
+        sync: false
+      - key: SOROBAN_RPC_URL
+        value: "https://soroban-testnet.stellar.org"
+      - key: CONTRACT_ID
+        value: "CC325F37QW7N2F5M3QGHL4A4O7J2K9L0M1N2O3P4Q5R6S7T8U9V0"
+      # Rate-limit whitelist (#536): verified emergency-service subnets / API keys
+      # are stored in Redis and managed via /admin/whitelist (see docs/security-runbook.md).
+      - key: REDIS_URL
+        sync: false
+      # Set OTEL_EXPORTER_OTLP_ENDPOINT to an OTLP/HTTP collector to export traces.
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        sync: false
+      # Protect GET /metrics when the backend is exposed to the public internet.
+      - key: METRICS_BEARER_TOKEN
+        sync: false
+      - key: WHITELIST_ADMIN_TOKEN
+        sync: false
+      # Number of proxy hops in front of the app so req.ip is the real client.
+      - key: TRUST_PROXY
+        value: "1"
+      # Automated VACUUM ANALYZE / REINDEX CONCURRENTLY (#538) — opt-in; see docs/database-architecture.md
+      - key: DB_MAINTENANCE_ENABLED
+        value: "false"
+      - key: DB_BLOAT_THRESHOLD_PCT
+        value: "20"
+      - key: DB_MAINTENANCE_WINDOW_START_UTC
+        value: "2"
+      - key: DB_MAINTENANCE_WINDOW_END_UTC
+        value: "5"
+      - key: ALLOWED_ORIGINS
+        value: "https://helphone.com,https://staging.helphone.com,http://localhost:3000"
+      # #530: extra connect-src origins beyond the built-in defaults (comma-separated).
+      - key: CSP_CONNECT_SRC
+        value: ""
+      # Set to "true" to roll the policy out in report-only mode first.
+      - key: CSP_REPORT_ONLY
+        value: "false"
+      # HTTP/2 push / preload manifest (server/middleware/http2Push.ts): the
+      # server reads dist/.vite/manifest.json (emitted by `vite build`) and
+      # stamps `Link: <...>; rel=preload` on HTML responses, re-reading the
+      # manifest whenever a release changes the asset hashes. No-ops when the
+      # build output is absent (API-only deploy).
+      - key: HTTP2_PUSH_ENABLED
+        value: "true"
+      # Emit a 103 Early Hints `Link` ahead of the document on HTTP/1.1.
+      - key: HTTP2_PUSH_EARLY_HINTS
+        value: "true"
+      # Native `pushStream` when the origin terminates HTTP/2 itself.
+      - key: HTTP2_PUSH_NATIVE
+        value: "true"
+      # Drop assets missing on disk from the push list (guards mid-release).
+      - key: HTTP2_PUSH_VERIFY_FILES
+        value: "false"
+
+  - type: cron
+    name: soroban-daily-state-exporter
+    runtime: node
+    schedule: "0 0 * * *"
+    buildCommand: npm ci --ignore-scripts
+    startCommand: bash scripts/export-contract-state.sh
+    envVars:
+      - key: DATABASE_URL
+        value: fromEnv
+        sync: false
+      - key: SOROBAN_RPC_URL
+        value: "https://soroban-testnet.stellar.org"
+      - key: CONTRACT_ID
+        value: "CC325F37QW7N2F5M3QGHL4A4O7J2K9L0M1N2O3P4Q5R6S7T8U9V0"

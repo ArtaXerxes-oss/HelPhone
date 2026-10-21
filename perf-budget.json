@@ -1,0 +1,51 @@
+{
+  "$comment": "Unified perf budget (#795). Single source of truth for vite chunk caps, server histogram buckets (server/telemetry.js), Playwright field profile (playwright.config.js), load-test SLOs and the perf:budget verdict (scripts/perf-budget.mjs). Numbers are baselines + 20% headroom; owners must sign off on changes.",
+  "version": 1,
+  "profile": {
+    "name": "field-moto-g4",
+    "device": "Moto G4",
+    "viewport": { "width": 360, "height": 640 },
+    "deviceScaleFactor": 3,
+    "cpuThrottleRate": 4,
+    "network": {
+      "name": "Fast 3G",
+      "downloadKbps": 1600,
+      "uploadKbps": 750,
+      "latencyMs": 150
+    }
+  },
+  "bytesToMs": {
+    "$comment": "Parse+compile ms per KB of JS (gzip-decoded) on the field profile. Placeholder coefficients until fitted from 5 chunk sizes; see docs/telemetry-architecture.md. Error bound is the fit's 95% CI half-width.",
+    "msPerKb": 1.1,
+    "fixedMs": 40,
+    "errorBoundPct": 25
+  },
+  "endToEnd": {
+    "tapToConfirm": { "p75Ms": 2500, "owner": "frontend" }
+  },
+  "links": {
+    "bundleParse": { "p75Ms": 800, "owner": "frontend" },
+    "mainThreadRender": { "p75Ms": 400, "owner": "frontend" },
+    "workerFlush": { "p75Ms": 300, "owner": "frontend" },
+    "wsRoundTrip": { "p75Ms": 600, "owner": "backend" },
+    "serverDispatch": { "p99Ms": 250, "owner": "backend" },
+    "indexerLag": { "p95Seconds": 30, "owner": "indexer" },
+    "telemetrySelfOverhead": { "maxShareOfScripting": 0.05, "owner": "frontend" },
+    "wasmInitLongTask": { "maxMs": 50, "owner": "frontend" }
+  },
+  "chunks": {
+    "$comment": "KB caps (raw, pre-gzip) derived from bundleParse via bytesToMs. Matched against dist/assets/<name>-<hash>.js. `initial` is everything the entry HTML loads.",
+    "initialKb": 650,
+    "caps": {
+      "react-core": 200,
+      "mapbox": 1300,
+      "stellar": 900,
+      "zk": 2500,
+      "TelemetryLab": 40,
+      "yjs": 150,
+      "otel": 120
+    },
+    "mustBeLazy": ["TelemetryLab", "mapbox", "zk"]
+  },
+  "histogramBucketsSeconds": [0.05, 0.1, 0.25, 0.3, 0.4, 0.6, 0.8, 1, 1.5, 2.5, 4, 8, 15, 30, 60]
+}

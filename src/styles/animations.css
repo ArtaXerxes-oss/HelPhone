@@ -1,0 +1,129 @@
+/* HelPhone Animations — keyframes extracted from App.css */
+
+@keyframes mdblink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes mdpulse {
+  0% {
+    transform: scale(0.85);
+    opacity: 0.55;
+  }
+  70% {
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+@keyframes mddash {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes mdfloat {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-9px);
+  }
+}
+
+@keyframes mddrift {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 0 -120px;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes hp-shimmer {
+  0%,
+  100% {
+    opacity: 0.62;
+    transform: scaleX(0.98);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+[style*="mdpulse"],
+[style*="mdfloat"],
+[style*="spin"],
+[style*="mddrift"],
+[style*="hp-shimmer"] {
+  will-change: transform, opacity;
+}
+
+/* ── Active marker pulse animation (#164) ──────────────────────────────────── */
+@keyframes hp-marker-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 122, 107, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 12px rgba(255, 122, 107, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 122, 107, 0);
+  }
+}
+
+.hp-marker-active {
+  animation: hp-marker-pulse 2s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hp-marker-active,
+  [style*="mdpulse"],
+  [style*="mdfloat"],
+  [style*="spin"],
+  [style*="mddrift"] {
+    animation: none !important;
+  }
+}
+
+.hp-perf-governor [style*="mdpulse"],
+.hp-perf-governor [style*="mdfloat"],
+.hp-perf-governor [style*="spin"],
+.hp-perf-governor [style*="mddrift"],
+.hp-perf-governor .hp-marker-active {
+  animation: none !important;
+}
+
+/* RevealDiv transition helper */
+.hp-reveal {
+  transition:
+    opacity 1.05s cubic-bezier(0.22, 0.75, 0.2, 1),
+    transform 1.05s cubic-bezier(0.22, 0.75, 0.2, 1);
+}
+
+.hp-reveal--hidden {
+  opacity: 0;
+  transform: translateY(30px);
+}
+
+.hp-reveal--visible {
+  opacity: 1;
+  transform: none;
+}

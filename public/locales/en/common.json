@@ -1,0 +1,124 @@
+{
+  "nav": {
+    "howItWorks": "How it works",
+    "trustSafety": "Trust & Safety",
+    "coverage": "Coverage",
+    "ranking": "Ranking",
+    "requestHelp": "Request Help"
+  },
+  "hero": {
+    "headline": "Help arrives\nthrough people.",
+    "sub": "Send a request. Appear on the map. Let your community respond.",
+    "cta_primary": "Get Help",
+    "cta_secondary": "Join Community"
+  },
+  "problem": {
+    "eyebrow": "THE REALITY",
+    "heading": "Many people face emergencies alone.",
+    "body": "When something goes wrong, the help you need is often closer than you think — just unreachable.",
+    "cards": {
+      "lost_title": "Lost",
+      "lost_desc": "Disoriented in an unfamiliar place with no clear way to signal where you are.",
+      "stranded_title": "Stranded",
+      "stranded_desc": "A breakdown, a missed connection, no transport and nightfall closing in.",
+      "unsafe_title": "Unsafe",
+      "unsafe_desc": "A situation turns and you need eyes on you, fast, from people nearby.",
+      "needAssistance_title": "Need Assistance",
+      "needAssistance_desc": "Not an emergency for the line — but you still can't do this alone."
+    }
+  },
+  "howItWorks": {
+    "eyebrow": "THREE STEPS",
+    "heading": "Reaching help, made human.",
+    "steps": {
+      "sendRequest_title": "Send Request",
+      "sendRequest_desc": "Describe what you need in a sentence. No account required to ask.",
+      "appearOnMap_title": "Appear on Map",
+      "appearOnMap_desc": "Your request surfaces as a live dot for trusted neighbours nearby.",
+      "receiveHelp_title": "Receive Help",
+      "receiveHelp_desc": "A verified responder accepts, and you track them to you in real time."
+    }
+  },
+  "liveMap": {
+    "eyebrow": "LIVE NOW",
+    "heading": "A neighbourhood that answers.",
+    "body": "Every dot is a real person — someone asking, someone on their way.",
+    "stats": {
+      "respondersOnline": "responders online",
+      "avgResponse": "avg. response",
+      "activeRequests": "active requests"
+    },
+    "legend": {
+      "request": "Request",
+      "responder": "Responder",
+      "enRoute": "En route"
+    }
+  },
+  "whyPeopleRespond": {
+    "eyebrow": "THE HUMAN PART",
+    "heading": "Why people show up.",
+    "values": {
+      "trust_title": "Trust",
+      "trust_desc": "Verified neighbours, not strangers from nowhere.",
+      "localImpact_title": "Local impact",
+      "localImpact_desc": "Help that stays in the streets you actually walk.",
+      "sharedResponsibility_title": "Shared responsibility",
+      "sharedResponsibility_desc": "Today you respond; tomorrow someone responds for you.",
+      "humanConnection_title": "Human connection",
+      "humanConnection_desc": "A name, a face, a hand — not a hotline."
+    }
+  },
+  "features": {
+    "eyebrow": "WHAT'S INSIDE",
+    "heading": "Built for the moment it matters.",
+    "items": {
+      "communityResponders_title": "Community responders",
+      "communityResponders_desc": "Real neighbours who opted in to help, vetted and close by.",
+      "anonymousRequests_title": "Anonymous requests",
+      "anonymousRequests_desc": "Ask for help without an account, a name, or a payment.",
+      "statusUpdates_title": "Status updates",
+      "statusUpdates_desc": "See exactly when a responder accepts, departs, and arrives.",
+      "realtimeLocation_title": "Real-time location",
+      "realtimeLocation_desc": "Your pin updates live so responders always know where you actually are."
+    }
+  },
+  "trust": {
+    "eyebrow": "SAFETY FIRST",
+    "heading": "Care, with guardrails.",
+    "body": "Openness only works when it's safe. These are the systems that make trust possible.",
+    "items": {
+      "verification_title": "Verification",
+      "verification_desc": "Responders are identity-checked before they can ever accept a request.",
+      "moderation_title": "Moderation",
+      "moderation_desc": "A live team and community flags keep the map honest, around the clock.",
+      "privacy_title": "Privacy",
+      "privacy_desc": "Your exact location is shared only with the responder you accept — no one else.",
+      "responseTracking_title": "Response tracking",
+      "responseTracking_desc": "Every interaction is logged and traceable, so help stays accountable."
+    }
+  },
+  "cta": {
+    "eyebrow": "JOIN HELPHONE",
+    "heading": "Nobody should face\nemergencies alone.",
+    "button": "Join the Network",
+    "sub": "Free to join · Available wherever neighbours are"
+  },
+  "footer": {
+    "tagline": "A community help network where the nearest hand finds you on the map.",
+    "platform": "PLATFORM",
+    "howItWorks": "How it works",
+    "liveMap": "Live map",
+    "coverage": "Coverage",
+    "trust": "TRUST",
+    "safety": "Safety",
+    "privacy": "Privacy",
+    "verification": "Verification",
+    "copyright": "© 2026 HelPhone · Built for neighbours",
+    "motto": "▤ help arrives through people",
+    "maintainerFunding": "{{bps}}% of protocol fees fund {{count}} open source maintainers · {{paid}} paid out",
+    "maintainerFundingPending": "Protocol fees will fund open source maintainers",
+    "provenanceVerified": "Verified Build Provenance",
+    "provenanceUnverified": "Build provenance unverified",
+    "provenanceChecking": "Checking build provenance…"
+  }
+}

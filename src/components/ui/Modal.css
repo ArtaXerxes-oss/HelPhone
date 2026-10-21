@@ -1,0 +1,147 @@
+/* Modal — HelPhone design system */
+
+.hp-modal-overlay:has(.hp-modal--full) {
+  padding: 0;
+}
+
+.hp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.68);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: hpFadeIn 0.2s ease;
+}
+
+@keyframes hpFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes hpSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.hp-modal {
+  width: 100%;
+  max-width: 460px;
+  border-radius: 18px;
+  background: var(--color-primary-dark);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--shadow-modal);
+  overflow: hidden;
+  animation: hpSlideUp 0.28s cubic-bezier(0.22, 0.75, 0.2, 1);
+}
+
+.hp-modal--light {
+  background: var(--color-cream-light);
+  border-color: var(--color-border);
+}
+
+.hp-modal--sm {
+  max-width: 390px;
+}
+.hp-modal--md {
+  max-width: 460px;
+}
+.hp-modal--lg {
+  max-width: 560px;
+}
+/* Full-screen variant — rugged SOS/staging sheets (ISP-131/ISP-134) */
+.hp-modal--full {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.hp-modal--full .hp-modal-body {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.hp-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 20px 0;
+  gap: 12px;
+}
+
+.hp-modal-title {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-weight: 400;
+  font-size: 22px;
+  line-height: 1.15;
+  color: var(--color-cream-text);
+}
+
+.hp-modal-title--light {
+  color: var(--color-primary);
+}
+
+.hp-modal-close {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(242, 236, 220, 0.65);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.hp-modal-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.hp-modal-body {
+  padding: 20px 22px 20px;
+}
+
+.hp-modal-footer {
+  display: flex;
+  gap: 10px;
+  padding: 0 22px 22px;
+}
+
+.hp-modal-footer--center {
+  justify-content: center;
+}
+
+.hp-modal-content-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(242, 236, 220, 0.58);
+}
+
+.hp-modal-content-text--light {
+  color: var(--color-text-secondary);
+}

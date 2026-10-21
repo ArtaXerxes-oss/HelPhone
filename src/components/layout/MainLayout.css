@@ -1,0 +1,19 @@
+/* MainLayout */
+
+.hp-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-sans);
+  background: var(--color-bg);
+  overflow-x: hidden;
+}
+
+.hp-layout__main {
+  flex: 1;
+}
+
+.hp-layout--dark {
+  background: var(--color-bg-dark);
+  color: rgba(242, 236, 220, 0.9);
+}

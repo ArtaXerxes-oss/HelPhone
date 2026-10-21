@@ -1,0 +1,45 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": false,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting / Checks */
+    "strict": false,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["src", "server", "scripts", "test"],
+  "references": [],
+
+  /* Type-surface extraction options for scripts/detect-api-drift.js.
+     Kept out of compilerOptions so `tsc --noEmit` ignores it. */
+  "apiDrift": {
+    "compilerOptions": {
+      "target": "ES2022",
+      "module": "CommonJS",
+      "moduleResolution": "node",
+      "strict": false,
+      "skipLibCheck": true,
+      "noEmit": true,
+      "esModuleInterop": true,
+      "allowJs": false,
+      "checkJs": false,
+      "resolveJsonModule": false,
+      "types": []
+    }
+  }
+}

@@ -9,6 +9,10 @@
 ---
 
 ## Data Structures
+Memory bounds and pagination are documented in
+[`docs/memory-architecture.md`](docs/memory-architecture.md). Collections are
+capped at 500, page reads at 100, and verifier proof payloads at 1 MiB.
+
 
 ```rust
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -318,3 +322,116 @@ stellar keys fund helphone-deployer --network testnet
 6. ✅ Remove `src/lib/supabase.js` and `@supabase/supabase-js`
 7. ✅ ZK proof badges — dynamic instead of "SOON"
 8. ⬜ Test end-to-end
+
+---
+
+## Open Source Sustainability Reserve (`contracts/helphone_dao`, #587)
+
+The DAO contract holds a reserve that funds maintainers of the open source
+dependencies HelPhone ships. The reserve logic is in
+`contracts/helphone_dao/src/sustainability.rs`, and its entry points are on `HelPhoneDao`.
+
+- **1% protocol fee.** `collect_sustainability_fee(payer, gross_amount)` pulls
+  `gross_amount * 100 / 10_000` (`SUSTAINABILITY_FEE_BPS = 100`) of the
+  configured SAC token from `payer` into the reserve. Amounts are rounded down,
+  so a dust payment pays nothing.
+- **DAO-voted grants.** `propose_maintainer_grant(proposer, maintainer, package,
+  amount, title, description)` opens a `FundAllocation` proposal and attaches a
+  `MaintainerGrant`. When the proposal passes and `execute_proposal` runs after
+  the timelock, the grant is paid automatically if the reserve covers it. If the
+  reserve is short, the grant stays `Pending`. Anyone can then call
+  `disburse_grant(proposal_id)` once the reserve has grown. Grants attached to
+  failed or cancelled proposals can never be paid.
+- **Reads:** `get_sustainability_stats()` returns reserve, collected,
+  disbursed, grants proposed/paid and maintainers funded (used by
+  `/vault` via `getSustainabilityStats()` in `src/lib/contract.ts`).
+  `get_maintainer_grant(proposal_id)` and `get_maintainer_funding(maintainer)`
+  are the other two reads.
+- **Admin:** `configure_sustainability(admin, reserve_token)` picks the SAC
+  token. `set_voting_supply(admin, supply)` sets the quorum denominator, because
+  SEP-41 tokens expose no `total_supply()`.
+
+```bash
+cd contracts/helphone_dao && cargo test          # grant lifecycle tests
+stellar contract build                            # wasm32v1-none artifact
+stellar contract deploy --wasm ../../target/wasm32v1-none/release/helphone_dao.wasm \
+  --source helphone-deployer --network testnet -- \
+  --admin <G...> --governance_token <C...>
+```
+
+Set `VITE_HELPHONE_DAO_CONTRACT_ID` to show the dependency funding stats on the
+Vault dashboard.
+// Implementation added
+
+## M-of-N admin governance
+
+`configure_multisig` stores the authorized signer set and threshold. An authorized
+signer creates an admin-transfer proposal with `create_admin_proposal`; each signer
+may call `approve_admin_proposal` once. `execute_admin_proposal` rejects execution
+until approvals meet the threshold and permanently marks executed proposals to
+prevent replay. The constructor defaults to a backwards-compatible 1-of-1 set.
+
+## Multi-asset treasury — `aegis_vault` (#541)
+
+`contracts/aegis_vault/src/treasury.rs` tracks a reserve per asset and enforces
+per-asset daily disbursement caps. Reserves are credited by `fund_zone` and
+`treasury_deposit`, and debited by `claim_aid` and `treasury_withdraw`.
+
+| Function | Auth | Notes |
+| --- | --- | --- |
+| `treasury_assets()` / `treasury_reserve(asset)` | – | Registered assets and their reserves |
+| `add_treasury_asset(admin, asset)` | admin | Registers an asset (idempotent) |
+| `treasury_deposit(from, asset, amount)` | `from` | Asset must be registered |
+| `treasury_withdraw(admin, asset, to, amount)` | admin | Counts against the daily cap |
+| `set_daily_limit(admin, asset, limit)` / `daily_limit` / `spent_today` / `remaining_today` | admin (set) | Cap resets each UTC day (`timestamp / 86400`). Constructor sets the vault token to 10 default payouts (500 tokens) |
+| `set_target_weights(admin, assets, weights_bps)` / `target_weight` | admin (set) | Sum ≤ 10 000 bps |
+| `rebalance_plan(prices)` | – | Read-only: signed buy(+)/sell(−) per asset to reach the targets. `prices` are in `treasury_assets` order. The vault never swaps; execution is off-chain or via a DEX adapter |
+
+A claim that would exceed the daily cap fails with `DailyLimitExceeded` (9)
+before the nullifier is burned or any balance moves, so the claimant can retry
+the next day. Other new errors: `UnknownAsset` (10), `InvalidWeights` (11),
+`InvalidPrices` (12). `fund_zone` takes the 160-byte public-inputs prefix
+(campaign id = bytes 128..160), as before.
+
+Frontend: `getTreasurySnapshot`, `getTreasuryRebalancePlan`,
+`setTreasuryDailyLimit` in `src/lib/contract.ts`; reserves render in
+`VaultDashboard.jsx` via `TreasuryPanel` (refreshed every 15 s).
+
+## Price oracle adapter — `helphone_dao` (#543)
+
+`contracts/helphone_dao/src/oracle.rs` reads SEP-40 feeds (e.g. Reflector) via
+`lastprice(asset)`. Prices are quoted against the feed's base asset, so
+`convert(amount, from, to) = amount * price(from) / price(to)`, rounded down.
+
+- **Stale guard:** a price older than `MAX_PRICE_AGE_SECS` (3600 s) aborts with
+  `StalePrice` (14). One stale leg rejects the whole conversion. Prices dated
+  more than 60 s in the future, or `<= 0`, abort with `InvalidPrice` (16); a
+  missing price aborts with `PriceUnavailable` (15).
+- **Entry points:** `set_oracle(admin, oracle)`, `get_oracle()`,
+  `quote_conversion(from_token, to_token, amount)` and
+  `disburse_aid(admin, recipient, source_token, payout_token, source_amount)`,
+  which pays the converted amount from the DAO's balance.
+- **Other errors:** `OracleNotSet` (13), `InvalidAmount` (17), `Overflow` (18).
+
+Frontend: `getOracleQuote(from, to, amount)` (needs `VITE_HELPHONE_DAO_ID`)
+maps these codes to user-facing messages (`src/lib/treasury.ts`); the dashboard
+has a live quote form.
+
+The DAO crate previously did not compile (syntax errors in `cast_vote` /
+`execute_proposal`, missing `total_supply` client, non-`Copy` error enum);
+those are fixed so the oracle work is testable, and governance now has tests.
+
+## Bounded verification history (ring buffer)
+
+`record_expert_verification` keeps at most **500** entries per wallet. When a wallet's history is full, recording a new entry overwrites the oldest one (FIFO) and emits an `Evicted` event.
+
+| Function | Returns |
+| --- | --- |
+| `get_expert_verification_count(wallet)` | Verifications ever recorded, evicted ones included. Also the index the next one gets |
+| `get_expert_verification_oldest(wallet)` | Index of the oldest entry still readable (`count - 500`, floored at 0) |
+| `get_expert_verification_capacity()` | `500` |
+| `get_expert_verification(wallet, index)` | The entry, or `None` if evicted or not yet written |
+
+`Evicted` event: topics `["evicted", wallet]`, data `{ index, record }` where `record` is the full displaced `ExpertVerification`, so an indexer can archive it before it is unreadable on chain.
+
+See `docs/storage-optimization.md` for the layout, rent and compatibility notes.

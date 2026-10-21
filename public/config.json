@@ -1,0 +1,90 @@
+{
+  "version": "1.0.0",
+  "updatedAt": "2026-09-24T16:00:00Z",
+  "flags": {
+    "emergency_broadcaster": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "roles": ["admin", "responder", "user"],
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "soroban_state_backup": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "roles": ["admin", "responder"]
+      }
+    },
+    "passkey_authentication": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "environmentOverrides": {
+        "development": true,
+        "production": true
+      }
+    },
+    "canary_map_clustering": {
+      "enabled": true,
+      "rolloutPercentage": 50,
+      "targets": {
+        "environments": ["staging", "development"]
+      }
+    },
+    "encrypted_dispatch": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "roles": ["responder", "user"],
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "experimental_zk_v2": {
+      "enabled": false,
+      "rolloutPercentage": 0
+    },
+    "foldable_resilience": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "slice_nav": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "slice_hero": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "multilingualSearchV2": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "reputationGatedRanking": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "anomalyDetectorV2": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    }
+  }
+}

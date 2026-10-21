@@ -1,0 +1,105 @@
+{
+  "spike": "#605",
+  "generatedAt": "2026-09-23",
+  "source": "Transcribed from the benchmark log; the run was stopped after the N=5 job started to meet the time box, so the script did not write this file itself.",
+  "environment": {
+    "node": "v22.22.2",
+    "cpu": "Intel(R) Core(TM) i5-4300U CPU @ 1.90GHz",
+    "cores": 4,
+    "totalMemGB": 11.6,
+    "bbjs": "0.87.9",
+    "noirJs": "1.0.0-beta.9",
+    "nargo": "1.0.0-beta.9"
+  },
+  "circuits": {
+    "responder_credential": {
+      "gates": 3738,
+      "dyadicSize": 4096,
+      "log2": 12
+    },
+    "recursive_verifier_n1": {
+      "gates": 664993,
+      "dyadicSize": 1048576,
+      "log2": 20
+    },
+    "recursive_verifier_n2": {
+      "gates": 1389265,
+      "dyadicSize": 2097152,
+      "log2": 21
+    },
+    "recursive_verifier_n5": {
+      "gates": 3562082,
+      "dyadicSize": 4194304,
+      "log2": 22
+    }
+  },
+  "inner": {
+    "provingMs": [
+      2347,
+      763,
+      682,
+      640,
+      612
+    ],
+    "proofFields": 456,
+    "publicInputs": 5,
+    "verifyMsEach": [
+      51,
+      40,
+      43,
+      39,
+      41
+    ],
+    "verifyAllFiveMs": 214,
+    "vkGenMs": 157,
+    "vkFields": 112
+  },
+  "outer": [
+    {
+      "n": 1,
+      "threads": 4,
+      "provingMs": 99106,
+      "proofBytes": 14592,
+      "publicInputs": 6,
+      "vkGenMs": 25829,
+      "verified": true,
+      "verifyMs": {
+        "first": 57,
+        "warmMedian": 39
+      },
+      "peakRssMB": 2597,
+      "baselineRssMB": 46
+    },
+    {
+      "n": 2,
+      "threads": 4,
+      "error": "unreachable (out of memory at the 4 GiB WASM32 limit)",
+      "peakRssMB": 4026
+    },
+    {
+      "n": 5,
+      "threads": 4,
+      "status": "not completed: stopped for time; 2^22 circuit is 2x the N=2 circuit that already exceeded the WASM limit"
+    },
+    {
+      "n": 1,
+      "threads": 1,
+      "status": "not run (time box)"
+    },
+    {
+      "n": 1,
+      "threads": 4,
+      "maxPages": 16384,
+      "status": "not run (time box); N=1 peaks at 2.6 GB, above the 1 GiB cap"
+    },
+    {
+      "n": 1,
+      "threads": 4,
+      "keccak": true,
+      "status": "not run (time box)"
+    }
+  ],
+  "notes": [
+    "An earlier N=1 run measured 93.1 s proving and 2,625 MB peak RSS; an earlier N=2 run peaked at 3,869 MB before the same trap."
+  ]
+}

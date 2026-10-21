@@ -1,0 +1,336 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "HelPhone Federation Protocol API",
+    "version": "1.0.0",
+    "description": "Federation Protocol specification for peer-to-peer interoperability between independent HelPhone deployments without a central server (ISP-144). Covers cross-instance emergency dispatch, identity trust-bundle bridging, CRDT cross-domain sync, and mutual-aid IOU settlement."
+  },
+  "servers": [
+    {
+      "url": "http://localhost:3001",
+      "description": "Local HelPhone Instance A"
+    },
+    {
+      "url": "http://localhost:3002",
+      "description": "Local HelPhone Instance B (Peer)"
+    }
+  ],
+  "paths": {
+    "/api/federation/trust-bundle": {
+      "get": {
+        "summary": "Export local deployment trust bundle",
+        "description": "Exports signed trust bundle including Aegis Vault root commitment, expert registry hash, rotation counter, and revoked identities list.",
+        "responses": {
+          "200": {
+            "description": "Signed Trust Bundle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrustBundleResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/federation/trust-bundle/gossip": {
+      "post": {
+        "summary": "Gossip peer trust bundle",
+        "description": "Ingests peer deployment's signed trust bundle with rotation counter validation and stale bundle downgrade policy.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["trustBundle"],
+                "properties": {
+                  "trustBundle": {
+                    "$ref": "#/components/schemas/TrustBundle"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Trust bundle accepted"
+          },
+          "403": {
+            "description": "Signature verification failed"
+          },
+          "409": {
+            "description": "Stale rotation counter rejected"
+          }
+        }
+      }
+    },
+    "/api/federation/dispatch": {
+      "post": {
+        "summary": "Cross-instance dispatch ingestion",
+        "description": "Receives signed federated envelope dispatching an emergency request to local responders from a foreign deployment.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["envelope"],
+                "properties": {
+                  "envelope": {
+                    "$ref": "#/components/schemas/FederatedEnvelope"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dispatch accepted and signed acknowledgement returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "message": { "type": "string" },
+                    "ackEnvelope": { "$ref": "#/components/schemas/FederatedEnvelope" }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Envelope signature or replay check failed"
+          },
+          "403": {
+            "description": "Sender identity revoked or untrusted peer"
+          },
+          "409": {
+            "description": "Replay detected"
+          }
+        }
+      }
+    },
+    "/api/federation/ack": {
+      "post": {
+        "summary": "Cross-instance dispatch acknowledgement",
+        "description": "Receives signed acknowledgement from foreign deployment confirming responder acceptance of dispatched incident.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["envelope"],
+                "properties": {
+                  "envelope": {
+                    "$ref": "#/components/schemas/FederatedEnvelope"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Acknowledgement recorded"
+          },
+          "401": {
+            "description": "Invalid acknowledgement signature"
+          }
+        }
+      }
+    },
+    "/api/federation/sync": {
+      "post": {
+        "summary": "CRDT cross-domain delta exchange",
+        "description": "Exchanges namespaced CRDT operations with peer without requiring a central coordinator.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["envelope"],
+                "properties": {
+                  "envelope": {
+                    "$ref": "#/components/schemas/FederatedEnvelope"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Deltas applied and local return deltas provided"
+          }
+        }
+      }
+    },
+    "/api/federation/settlement": {
+      "post": {
+        "summary": "Cross-instance aid settlement and IOU netting",
+        "description": "Issues cross-instance aid IOUs, executes bilateral netting, or escalates defaulted obligations to DAO proposal.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["action"],
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": ["issue", "net", "escalate_default"]
+                  },
+                  "incidentId": { "type": "string" },
+                  "debtorInstance": { "type": "string" },
+                  "creditorInstance": { "type": "string" },
+                  "stroops": { "type": "number" },
+                  "iouId": { "type": "string" },
+                  "defaultReason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Settlement action executed successfully"
+          }
+        }
+      }
+    },
+    "/api/federation/status": {
+      "get": {
+        "summary": "Federation node status",
+        "description": "Queries local node federation state, peering trust bundles, replay cache, and active IOUs.",
+        "responses": {
+          "200": {
+            "description": "Federation status report"
+          }
+        }
+      }
+    },
+    "/api/history/timeline/{requestId}": {
+      "get": {
+        "summary": "Merged cross-border incident timeline",
+        "description": "Returns chronological event timeline with explicit provenance labels, custody markers, and tamper evidence alerts.",
+        "parameters": [
+          {
+            "name": "requestId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Timeline with provenance demarcation"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TrustBundle": {
+        "type": "object",
+        "required": [
+          "instanceId",
+          "domain",
+          "aegisVaultRoot",
+          "rotationCounter",
+          "expertRegistryHash",
+          "issuedAt",
+          "expiresAt",
+          "signature",
+          "signingPublicKey"
+        ],
+        "properties": {
+          "instanceId": { "type": "string" },
+          "domain": { "type": "string" },
+          "aegisVaultRoot": { "type": "string" },
+          "rotationCounter": { "type": "integer" },
+          "expertRegistryHash": { "type": "string" },
+          "revokedIdentities": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "issuedAt": { "type": "integer" },
+          "expiresAt": { "type": "integer" },
+          "signature": { "type": "string" },
+          "signingPublicKey": { "type": "string" }
+        }
+      },
+      "TrustBundleResponse": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "trustBundle": { "$ref": "#/components/schemas/TrustBundle" }
+        }
+      },
+      "FederatedEnvelope": {
+        "type": "object",
+        "required": [
+          "version",
+          "envelopeId",
+          "senderInstance",
+          "recipientInstance",
+          "nonce",
+          "timestamp",
+          "trustBundleRef",
+          "payloadType",
+          "payload",
+          "idempotencyKey",
+          "signature",
+          "senderPublicKey"
+        ],
+        "properties": {
+          "version": { "type": "string", "enum": ["1.0"] },
+          "envelopeId": { "type": "string" },
+          "senderInstance": { "type": "string" },
+          "recipientInstance": { "type": "string" },
+          "nonce": { "type": "string" },
+          "timestamp": { "type": "integer" },
+          "trustBundleRef": {
+            "type": "object",
+            "properties": {
+              "instanceId": { "type": "string" },
+              "rotationCounter": { "type": "integer" }
+            }
+          },
+          "payloadType": {
+            "type": "string",
+            "enum": ["dispatch", "ack", "status_update", "crdt_delta", "settlement_iou"]
+          },
+          "payload": { "type": "object" },
+          "idempotencyKey": { "type": "string" },
+          "signature": { "type": "string" },
+          "senderPublicKey": { "type": "string" }
+        }
+      },
+      "CrossInstanceIou": {
+        "type": "object",
+        "required": ["iouId", "debtorInstance", "creditorInstance", "incidentId", "stroops", "status", "issuedAt"],
+        "properties": {
+          "iouId": { "type": "string" },
+          "debtorInstance": { "type": "string" },
+          "creditorInstance": { "type": "string" },
+          "incidentId": { "type": "string" },
+          "stroops": { "type": "number" },
+          "status": { "type": "string", "enum": ["issued", "netted", "defaulted"] },
+          "issuedAt": { "type": "integer" },
+          "nettedAt": { "type": "integer" },
+          "feeStroops": { "type": "number" },
+          "notes": { "type": "string" }
+        }
+      }
+    }
+  }
+}

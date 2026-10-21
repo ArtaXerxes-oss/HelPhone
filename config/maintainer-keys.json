@@ -1,0 +1,18 @@
+{
+  "$comment": "Maintainer key policy for scripts/security/verify_maintainer_keys.js (#619). See docs/security-runbook.md.",
+  "keyservers": ["https://keys.openpgp.org", "https://keyserver.ubuntu.com"],
+  "cacheDir": ".cache/maintainer-keys",
+  "cacheTtlHours": 6,
+  "minCertifications": 1,
+  "trustedKeys": [
+    {
+      "fingerprint": "968479A1AFF927E37D1A566BB5690EEEBB952194",
+      "owner": "GitHub web-flow (merges and edits made in the GitHub UI, 2024+)"
+    },
+    {
+      "fingerprint": "5DE3E0509C47EA3CF04A42D34AEE18F83AFDEB23",
+      "owner": "GitHub web-flow (expired 2024-01-16; still valid for older commits)"
+    }
+  ],
+  "dependencies": []
+}

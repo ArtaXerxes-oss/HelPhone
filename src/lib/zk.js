@@ -1,4 +1,5 @@
 import { StrKey } from '@stellar/stellar-sdk'
+import { getWasmMemoryPool } from './wasmMemory.js'
 
 let _noir = null
 let _backend = null
@@ -485,7 +486,14 @@ async function _browserProof({ lat, lng, campaignId = '1', recipientAddress, zon
   }
 
   onLog('Executing Noir circuit witness')
+  // WASM memory pooling: recycle buffers across runs to avoid re-allocating WASM memory
+  const memPool = getWasmMemoryPool()
+  let witnessBuf = null
+  let proofScratch = null
+  try { witnessBuf = memPool.allocate(256 * 1024); proofScratch = memPool.allocate(2 * 1024 * 1024) } catch {}
   const { witness, returnValue } = await _noir.execute(inputs)
+  if (witnessBuf) memPool.release(witnessBuf)
+  // keep proofScratch until after proof generation
 
   onLog('Preparing Barretenberg prover')
   try {
@@ -513,10 +521,12 @@ async function _browserProof({ lat, lng, campaignId = '1', recipientAddress, zon
       progressMessage: seconds => `Still generating UltraHonk proof (${seconds}s). Keep this tab open.`,
     })
   } catch (err) {
+    if (proofScratch) try { memPool.release(proofScratch) } catch {}
     await resetBackend()
     throw err
   }
   const { proof, publicInputs } = proofResult
+  if (proofScratch) try { memPool.release(proofScratch) } catch {}
   onLog('UltraHonk proof generated')
 
   // returnValue is the nullifier (field element)

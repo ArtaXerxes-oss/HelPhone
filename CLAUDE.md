@@ -117,9 +117,10 @@ bb write_vk -b target/aegis.json -o target/vk   # extract VK for contract deploy
 `noir_verifier` wraps `ultrahonk_rust_verifier` — deployed once, stores VK on-chain, exposes `verify_proof(public_inputs, proof_bytes)`.
 
 `aegis_vault` depends on `noir_verifier` via `{ path = "../noir_verifier" }`. Key entry points:
-- `__constructor(verifier: Address, token: Address)` — set verifier contract + USDC token.
+- `__constructor(verifier: Address, token: Address, admin: Address)` — set verifier contract, USDC token, admin, and the default 50 USDC payout.
+- `set_payout_amount(admin, amount)` / `payout_amount()` — admin-only payout configuration in token base units.
 - `fund_zone(funder, campaign_id, amount)` — pull USDC from funder.
-- `claim_aid(recipient, public_inputs: Bytes[224], proof_bytes)` — verify ZK proof, check nullifier not spent, pay 50 USDC.
+- `claim_aid(recipient, public_inputs: Bytes[224], proof_bytes)` — verify ZK proof, check nullifier not spent, pay the configured payout amount.
 - `campaign_balance(campaign_id)` / `is_claimed(nullifier)` — read-only helpers.
 
 **Public inputs layout** (224 bytes = 7 × 32 BE):

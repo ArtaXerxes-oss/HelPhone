@@ -1,0 +1,7 @@
+[package]
+name = "responder_credential"
+type = "bin"
+authors = ["HelPhone"]
+compiler_version = ">=1.0.0"
+
+[dependencies]

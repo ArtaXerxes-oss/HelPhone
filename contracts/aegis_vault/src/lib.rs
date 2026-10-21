@@ -1,299 +1,487 @@
 #![no_std]
 
+//! Aegis Vault — ZK-gated aid disbursement with a multi-asset treasury.
+//!
+//! Campaign funds are held per campaign; every asset the vault touches is also
+//! tracked as a treasury reserve (see [`treasury`]) so disbursements can be
+//! capped per day and reserves can be rebalanced toward target weights.
+//!
+//! Zone bounding boxes can additionally be checked against differential-privacy
+//! bounds (see [`privacy`], #529); the checks are off until an admin enables them.
+
+mod privacy;
+mod treasury;
+
+use privacy::{BoundingBox, PrivacyError, PrivacyParams, TrackedZone, MAX_TRACKED_ZONES};
+
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, symbol_short,
-    token, Address, Bytes, BytesN, Env, InvokeError, IntoVal, Symbol, Val,
-    Vec as SorobanVec,
-    xdr::ToXdr,
+    contract, contracterror, contractimpl, contracttype, token, vec, Address, Bytes, BytesN, Env,
+    IntoVal, Symbol, Vec,
 };
 
-// ── Public inputs layout (224 bytes = 7 x 32) ───────────────────────────────
-// [  0.. 32] box_x_min       encoded longitude lower bound (u64 as 32-byte BE)
-// [ 32.. 64] box_x_max       encoded longitude upper bound
-// [ 64.. 96] box_y_min       encoded latitude  lower bound
-// [ 96..128] box_y_max       encoded latitude  upper bound
-// [128..160] campaign_id     zone identifier   (Field as 32-byte BE)
-// [160..192] recipient_address  Stellar pubkey padded to Field
-// [192..224] nullifier       Poseidon2(secret_id, campaign_id) — proof return value
-const CAMPAIGN_INPUTS_LEN: usize = 160;
-const PUBLIC_INPUTS_LEN: usize = 224;
-const PAYOUT_STROOP: i128 = 50 * 10_000_000; // 50 USDC (7 decimals)
-const BN254_FIELD_PRIME: [u8; 32] = [
-    0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
-    0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
-    0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d,
-    0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
-];
+/// 50 tokens at 7 decimals.
+pub const DEFAULT_PAYOUT_STROOP: i128 = 500_000_000;
+/// Default per-asset daily disbursement cap: 10 default payouts.
+pub const DEFAULT_DAILY_LIMIT_STROOP: i128 = 10 * DEFAULT_PAYOUT_STROOP;
+/// 5 × 32-byte big-endian public inputs up to and including `campaign_id`.
+pub const CAMPAIGN_INPUTS_LEN: usize = 160;
+/// 7 × 32-byte big-endian public inputs (…, recipient, nullifier).
+pub const PUBLIC_INPUTS_LEN: usize = 224;
+
+#[contracterror]
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultError {
+    NotAdmin = 1,
+    InvalidAmount = 2,
+    InvalidPublicInputs = 3,
+    AlreadyClaimed = 4,
+    VerificationFailed = 5,
+    InsufficientFunds = 6,
+    NotInitialized = 7,
+    Overflow = 8,
+    DailyLimitExceeded = 9,
+    UnknownAsset = 10,
+    InvalidWeights = 11,
+    InvalidPrices = 12,
+    // Differential-privacy zone checks (#529). All fire before any token moves.
+    InvalidPrivacyParams = 13,
+    BoxMalformed = 14,
+    BoxNotOnGrid = 15,
+    BoxTooSmall = 16,
+    ZoneOverlapTooSmall = 17,
+    ReentrantCall = 18,
+}
+
+#[derive(Clone)]
+#[contracttype]
+enum DataKey {
+    Verifier,
+    Token,
+    Admin,
+    Payout,
+    Campaign(BytesN<32>),
+    Claimed(BytesN<32>),
+    Privacy,
+    TrackedZones,
+    ReentrancyLock,
+}
+
+fn get<T: soroban_sdk::TryFromVal<Env, soroban_sdk::Val>>(
+    env: &Env,
+    key: &DataKey,
+) -> Result<T, VaultError> {
+    env.storage()
+        .instance()
+        .get(key)
+        .ok_or(VaultError::NotInitialized)
+}
+
+fn require_admin(env: &Env, admin: &Address) -> Result<(), VaultError> {
+    let stored: Address = get(env, &DataKey::Admin)?;
+    if *admin != stored {
+        return Err(VaultError::NotAdmin);
+    }
+    admin.require_auth();
+    Ok(())
+}
+
+fn enter_reentrancy_guard(env: &Env) -> Result<(), VaultError> {
+    if env
+        .storage()
+        .instance()
+        .get::<_, bool>(&DataKey::ReentrancyLock)
+        .unwrap_or(false)
+    {
+        return Err(VaultError::ReentrantCall);
+    }
+    env.storage().instance().set(&DataKey::ReentrancyLock, &true);
+    Ok(())
+}
+
+fn exit_reentrancy_guard(env: &Env) {
+    env.storage().instance().remove(&DataKey::ReentrancyLock);
+}
+
+fn with_reentrancy_guard<T>(
+    env: &Env,
+    f: impl FnOnce() -> Result<T, VaultError>,
+) -> Result<T, VaultError> {
+    enter_reentrancy_guard(env)?;
+    let result = f();
+    exit_reentrancy_guard(env);
+    result
+}
+
+/// Keep tracked zones alive: bump when under ~30 days, to ~90 (5 s ledgers).
+const PZONES_TTL_THRESHOLD: u32 = 17_280 * 30;
+const PZONES_TTL_EXTEND_TO: u32 = 17_280 * 90;
+
+fn privacy_error(e: PrivacyError) -> VaultError {
+    match e {
+        PrivacyError::InvalidParams => VaultError::InvalidPrivacyParams,
+        PrivacyError::Malformed => VaultError::BoxMalformed,
+        PrivacyError::NotOnGrid => VaultError::BoxNotOnGrid,
+        PrivacyError::TooSmall => VaultError::BoxTooSmall,
+        PrivacyError::OverlapTooSmall => VaultError::ZoneOverlapTooSmall,
+    }
+}
+
+fn privacy_params(env: &Env) -> PrivacyParams {
+    env.storage()
+        .instance()
+        .get(&DataKey::Privacy)
+        .unwrap_or(PrivacyParams::defaults())
+}
+
+fn tracked_zones(env: &Env) -> Vec<TrackedZone> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::TrackedZones)
+        .unwrap_or(Vec::new(env))
+}
+
+/// Validate a zone's box (Laplace bound + grid) and its overlap with every
+/// other tracked zone. Read-only. A no-op while privacy checks are disabled.
+fn check_zone_privacy(
+    env: &Env,
+    campaign_id: &BytesN<32>,
+    public_inputs_prefix: &Bytes,
+) -> Result<Option<BoundingBox>, VaultError> {
+    let params = privacy_params(env);
+    if !params.enabled {
+        return Ok(None);
+    }
+    if public_inputs_prefix.len() < 128 {
+        return Err(VaultError::InvalidPublicInputs);
+    }
+    let mut buf = [0u8; 128];
+    public_inputs_prefix.slice(0..128).copy_into_slice(&mut buf);
+    let bbox = privacy::parse_box(&buf).ok_or(VaultError::BoxMalformed)?;
+    privacy::validate_box(&params, &bbox).map_err(privacy_error)?;
+    for zone in tracked_zones(env).iter() {
+        // Re-funding a campaign is not an overlap with itself.
+        if zone.campaign_id != *campaign_id {
+            privacy::check_overlap(&params, &bbox, &zone.bbox).map_err(privacy_error)?;
+        }
+    }
+    Ok(Some(bbox))
+}
+
+/// Remember `bbox` for `campaign_id` so later zones are checked against it.
+/// Once `MAX_TRACKED_ZONES` are held, the oldest is forgotten.
+fn track_zone(env: &Env, campaign_id: &BytesN<32>, bbox: BoundingBox) {
+    let mut zones = tracked_zones(env);
+    let mut existing = None;
+    for (i, z) in zones.iter().enumerate() {
+        if z.campaign_id == *campaign_id {
+            existing = Some(i as u32);
+            break;
+        }
+    }
+    let entry = TrackedZone { campaign_id: campaign_id.clone(), bbox };
+    match existing {
+        Some(i) => zones.set(i, entry),
+        None => {
+            if zones.len() >= MAX_TRACKED_ZONES {
+                zones.remove(0);
+            }
+            zones.push_back(entry);
+        }
+    }
+    env.storage().persistent().set(&DataKey::TrackedZones, &zones);
+    env.storage().persistent().extend_ttl(
+        &DataKey::TrackedZones,
+        PZONES_TTL_THRESHOLD,
+        PZONES_TTL_EXTEND_TO,
+    );
+}
 
 #[contract]
 pub struct AegisVault;
 
-#[contracterror]
-#[repr(u32)]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub enum VaultError {
-    AlreadyClaimed = 1,   // nullifier already in storage
-    VerificationFailed = 2,
-    InsufficientFunds = 3,
-    InvalidPublicInputs = 4,
-    VerifierNotSet = 5,
-    TokenNotSet = 6,
-    RecipientMismatch = 7,
-}
-
-#[contractevent(topics = ["claimed"], data_format = "map")]
-pub struct ClaimedEvent<'a> {
-    #[topic]
-    pub campaign_id: &'a BytesN<32>,
-    pub nullifier: &'a BytesN<32>,
-    pub recipient: &'a Address,
-}
-
-#[contractevent(topics = ["funded"], data_format = "map")]
-pub struct FundedEvent<'a> {
-    #[topic]
-    pub campaign_id: &'a BytesN<32>,
-    pub amount: &'a i128,
-    pub funder: &'a Address,
-}
-
-fn key_verifier()  -> Symbol { symbol_short!("verifier") }
-fn key_token()     -> Symbol { symbol_short!("token") }
-fn key_nullifier_prefix() -> Symbol { symbol_short!("nf") }
-fn key_campaign_prefix()  -> Symbol { symbol_short!("camp") }
-fn key_zone_prefix()      -> Symbol { symbol_short!("zone") }
-
-fn parse_public_inputs(
-    env: &Env,
-    public_inputs: &Bytes,
-) -> Result<(Bytes, BytesN<32>, BytesN<32>, BytesN<32>), VaultError> {
-    if public_inputs.len() as usize != PUBLIC_INPUTS_LEN {
-        return Err(VaultError::InvalidPublicInputs);
-    }
-    let mut buf = [0u8; PUBLIC_INPUTS_LEN];
-    public_inputs.copy_into_slice(&mut buf);
-
-    let mut campaign_id = [0u8; 32];
-    campaign_id.copy_from_slice(&buf[128..160]);
-    let mut recipient_field = [0u8; 32];
-    recipient_field.copy_from_slice(&buf[160..192]);
-    let mut nullifier = [0u8; 32];
-    nullifier.copy_from_slice(&buf[192..224]);
-
-    let public_inputs_prefix = Bytes::from_slice(env, &buf[0..CAMPAIGN_INPUTS_LEN]);
-
-    Ok((
-        public_inputs_prefix,
-        BytesN::from_array(env, &campaign_id),
-        BytesN::from_array(env, &recipient_field),
-        BytesN::from_array(env, &nullifier),
-    ))
-}
-
-fn address_to_field_bytes(env: &Env, recipient: &Address) -> BytesN<32> {
-    let serialized = recipient.to_xdr(env);
-    let mut bytes = [0u8; 32];
-    let len = serialized.len() as usize;
-    if len >= 32 {
-        let start = len - 32;
-        for i in 0..32 {
-            bytes[i] = serialized.get((start + i) as u32).unwrap();
-        }
-    }
-    reduce_mod_bn254(&mut bytes);
-    BytesN::from_array(env, &bytes)
-}
-
-fn cmp_be(a: &[u8; 32], b: &[u8; 32]) -> i32 {
-    for i in 0..32 {
-        if a[i] > b[i] {
-            return 1;
-        }
-        if a[i] < b[i] {
-            return -1;
-        }
-    }
-    0
-}
-
-fn sub_be(a: &mut [u8; 32], b: &[u8; 32]) {
-    let mut borrow = 0u16;
-    for i in (0..32).rev() {
-        let av = a[i] as u16;
-        let bv = b[i] as u16 + borrow;
-        if av >= bv {
-            a[i] = (av - bv) as u8;
-            borrow = 0;
-        } else {
-            a[i] = ((av + 256) - bv) as u8;
-            borrow = 1;
-        }
-    }
-}
-
-fn reduce_mod_bn254(bytes: &mut [u8; 32]) {
-    while cmp_be(bytes, &BN254_FIELD_PRIME) >= 0 {
-        sub_be(bytes, &BN254_FIELD_PRIME);
-    }
-}
-
-fn call_verify_proof(
-    env: &Env,
-    verifier: &Address,
-    public_inputs: Bytes,
-    proof_bytes: Bytes,
-) -> Result<(), VaultError> {
-    let mut args: SorobanVec<Val> = SorobanVec::new(env);
-    args.push_back(public_inputs.into_val(env));
-    args.push_back(proof_bytes.into_val(env));
-    env.try_invoke_contract::<(), InvokeError>(verifier, &Symbol::new(env, "verify_proof"), args)
-        .map_err(|_| VaultError::VerificationFailed)?
-        .map_err(|_| VaultError::VerificationFailed)
-}
-
 #[contractimpl]
 impl AegisVault {
-    /// Deploy: set verifier contract address and reward token.
-    pub fn __constructor(
-        env: Env,
-        verifier: Address,
-        token: Address,
-    ) -> Result<(), VaultError> {
-        env.storage().instance().set(&key_verifier(), &verifier);
-        env.storage().instance().set(&key_token(), &token);
+    pub fn __constructor(env: Env, verifier: Address, token: Address, admin: Address) {
+        let s = env.storage().instance();
+        s.set(&DataKey::Verifier, &verifier);
+        s.set(&DataKey::Token, &token);
+        s.set(&DataKey::Admin, &admin);
+        s.set(&DataKey::Payout, &DEFAULT_PAYOUT_STROOP);
+        treasury::register_asset(&env, &token);
+        treasury::set_daily_limit(&env, &token, DEFAULT_DAILY_LIMIT_STROOP);
+    }
+
+    // ── Admin / config ─────────────────────────────────────────────
+    pub fn get_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Admin)
+    }
+
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), VaultError> {
+        let admin: Address = get(&env, &DataKey::Admin)?;
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
         Ok(())
     }
 
-    /// Fund a campaign zone. Transfers `amount` USDC from funder to this contract.
-    /// `public_inputs_prefix` is 160 bytes:
-    /// box_x_min | box_x_max | box_y_min | box_y_max | campaign_id.
-    /// Claims must use exactly this zone prefix.
+    pub fn payout_amount(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&DataKey::Payout)
+            .unwrap_or(DEFAULT_PAYOUT_STROOP)
+    }
+
+    pub fn set_payout_amount(env: Env, admin: Address, amount: i128) -> Result<(), VaultError> {
+        require_admin(&env, &admin)?;
+        if amount <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+        env.storage().instance().set(&DataKey::Payout, &amount);
+        Ok(())
+    }
+
+    // ── Differential-privacy zone checks (#529) ────────────────────
+    /// Configure the zone checks. Admin only. While `params.enabled` is false
+    /// (the default) zones are not checked. Changing parameters never affects
+    /// zones that are already funded.
+    pub fn set_privacy_params(
+        env: Env,
+        admin: Address,
+        params: PrivacyParams,
+    ) -> Result<(), VaultError> {
+        require_admin(&env, &admin)?;
+        params.validate().map_err(privacy_error)?;
+        env.storage().instance().set(&DataKey::Privacy, &params);
+        Ok(())
+    }
+
+    /// Current privacy parameters (defaults, disabled, until an admin sets them).
+    pub fn privacy_params(env: Env) -> PrivacyParams {
+        privacy_params(&env)
+    }
+
+    /// Smallest allowed zone side, in stored-coordinate units: the Laplace
+    /// tail bound `sensitivity / epsilon * tail_mult`, rounded up to the grid.
+    /// 0 if the stored parameters are invalid.
+    pub fn min_box_dimension(env: Env) -> u64 {
+        privacy::min_dimension(&privacy_params(&env)).unwrap_or(0)
+    }
+
+    /// Dry-run the zone checks for a 160-byte `public_inputs_prefix` without
+    /// funding or registering anything, so a client can preflight a zone.
+    pub fn validate_zone(env: Env, public_inputs_prefix: Bytes) -> Result<(), VaultError> {
+        if public_inputs_prefix.len() as usize != CAMPAIGN_INPUTS_LEN {
+            return Err(VaultError::InvalidPublicInputs);
+        }
+        let campaign_id: BytesN<32> = public_inputs_prefix.slice(128..160).try_into().unwrap();
+        check_zone_privacy(&env, &campaign_id, &public_inputs_prefix)?;
+        Ok(())
+    }
+
+    // ── Campaigns ──────────────────────────────────────────────────
+    pub fn campaign_balance(env: Env, campaign_id: BytesN<32>) -> i128 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Campaign(campaign_id))
+            .unwrap_or(0)
+    }
+
+    pub fn is_claimed(env: Env, nullifier: BytesN<32>) -> bool {
+        env.storage().persistent().has(&DataKey::Claimed(nullifier))
+    }
+
     pub fn fund_zone(
         env: Env,
         funder: Address,
         public_inputs_prefix: Bytes,
         amount: i128,
     ) -> Result<(), VaultError> {
-        if public_inputs_prefix.len() as usize != CAMPAIGN_INPUTS_LEN {
-            return Err(VaultError::InvalidPublicInputs);
-        }
-        funder.require_auth();
-
-        let mut buf = [0u8; CAMPAIGN_INPUTS_LEN];
-        public_inputs_prefix.copy_into_slice(&mut buf);
-        let mut campaign_id_bytes = [0u8; 32];
-        campaign_id_bytes.copy_from_slice(&buf[128..160]);
-        let campaign_id = BytesN::from_array(&env, &campaign_id_bytes);
-
-        let token_addr: Address = env
-            .storage().instance().get(&key_token())
-            .ok_or(VaultError::TokenNotSet)?;
-
-        // Pull tokens from funder into this contract.
-        let token_client = token::TokenClient::new(&env, &token_addr);
-        token_client.transfer(&funder, &env.current_contract_address(), &amount);
-
-        // Update campaign balance.
-        let camp_key = (key_campaign_prefix(), campaign_id.clone());
-        let current: i128 = env.storage().instance().get(&camp_key).unwrap_or(0i128);
-        env.storage().instance().set(&camp_key, &(current + amount));
-        let zone_key = (key_zone_prefix(), campaign_id.clone());
-        env.storage().instance().set(&zone_key, &public_inputs_prefix);
-
-        FundedEvent {
-            campaign_id: &campaign_id,
-            amount: &amount,
-            funder: &funder,
-        }
-        .publish(&env);
-
-        Ok(())
+        with_reentrancy_guard(&env, || {
+            funder.require_auth();
+            if amount <= 0 {
+                return Err(VaultError::InvalidAmount);
+            }
+            if public_inputs_prefix.len() as usize != CAMPAIGN_INPUTS_LEN {
+                return Err(VaultError::InvalidPublicInputs);
+            }
+            let campaign_id: BytesN<32> = public_inputs_prefix.slice(128..160).try_into().unwrap();
+            // Differential-privacy checks run before any token moves (#529).
+            let tracked = check_zone_privacy(&env, &campaign_id, &public_inputs_prefix)?;
+            let asset: Address = get(&env, &DataKey::Token)?;
+            token::Client::new(&env, &asset).transfer(
+                &funder,
+                &env.current_contract_address(),
+                &amount,
+            );
+            if let Some(bbox) = tracked {
+                track_zone(&env, &campaign_id, bbox);
+            }
+            let key = DataKey::Campaign(campaign_id);
+            let cur: i128 = env.storage().persistent().get(&key).unwrap_or(0);
+            let next = cur.checked_add(amount).ok_or(VaultError::Overflow)?;
+            env.storage().persistent().set(&key, &next);
+            treasury::credit(&env, &asset, amount)
+        })
     }
 
-    /// Claim aid for a campaign.
-    /// - `recipient`     : Stellar address that receives 50 USDC. Must authorize this call.
-    /// - `public_inputs` : 224-byte array produced by `bb prove`.
-    /// - `proof_bytes`   : UltraHonk proof produced by `bb prove`.
-    ///
-    /// The ZK proof guarantees:
-    ///   1. The claimer was inside the zone bounding box.
-    ///   2. The nullifier is unique — prevents double-claiming without revealing identity.
-    ///   3. The recipient_address is bound — prevents front-running.
     pub fn claim_aid(
         env: Env,
         recipient: Address,
         public_inputs: Bytes,
         proof_bytes: Bytes,
     ) -> Result<(), VaultError> {
-        // Recipient must sign to authorize the payout to themselves.
-        recipient.require_auth();
+        with_reentrancy_guard(&env, || {
+            recipient.require_auth();
+            if public_inputs.len() as usize != PUBLIC_INPUTS_LEN {
+                return Err(VaultError::InvalidPublicInputs);
+            }
+            let nullifier: BytesN<32> = public_inputs.slice(192..224).try_into().unwrap();
+            let campaign_id: BytesN<32> = public_inputs.slice(128..160).try_into().unwrap();
 
-        // Parse public inputs.
-        let (public_inputs_prefix, campaign_id, recipient_field, nullifier) =
-            parse_public_inputs(&env, &public_inputs)?;
-        if recipient_field != address_to_field_bytes(&env, &recipient) {
-            return Err(VaultError::RecipientMismatch);
-        }
+            let claimed_key = DataKey::Claimed(nullifier);
+            if env.storage().persistent().has(&claimed_key) {
+                return Err(VaultError::AlreadyClaimed);
+            }
 
-        // Guard: nullifier must not already be spent.
-        let nf_key = (key_nullifier_prefix(), nullifier.clone());
-        if env.storage().instance().has(&nf_key) {
-            return Err(VaultError::AlreadyClaimed);
-        }
+            let verifier: Address = get(&env, &DataKey::Verifier)?;
+            let ok: bool = env.invoke_contract(
+                &verifier,
+                &Symbol::new(&env, "verify_proof"),
+                vec![&env, public_inputs.into_val(&env), proof_bytes.into_val(&env)],
+            );
+            if !ok {
+                return Err(VaultError::VerificationFailed);
+            }
 
-        // Check campaign has enough funds.
-        let camp_key = (key_campaign_prefix(), campaign_id.clone());
-        let balance: i128 = env
-            .storage().instance().get(&camp_key)
-            .unwrap_or(0i128);
-        if balance < PAYOUT_STROOP {
-            return Err(VaultError::InsufficientFunds);
-        }
-        let zone_key = (key_zone_prefix(), campaign_id.clone());
-        let stored_prefix: Bytes = env
-            .storage().instance().get(&zone_key)
-            .ok_or(VaultError::InvalidPublicInputs)?;
-        if stored_prefix != public_inputs_prefix {
-            return Err(VaultError::InvalidPublicInputs);
-        }
+            let payout = Self::payout_amount(env.clone());
+            let asset: Address = get(&env, &DataKey::Token)?;
+            let campaign_key = DataKey::Campaign(campaign_id);
+            let balance: i128 = env.storage().persistent().get(&campaign_key).unwrap_or(0);
+            if balance < payout {
+                return Err(VaultError::InsufficientFunds);
+            }
 
-        // Verify ZK proof against the stored verifier contract.
-        let verifier: Address = env
-            .storage().instance().get(&key_verifier())
-            .ok_or(VaultError::VerifierNotSet)?;
-        call_verify_proof(&env, &verifier, public_inputs, proof_bytes)?;
+            // Daily cap first: a rejected claim leaves nullifier + balances untouched.
+            treasury::debit_disbursement(&env, &asset, payout)?;
+            env.storage().persistent().set(&campaign_key, &(balance - payout));
+            env.storage().persistent().set(&claimed_key, &true);
+            token::Client::new(&env, &asset).transfer(
+                &env.current_contract_address(),
+                &recipient,
+                &payout,
+            );
+            Ok(())
+        })
+    }
 
-        // Mark nullifier spent AFTER successful verification.
-        env.storage().instance().set(&nf_key, &true);
+    // ── Treasury (multi-asset reserves) ────────────────────────────
+    pub fn treasury_assets(env: Env) -> Vec<Address> {
+        treasury::assets(&env)
+    }
 
-        // Deduct from campaign balance and pay recipient.
-        env.storage().instance().set(&camp_key, &(balance - PAYOUT_STROOP));
+    pub fn treasury_reserve(env: Env, asset: Address) -> i128 {
+        treasury::reserve(&env, &asset)
+    }
 
-        let token_addr: Address = env
-            .storage().instance().get(&key_token())
-            .ok_or(VaultError::TokenNotSet)?;
-        let token_client = token::TokenClient::new(&env, &token_addr);
-        token_client.transfer(&env.current_contract_address(), &recipient, &PAYOUT_STROOP);
-
-        ClaimedEvent {
-            campaign_id: &campaign_id,
-            nullifier: &nullifier,
-            recipient: &recipient,
-        }
-        .publish(&env);
-
+    /// Adds an asset to the treasury so it can hold reserves.
+    pub fn add_treasury_asset(env: Env, admin: Address, asset: Address) -> Result<(), VaultError> {
+        require_admin(&env, &admin)?;
+        treasury::register_asset(&env, &asset);
         Ok(())
     }
 
-    /// Returns remaining campaign balance in token base units.
-    pub fn campaign_balance(env: Env, campaign_id: BytesN<32>) -> i128 {
-        let camp_key = (key_campaign_prefix(), campaign_id);
-        env.storage().instance().get(&camp_key).unwrap_or(0i128)
+    /// Pulls `amount` of a registered asset from `from` into the treasury reserve.
+    pub fn treasury_deposit(
+        env: Env,
+        from: Address,
+        asset: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            from.require_auth();
+            if amount <= 0 {
+                return Err(VaultError::InvalidAmount);
+            }
+            if !treasury::is_registered(&env, &asset) {
+                return Err(VaultError::UnknownAsset);
+            }
+            token::Client::new(&env, &asset).transfer(&from, &env.current_contract_address(), &amount);
+            treasury::credit(&env, &asset, amount)
+        })
     }
 
-    /// Returns true if the nullifier has already been claimed.
-    pub fn is_claimed(env: Env, nullifier: BytesN<32>) -> bool {
-        let nf_key = (key_nullifier_prefix(), nullifier);
-        env.storage().instance().has(&nf_key)
+    /// Admin withdrawal from the treasury; counts against the daily cap.
+    pub fn treasury_withdraw(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        to: Address,
+        amount: i128,
+    ) -> Result<(), VaultError> {
+        with_reentrancy_guard(&env, || {
+            require_admin(&env, &admin)?;
+            if amount <= 0 {
+                return Err(VaultError::InvalidAmount);
+            }
+            treasury::debit_disbursement(&env, &asset, amount)?;
+            token::Client::new(&env, &asset).transfer(&env.current_contract_address(), &to, &amount);
+            Ok(())
+        })
+    }
+
+    /// Sets the max amount of `asset` that may leave the vault per UTC day.
+    pub fn set_daily_limit(
+        env: Env,
+        admin: Address,
+        asset: Address,
+        limit: i128,
+    ) -> Result<(), VaultError> {
+        require_admin(&env, &admin)?;
+        if limit <= 0 {
+            return Err(VaultError::InvalidAmount);
+        }
+        if !treasury::is_registered(&env, &asset) {
+            return Err(VaultError::UnknownAsset);
+        }
+        treasury::set_daily_limit(&env, &asset, limit);
+        Ok(())
+    }
+
+    pub fn daily_limit(env: Env, asset: Address) -> i128 {
+        treasury::daily_limit(&env, &asset)
+    }
+
+    pub fn spent_today(env: Env, asset: Address) -> i128 {
+        treasury::spent_today(&env, &asset)
+    }
+
+    pub fn remaining_today(env: Env, asset: Address) -> i128 {
+        treasury::remaining_today(&env, &asset)
+    }
+
+    /// Sets target reserve weights in basis points (sum must be ≤ 10_000).
+    pub fn set_target_weights(
+        env: Env,
+        admin: Address,
+        assets: Vec<Address>,
+        weights_bps: Vec<u32>,
+    ) -> Result<(), VaultError> {
+        require_admin(&env, &admin)?;
+        treasury::set_target_weights(&env, assets, weights_bps)
+    }
+
+    pub fn target_weight(env: Env, asset: Address) -> u32 {
+        treasury::target_weight(&env, &asset)
+    }
+
+    /// Read-only rebalance plan. `prices` are per-asset prices (same order as
+    /// `treasury_assets`) in a common quote unit; returns, per asset, the signed
+    /// amount (asset units) to buy (+) or sell (−) to reach its target weight.
+    /// Swaps are executed off-chain / by a DEX adapter; the vault never trades.
+    pub fn rebalance_plan(env: Env, prices: Vec<i128>) -> Result<Vec<i128>, VaultError> {
+        treasury::rebalance_plan(&env, prices)
     }
 }
+
+#[cfg(test)]
+mod test;

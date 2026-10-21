@@ -1,0 +1,36 @@
+name: Cargo Minimal-Versions Audit
+
+# Closes #624 — verifies Soroban contracts build under minimal transitive
+# dependency trees so broken/malicious sub-dependency updates can't hide
+# behind Cargo's default max-version resolution.
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "contracts/**"
+      - "contract/**"
+      - "scripts/security/cargo_minimal_versions.sh"
+      - ".github/workflows/cargo-audit.yml"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "contracts/**"
+      - "contract/**"
+      - "scripts/security/cargo_minimal_versions.sh"
+      - ".github/workflows/cargo-audit.yml"
+  schedule:
+    - cron: "0 6 * * 1" # weekly: catch newly yanked/broken lower bounds
+
+jobs:
+  minimal-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup nightly Rust (minimal-versions support)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32v1-none
+
+      - name: Run minimal-versions auditor
+        run: bash scripts/security/cargo_minimal_versions.sh
