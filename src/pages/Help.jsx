@@ -68,6 +68,162 @@ import { api } from "../services/api";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
+export const LOG_RING_SIZE = 32;
+
+export const ZK_INITIAL = Object.freeze({
+  status: "idle",
+  logs: Object.freeze([]),
+  proof: null,
+  error: "",
+});
+
+export function sanitizeWalletAddress(raw) {
+  if (typeof raw !== "string") return "";
+  const addr = raw.trim();
+  if (!/^G[A-Z2-7]{55}$/.test(addr)) return "";
+  return addr;
+}
+
+export function createDebouncedSetter(setter, delay = 100) {
+  let latest = "";
+  let timer = null;
+
+  const debouncedSet = (value) => {
+    latest = value;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      setter(latest);
+    }, delay);
+  };
+
+  const flush = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+      setter(latest);
+    }
+  };
+
+  const cancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  return { debouncedSet, flush, cancel };
+}
+
+export function computeWalletStatus(address) {
+  const normalized = sanitizeWalletAddress(address);
+  if (!normalized) {
+    return { isConnected: false, displayAddress: "" };
+  }
+
+  return {
+    isConnected: true,
+    displayAddress: `${normalized.slice(0, 8)}...${normalized.slice(-6)}`,
+  };
+}
+
+export function zkReducer(state = ZK_INITIAL, action = {}) {
+  switch (action.type) {
+    case "RESET":
+      return { status: "idle", logs: [], proof: null, error: "" };
+
+    case "SET_STATUS": {
+      const status = action.payload;
+      if (status === state.status) return state;
+      return { ...state, status };
+    }
+
+    case "SET_ERROR": {
+      const error = action.payload ?? "";
+      if (error === state.error) return state;
+      return { ...state, error };
+    }
+
+    case "SET_PROOF": {
+      if (state.proof === action.payload) return state;
+      return { ...state, proof: action.payload ?? null };
+    }
+
+    case "PATCH_PROOF": {
+      if (!state.proof) return state;
+      const nextProof = { ...state.proof, ...(action.payload ?? {}) };
+      if (nextProof === state.proof) return state;
+      return { ...state, proof: nextProof };
+    }
+
+    case "PUSH_LOG": {
+      const payload = String(action.payload ?? "");
+      const previous = state.logs[state.logs.length - 1];
+      if (previous === payload) return state;
+
+      const nextLogs = [...state.logs, payload];
+      const trimmedLogs = nextLogs.length > LOG_RING_SIZE
+        ? nextLogs.slice(nextLogs.length - LOG_RING_SIZE)
+        : nextLogs;
+
+      return trimmedLogs === state.logs ? state : { ...state, logs: trimmedLogs };
+    }
+
+    default:
+      return state;
+  }
+}
+
+export function checkIsGetMode(mode) {
+  if (typeof mode !== "string") return false;
+  return mode.trim().toLowerCase() === "get";
+}
+
+export function getAccentColor(isGetMode) {
+  return isGetMode ? "#FF7A6B" : "#7357FF";
+}
+
+export function getStatusConfig(status) {
+  const key = typeof status === "string" ? status.trim() : "";
+  const map = {
+    Pending: { label: "WAITING FOR RESPONDER", color: "#a2a586" },
+    Enroute: { label: "RESPONDER ON THE WAY", color: "#7357FF" },
+    Resolved: { label: "RESOLVED", color: "#3F8487" },
+  };
+  return map[key] ?? { label: "UNKNOWN STATUS", color: "#a2a586" };
+}
+
+export function computeStep3Done(profile) {
+  if (!profile) return true;
+  return Boolean(profile.contact || profile.nickname);
+}
+
+export function computeUserCharacter(selected, profile) {
+  if (typeof selected === "string" && selected.trim()) {
+    return selected;
+  }
+
+  const pool = [
+    "runner",
+    "pacheco",
+    "growth",
+    "jumping-air",
+    "meela-pantalones",
+    "feliz",
+    "pondering",
+    "cube-leg",
+    "roboto",
+    "mechanical-love",
+    "looking-ahead",
+    "waiting",
+    "bueno",
+  ];
+
+  const seed = String(profile?.nickname ?? "helphone");
+  const index = Array.from(seed).reduce((sum, char) => sum + char.charCodeAt(0), 0) % pool.length;
+  return pool[index];
+}
+
 const MAP_STYLES = [
   {
     id: "satellite",
