@@ -1,0 +1,19 @@
+[package]
+name = "telemetry_reader"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-allocation binary telemetry frame reader for HelPhone"
+
+[lib]
+crate-type = ["cdylib"]
+
+# Standalone crate: keep it out of the repository root workspace so its
+# release profile is independent of the Soroban contracts.
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

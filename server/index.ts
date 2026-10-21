@@ -9,6 +9,8 @@ import { compression } from './middleware/compression.js'
 import { logger, poolMonitorMiddleware } from './middleware/logger.js'
 import { getPool } from './db/connection.js'
 
+/* Cross-Origin-Opener-Policy: same-origin */
+/* Cross-Origin-Embedder-Policy: credentialless */
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 3001

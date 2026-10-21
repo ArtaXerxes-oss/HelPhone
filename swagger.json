@@ -1,1 +1,133 @@
-// Implementation added
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "HelPhone API",
+    "version": "1.0.0",
+    "description": "REST surface for dispatch, events, sync, telemetry, and the GraphQL bridge. The GraphQL contract lives in server/graphql/schema.graphql."
+  },
+  "servers": [{ "url": "http://localhost:3001" }],
+  "paths": {
+    "/api/dispatch": {
+      "get": {
+        "operationId": "listIncidents",
+        "summary": "List incidents",
+        "parameters": [
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Incident page" } }
+      },
+      "post": {
+        "operationId": "createIncident",
+        "summary": "Create an incident",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateIncident" } } } },
+        "responses": {
+          "201": { "description": "Created" },
+          "422": { "description": "Validation failed" },
+          "409": { "description": "Conflict" }
+        }
+      }
+    },
+    "/api/dispatch/{id}": {
+      "get": {
+        "operationId": "getIncident",
+        "summary": "Get one incident with responders",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } },
+          { "name": "nocache", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Incident bundle" }, "404": { "description": "Not found" } }
+      }
+    },
+    "/api/dispatch/{id}/assign": {
+      "post": {
+        "operationId": "assignResponder",
+        "summary": "Assign a responder with optimistic concurrency",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["responderId"], "properties": { "responderId": { "type": "string" }, "expectedVersion": { "type": "integer" } } } } } },
+        "responses": {
+          "200": { "description": "Assigned" },
+          "409": { "description": "Version conflict with serverVersion + mergeProposal" },
+          "422": { "description": "Validation failed" }
+        }
+      }
+    },
+    "/api/dispatch/{id}/ack": {
+      "post": {
+        "operationId": "acknowledgeIncident",
+        "summary": "Acknowledge an incident",
+        "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }],
+        "responses": { "200": { "description": "Acknowledged" }, "409": { "description": "Version conflict" } }
+      }
+    },
+    "/api/events": {
+      "get": {
+        "operationId": "listEvents",
+        "summary": "Event log page; cursor is identical to GraphQL EventConnection.endCursor",
+        "parameters": [
+          { "name": "incidentId", "in": "query", "required": true, "schema": { "type": "string" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 20 } },
+          { "name": "cursor", "in": "query", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "Event page" }, "422": { "description": "incidentId required" } }
+      }
+    },
+    "/api/events/ice-config": {
+      "get": { "operationId": "getIceConfig", "responses": { "200": { "description": "ICE servers" } } }
+    },
+    "/api/sync": {
+      "post": { "operationId": "syncOperations", "responses": { "200": { "description": "Merged operations" } } }
+    },
+    "/api/sync/flush": {
+      "post": {
+        "operationId": "flushSync",
+        "summary": "Flush an offline outbox; 409 shape matches GraphQL SyncConflict",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "required": ["incidentId", "baseVersion", "patch"], "properties": { "incidentId": { "type": "string" }, "baseVersion": { "type": "integer" }, "patch": { "type": "object" } } } } } },
+        "responses": {
+          "200": { "description": "Applied" },
+          "409": { "description": "Conflict with serverVersion + mergeProposal" },
+          "422": { "description": "Validation issues" }
+        }
+      }
+    },
+    "/api/telemetry/spans": {
+      "post": {
+        "operationId": "ingestTelemetry",
+        "summary": "Bounded OTLP/HTTP JSON ingest",
+        "responses": {
+          "202": { "description": "Accepted" },
+          "429": { "description": "Queue high watermark; Retry-After" },
+          "503": { "description": "Collector unavailable; Retry-After" }
+        }
+      }
+    },
+    "/metrics/telemetry": {
+      "get": { "operationId": "telemetryMetrics", "responses": { "200": { "description": "Receiver counters" } } }
+    },
+    "/graphql": {
+      "post": {
+        "operationId": "graphql",
+        "summary": "GraphQL endpoint (same domain contract as REST)",
+        "responses": { "200": { "description": "GraphQL result" }, "400": { "description": "Missing query" } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CreateIncident": {
+        "type": "object",
+        "required": ["location"],
+        "properties": {
+          "id": { "type": "string" },
+          "status": { "type": "string", "enum": ["open", "assigned", "acknowledged", "resolved"], "x-enum-name": "IncidentStatus" },
+          "priority": { "type": "string", "enum": ["low", "normal", "high", "critical"], "x-enum-name": "Priority" },
+          "location": {
+            "type": "object",
+            "required": ["lat", "lng"],
+            "properties": { "lat": { "type": "number" }, "lng": { "type": "number" } }
+          }
+        }
+      }
+    }
+  }
+}

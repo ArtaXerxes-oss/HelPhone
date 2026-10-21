@@ -63,4 +63,52 @@ let singleton = null;
 export function getWasmMemoryPool(maxBytes = MAX_MEMORY_BYTES) { if (!singleton) { singleton = new WasmMemoryPool(maxBytes); singleton.preallocate(); } return singleton; }
 export function resetWasmMemoryPool() { if (singleton) singleton.destroy(); singleton = null; }
 export function createWasmMemoryPool(maxBytes = MAX_MEMORY_BYTES) { return new WasmMemoryPool(maxBytes); }
+// ── Telemetry-specific pooling (mirrors wasmMemory.ts) ──────────────────────
+export class TelemetryBufferPool {
+  constructor(frameBytes = 4 * 1024, maxBuffers = 64, preferShared = true) {
+    this.frameBytes = frameBytes;
+    this.maxBuffers = maxBuffers;
+    this.free = [];
+    this.active = new Set();
+    this.allocationCount = 0;
+    this.recycledCount = 0;
+    this.shared = preferShared && typeof SharedArrayBuffer !== 'undefined' && globalThis.crossOriginIsolated === true;
+  }
+  acquire() {
+    let lease = this.free.pop();
+    if (lease) this.recycledCount++;
+    else {
+      const buffer = this.shared ? new SharedArrayBuffer(this.frameBytes) : new ArrayBuffer(this.frameBytes);
+      lease = { buffer, bytes: new Uint8Array(buffer), shared: this.shared };
+      this.allocationCount++;
+    }
+    this.active.add(lease);
+    return lease;
+  }
+  release(lease) {
+    if (!lease || !this.active.delete(lease)) return;
+    if (this.free.length >= this.maxBuffers) return;
+    try { lease.bytes.fill(0); } catch {}
+    this.free.push(lease);
+  }
+  getStats() {
+    return { frameBytes: this.frameBytes, pooled: this.free.length, active: this.active.size, allocationCount: this.allocationCount, recycledCount: this.recycledCount, shared: this.shared };
+  }
+  destroy() { this.free.length = 0; this.active.clear(); }
+}
+
+export class WasmViewCache {
+  constructor() { this.buffer = null; this.u8 = null; this.f64 = null; this.refreshes = 0; }
+  views(memory) {
+    if (this.buffer !== memory.buffer) {
+      this.buffer = memory.buffer;
+      this.u8 = new Uint8Array(memory.buffer);
+      this.f64 = new Float64Array(memory.buffer);
+      this.refreshes++;
+    }
+    return { u8: this.u8, f64: this.f64 };
+  }
+  get refreshCount() { return this.refreshes; }
+}
+
 export default WasmMemoryPool;
