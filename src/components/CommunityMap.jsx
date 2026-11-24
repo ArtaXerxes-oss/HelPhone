@@ -1,5 +1,18 @@
-export default function CommunityMap() {
+import ClusteredMapLayer from "./ClusteredMapLayer.jsx";
+
+// The community map can show live incident points. When `points` is supplied
+// it renders clustered markers (ADR-008) instead of raw pins; the static SVG
+// below remains the decorative base map.
+export default function CommunityMap({
+  points = null,
+  viewState = { longitude: 0, latitude: 20, zoom: 2 },
+  width = 1140,
+  height = 540,
+  onMarkerClick,
+  ...clusterOptions
+} = {}) {
   return (
+    <div style={{ position: "relative", width: "100%" }}>
     <svg
       viewBox="0 0 1140 540"
       style={{
@@ -209,5 +222,17 @@ export default function CommunityMap() {
         REQUEST 04:12
       </text>
     </svg>
+    {points && (
+      <ClusteredMapLayer
+        points={points}
+        viewState={viewState}
+        width={width}
+        height={height}
+        onMarkerClick={onMarkerClick}
+        style={{ position: "absolute", inset: 0, pointerEvents: onMarkerClick ? "auto" : "none" }}
+        {...clusterOptions}
+      />
+    )}
+    </div>
   );
 }

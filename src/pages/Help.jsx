@@ -43,6 +43,9 @@ import {
   startAutoSave,
   clearDraft as clearCrashDraft,
 } from "../lib/crashRecovery.ts";
+import ClusteredMapLayer from "../components/ClusteredMapLayer.jsx";
+import { useFeatureFlag } from "../lib/featureFlags.js";
+import { useElementSize } from "../hooks/useElementSize.js";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -1173,6 +1176,16 @@ export default function Help() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(null);
 
   const [openRequests, setOpenRequests] = useState([]);
+  // ADR-008: the canary renders clustered markers only; raw pins stay on the
+  // default path. The cluster grid follows the settled Mapbox view state.
+  const mapClusteringEnabled = useFeatureFlag("canary_map_clustering");
+  const mapContainerRef = useRef(null);
+  const mapSize = useElementSize(mapContainerRef);
+  const [mapViewState, setMapViewState] = useState({
+    longitude: DEFAULT_CENTER[1],
+    latitude: DEFAULT_CENTER[0],
+    zoom: 2,
+  });
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [offerSubmitting, setOfferSubmitting] = useState(false);
   const [lastOfferReceipt, setLastOfferReceipt] = useState(null);
@@ -1381,7 +1394,9 @@ export default function Help() {
             );
           });
         }
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
       loading = false;
     }
 
@@ -1869,7 +1884,9 @@ export default function Help() {
         if (!found && mounted) {
           setResponders([]);
         }
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
     }
 
     poll();
@@ -1892,7 +1909,9 @@ export default function Help() {
           location[0],
           location[1],
         );
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
     }
     ping();
     const interval = setInterval(ping, 5000);
@@ -1916,7 +1935,9 @@ export default function Help() {
         if (mounted && req && req.lat != null && req.lng != null) {
           setRequesterLocation([req.lat, req.lng]);
         }
-      } catch {}
+      } catch {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
     }
     fetchRequester();
     const interval = setInterval(fetchRequester, 8000);
@@ -1948,7 +1969,9 @@ export default function Help() {
         );
         filtered.sort((a, b) => b.created_at - a.created_at);
         if (mounted) setMyRequests(filtered);
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
       if (mounted) setMyRequestsLoading(false);
     }
     fetchMyRequests();
@@ -3512,7 +3535,7 @@ export default function Help() {
         </div>
       </aside>
 
-      <div id="helphone-help-map" className={styles["hp-help-main"]} style={{ flex: 1, position: "relative" }}>
+      <div ref={mapContainerRef} id="helphone-help-map" className={styles["hp-help-main"]} style={{ flex: 1, position: "relative" }}>
         <Map
           mapboxAccessToken={MAPBOX_TOKEN}
           initialViewState={{
@@ -3522,6 +3545,7 @@ export default function Help() {
           }}
           style={{ width: "100%", height: "100%" }}
           mapStyle={MAP_STYLES[mapStyleIndex].url}
+          onMove={(e) => setMapViewState(e.viewState)}
           onClick={(e) => {
             if (isGetMode && requestStatus === "idle") {
               setLocation([e.lngLat.lat, e.lngLat.lng]);
@@ -3633,7 +3657,7 @@ export default function Help() {
               </Fragment>
             ))}
 
-          {!isGetMode &&
+          {!mapClusteringEnabled && !isGetMode &&
             openRequests.map((req) => (
               <CharMarker
                 key={req.id}
@@ -3713,6 +3737,23 @@ export default function Help() {
               />
             )}
         </Map>
+
+        {mapClusteringEnabled && !isGetMode && openRequests.length > 0 && (
+          <ClusteredMapLayer
+            points={openRequests}
+            viewState={mapViewState}
+            width={mapSize.width}
+            height={mapSize.height}
+            onMarkerClick={(hit) => {
+              const req = openRequests[hit.index];
+              if (req) {
+                setSelectedRequest(req);
+                setPopupMarker(`req-${req.id}`);
+              }
+            }}
+            style={{ position: "absolute", inset: 0, zIndex: 5 }}
+          />
+        )}
 
         <div
           ref={styleSelectorRef}

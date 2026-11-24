@@ -12,6 +12,13 @@ import { compression as brotliCompression } from "./middleware/compression.js";
 import { logger, poolMonitorMiddleware } from "./middleware/logger.js";
 import { createCorsMiddleware } from "./middleware/cors.js";
 import { getPool } from "./db/connection.js";
+import {
+  runtimeConfig,
+  runtimeAudit,
+  reloadRuntimeConfig,
+  startRuntimeConfigReload,
+} from "./lib/runtimeConfig.js";
+import { timingSafeEqual } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -248,7 +255,9 @@ function health(_req, res) {
   let poolStats = null;
   try {
     poolStats = getPool().getStats();
-  } catch {}
+  } catch {
+    // Pool metrics are best-effort; health must still respond.
+  }
   res.json({
     status: _ready ? "ready" : "warming",
     ready: _ready,
@@ -460,11 +469,48 @@ app.get("/api/feedback/:requestId", (req, res) => {
   res.json(entry);
 });
 
+// ── Runtime secret rotation (#760) ──────────────────────────────────────────
+// Credentials are read through the rotation manager on every access, so a
+// reload is visible immediately and a rejected (partial) reload changes
+// nothing. Responses deliberately expose fingerprints/status only — never
+// secret values.
+function requireAdmin(req, res, next) {
+  const configured = process.env.ADMIN_API_TOKEN;
+  if (!configured || typeof configured !== "string") {
+    return res.status(404).json({ error: "Not found" });
+  }
+  const presented = String(req.get("x-admin-token") || "");
+  const a = Buffer.from(configured);
+  const b = Buffer.from(presented);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return next();
+}
+
+app.get("/api/admin/rotation-status", requireAdmin, (_req, res) => {
+  res.json({ success: true, ...runtimeConfig.status(), audit: runtimeAudit.history().length });
+});
+
+app.post("/api/admin/reload-secrets", requireAdmin, async (_req, res) => {
+  try {
+    const result = await reloadRuntimeConfig();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    // Fail closed: the active snapshot is untouched. Error messages from the
+    // manager list target names, never values.
+    res.status(409).json({ success: false, code: err.code ?? "ROTATION_FAILED", error: err.message });
+  }
+});
+
 export function startServer() {
-  return app.listen(PORT, () => {
+  const stopReload = startRuntimeConfigReload();
+  const server = app.listen(PORT, () => {
     console.log(`ZK Prover worker ${process.pid} on http://localhost:${PORT}`);
     ensureProver().catch((err) => console.error("[prover] Init failed:", err));
   });
+  server.on("close", stopReload);
+  return server;
 }
 
 function startCluster() {

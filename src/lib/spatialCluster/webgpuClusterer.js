@@ -8,6 +8,9 @@ import shaderSource from "../../shaders/clusterShader.wgsl?raw";
 import { PARAMS_BYTE_LENGTH, cellTotal, packParams, workgroupCount } from "./gridParams.js";
 
 const TIMESTAMP_BYTES = 16; // two u64 timestamps
+// Two staging buffers let a new upload/compute submission start while the
+// previous frame's mapAsync result is still being consumed (ADR-008 follow-up 2).
+export const STAGING_BUFFER_COUNT = 2;
 
 export async function isWebGPUAvailable(nav = globalThis.navigator) {
   if (!nav?.gpu) return false;
@@ -71,7 +74,11 @@ export async function createWebGPUClusterer(params, { navigator: nav = globalThi
   const cellCountBuf = device.createBuffer({ size: cellBytes, usage: S.STORAGE | S.COPY_SRC | S.COPY_DST });
   const cellSumBuf = device.createBuffer({ size: cellBytes * 2, usage: S.STORAGE | S.COPY_SRC | S.COPY_DST });
   const cellRadiusBuf = device.createBuffer({ size: cellBytes, usage: S.STORAGE | S.COPY_SRC | S.COPY_DST });
-  const stagingBuf = device.createBuffer({ size: readbackBytes, usage: S.MAP_READ | S.COPY_DST });
+  const staging = Array.from({ length: STAGING_BUFFER_COUNT }, () => ({
+    buffer: device.createBuffer({ size: readbackBytes, usage: S.MAP_READ | S.COPY_DST }),
+    busy: false,
+  }));
+  let nextStaging = 0;
 
   let querySet = null;
   let queryResolveBuf = null;
@@ -101,12 +108,22 @@ export async function createWebGPUClusterer(params, { navigator: nav = globalThi
     });
   }
 
-  let busy = false;
-
   async function cluster(points) {
     if (lost) throw new Error(`WebGPU device lost: ${lost.message || lost.reason}`);
-    if (busy) throw new Error("cluster() called while a previous frame is still in flight");
-    busy = true;
+    // Pick a free staging slot instead of blocking the whole backend: while
+    // slot A is mapped/read, slot B can already receive the next frame's copy.
+    let slot = null;
+    for (let i = 0; i < STAGING_BUFFER_COUNT; i++) {
+      const candidate = staging[(nextStaging + i) % STAGING_BUFFER_COUNT];
+      if (!candidate.busy) {
+        slot = candidate;
+        nextStaging = (nextStaging + i + 1) % STAGING_BUFFER_COUNT;
+        break;
+      }
+    }
+    if (!slot) throw new Error("all staging buffers busy (one update per frame max)");
+    slot.busy = true;
+    const stagingBuf = slot.buffer;
     try {
       const n = points.length >> 1;
       ensureCapacity(n);
@@ -175,7 +192,7 @@ export async function createWebGPUClusterer(params, { navigator: nav = globalThi
         },
       };
     } finally {
-      busy = false;
+      slot.busy = false;
     }
   }
 
@@ -193,13 +210,17 @@ export async function createWebGPUClusterer(params, { navigator: nav = globalThi
     backend: "webgpu",
     adapterInfo: adapter.info ?? null,
     timestampQueries: hasTimestamps,
+    stagingBuffers: STAGING_BUFFER_COUNT,
     cluster,
     measureUpload,
+    get inFlight() {
+      return staging.filter((s) => s.busy).length;
+    },
     get memoryBytes() {
       return (
         PARAMS_BYTE_LENGTH +
         cellBytes * 4 +
-        readbackBytes +
+        readbackBytes * STAGING_BUFFER_COUNT +
         (hasTimestamps ? TIMESTAMP_BYTES : 0) +
         capacity * 12
       );
