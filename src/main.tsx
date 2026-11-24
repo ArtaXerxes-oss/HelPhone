@@ -15,6 +15,8 @@ const Help = lazy(() => import("./pages/Help"));
 const Ranking = lazy(() => import("./pages/Ranking"));
 // #608 spike: WebGPU spatial-clustering prototype + benchmark harness (ADR-008).
 const ClusterLab = lazy(() => import("./components/WebGPUMap"));
+// ADR-022: displayed-vs-realized ETA calibration dashboard.
+const CalibrationDashboard = lazy(() => import("./pages/CalibrationDashboard"));
 
 function RouteFallback() {
   return (
@@ -54,6 +56,7 @@ function render() {
                 <Route path="/help" element={<Help />} />
                 <Route path="/ranking" element={<Ranking />} />
                 <Route path="/lab/cluster-bench" element={<ClusterLab />} />
+                <Route path="/lab/eta-calibration" element={<CalibrationDashboard />} />
               </Routes>
             </Suspense>
           </BrowserRouter>

@@ -1,0 +1,201 @@
+{
+  "schema": "helphone.eta-calibration/1",
+  "collected": "2026-11-01..2026-11-20",
+  "redaction": "coordinates bucketed to 0.1 degrees; no wallet, request id or exact position",
+  "observations": [
+    {
+      "mode": "traffic",
+      "area": "6.5,3.4",
+      "distance_km": 2.1,
+      "displayed_min": 5,
+      "displayed_max": 8,
+      "eta_realized": 390
+    },
+    {
+      "mode": "traffic",
+      "area": "6.5,3.4",
+      "distance_km": 3.4,
+      "displayed_min": 7,
+      "displayed_max": 11,
+      "eta_realized": 520
+    },
+    {
+      "mode": "traffic",
+      "area": "6.4,3.3",
+      "distance_km": 1.2,
+      "displayed_min": 3,
+      "displayed_max": 5,
+      "eta_realized": 235
+    },
+    {
+      "mode": "traffic",
+      "area": "6.6,3.5",
+      "distance_km": 5.8,
+      "displayed_min": 11,
+      "displayed_max": 17,
+      "eta_realized": 860
+    },
+    {
+      "mode": "traffic",
+      "area": "6.5,3.3",
+      "distance_km": 4.2,
+      "displayed_min": 8,
+      "displayed_max": 13,
+      "eta_realized": 640
+    },
+    {
+      "mode": "traffic",
+      "area": "6.4,3.4",
+      "distance_km": 7.1,
+      "displayed_min": 14,
+      "displayed_max": 21,
+      "eta_realized": 1090
+    },
+    {
+      "mode": "traffic",
+      "area": "6.6,3.4",
+      "distance_km": 2.8,
+      "displayed_min": 6,
+      "displayed_max": 9,
+      "eta_realized": 455
+    },
+    {
+      "mode": "traffic",
+      "area": "6.5,3.5",
+      "distance_km": 6.3,
+      "displayed_min": 12,
+      "displayed_max": 18,
+      "eta_realized": 930
+    },
+
+    {
+      "mode": "offline",
+      "area": "6.5,3.4",
+      "distance_km": 2.1,
+      "displayed_min": 6,
+      "displayed_max": 14,
+      "eta_realized": 510
+    },
+    {
+      "mode": "offline",
+      "area": "6.4,3.3",
+      "distance_km": 1.2,
+      "displayed_min": 4,
+      "displayed_max": 9,
+      "eta_realized": 330
+    },
+    {
+      "mode": "offline",
+      "area": "6.6,3.5",
+      "distance_km": 5.8,
+      "displayed_min": 14,
+      "displayed_max": 30,
+      "eta_realized": 1210
+    },
+    {
+      "mode": "offline",
+      "area": "6.5,3.3",
+      "distance_km": 4.2,
+      "displayed_min": 10,
+      "displayed_max": 23,
+      "eta_realized": 880
+    },
+    {
+      "mode": "offline",
+      "area": "6.4,3.4",
+      "distance_km": 7.1,
+      "displayed_min": 18,
+      "displayed_max": 38,
+      "eta_realized": 1520
+    },
+    {
+      "mode": "offline",
+      "area": "6.6,3.4",
+      "distance_km": 2.8,
+      "displayed_min": 7,
+      "displayed_max": 16,
+      "eta_realized": 600
+    },
+    {
+      "mode": "offline",
+      "area": "6.5,3.5",
+      "distance_km": 6.3,
+      "displayed_min": 16,
+      "displayed_max": 34,
+      "eta_realized": 1340
+    },
+    {
+      "mode": "offline",
+      "area": "6.5,3.4",
+      "distance_km": 3.4,
+      "displayed_min": 9,
+      "displayed_max": 20,
+      "eta_realized": 745
+    },
+
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 8,
+      "displayed_max": 25,
+      "eta_realized": 960
+    },
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 10,
+      "displayed_max": 30,
+      "eta_realized": 1180
+    },
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 6,
+      "displayed_max": 20,
+      "eta_realized": 690
+    },
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 12,
+      "displayed_max": 36,
+      "eta_realized": 1450
+    },
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 7,
+      "displayed_max": 22,
+      "eta_realized": 810
+    },
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 9,
+      "displayed_max": 28,
+      "eta_realized": 1030
+    },
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 11,
+      "displayed_max": 33,
+      "eta_realized": 1270
+    },
+    {
+      "mode": "fallback",
+      "area": "unknown",
+      "distance_km": null,
+      "displayed_min": 8,
+      "displayed_max": 24,
+      "eta_realized": 915
+    }
+  ]
+}

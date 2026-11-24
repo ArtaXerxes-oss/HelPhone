@@ -1,0 +1,54 @@
+{
+  "generatedAt": "2026-11-24T12:58:30.649Z",
+  "objectsPerSecond": 10000,
+  "objectsPerFrame": 400,
+  "framesPerSecond": 25,
+  "longTaskThresholdMs": 50,
+  "paths": [
+    {
+      "label": "json-objects",
+      "totalMs": 1001,
+      "frames": 25,
+      "dropped": 0,
+      "longTasks": 0,
+      "worstTaskMs": 0,
+      "effectiveFps": 25
+    },
+    {
+      "label": "typed-arrays",
+      "totalMs": 1000,
+      "frames": 25,
+      "dropped": 0,
+      "longTasks": 0,
+      "worstTaskMs": 0,
+      "effectiveFps": 25
+    }
+  ],
+  "memory": {
+    "objectsMaterializedPerFrame": {
+      "json": 400,
+      "typed": 0
+    },
+    "heapGrowthBytes": {
+      "json": -391424,
+      "typed": 874168
+    }
+  },
+  "improvement": {
+    "longTasksAvoided": 0,
+    "droppedFramesAvoided": 0
+  },
+  "typedStore": {
+    "capacity": 20000,
+    "count": 400,
+    "dropped": 0,
+    "seq": 24,
+    "generation": 1380,
+    "maxObjectsPerFrame": 1000
+  },
+  "customLayer": {
+    "id": "helphone-telemetry",
+    "type": "custom",
+    "renderingMode": "2d"
+  }
+}

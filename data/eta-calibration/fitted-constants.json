@@ -1,0 +1,28 @@
+{
+  "schema": "helphone.eta-constants/1",
+  "source": "data/eta-calibration/observations.json",
+  "fitted": {
+    "runsToCap": 6,
+    "speedGainPerRun": 0.085,
+    "speedCapMultiplier": 1.42,
+    "relativeSpread": 0.17,
+    "minSpeedKmh": 13,
+    "maxSpeedKmh": 37,
+    "degradedPenalty": 0.78,
+    "degradedSpreadMultiplier": 3.2,
+    "baseConfidence": 0.92,
+    "minConfidence": 0.45
+  },
+  "legacy": {
+    "runsToCap": 5,
+    "speedGainPerRun": 0.1,
+    "speedCapMultiplier": 1.5,
+    "relativeSpread": 0.15,
+    "minSpeedKmh": 15,
+    "maxSpeedKmh": 40,
+    "degradedPenalty": 0.8,
+    "degradedSpreadMultiplier": 3,
+    "baseConfidence": 0.9,
+    "minConfidence": 0.4
+  }
+}

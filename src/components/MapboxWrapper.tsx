@@ -1,6 +1,8 @@
 import { forwardRef } from 'react'
 import Map, { NavigationControl } from 'react-map-gl/mapbox'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import TelemetryLayer from './TelemetryLayer'
+import type { TelemetryBuffers } from '../lib/telemetryBuffers'
 
 /**
  * MapboxWrapper (#87)
@@ -24,6 +26,8 @@ interface MapboxWrapperProps {
   showNavigationControl?: boolean
   onIsolationChange?: (isolated: boolean) => void
   navigationControlPosition?: 'top-right' | 'top-left' | 'bottom-right' | 'bottom-left'
+  /** Optional preallocated telemetry store; adds the binary custom layer. */
+  telemetryBuffers?: TelemetryBuffers
   style?: React.CSSProperties
   children?: React.ReactNode
   [key: string]: unknown
@@ -38,6 +42,7 @@ const MapboxWrapper = forwardRef<unknown, MapboxWrapperProps>(function MapboxWra
     showNavigationControl = true,
     navigationControlPosition = 'bottom-right',
     onIsolationChange,
+    telemetryBuffers,
     style = FILL_PARENT,
     children,
     ...rest
@@ -59,6 +64,7 @@ const MapboxWrapper = forwardRef<unknown, MapboxWrapperProps>(function MapboxWra
       {showNavigationControl && (
         <NavigationControl position={navigationControlPosition} />
       )}
+      {telemetryBuffers && <TelemetryLayer buffers={telemetryBuffers} />}
       {children}
     </Map>
   )

@@ -8,6 +8,8 @@ import { normalizeBase64 } from './base64Utils.js'
 import { compression } from './middleware/compression.js'
 import { logger, poolMonitorMiddleware } from './middleware/logger.js'
 import { getPool } from './db/connection.js'
+import { eventsRouter } from './routes/events.js'
+import { attachTelemetryWebSocket } from './telemetry.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -75,6 +77,8 @@ function health(_req, res) {
   })
 }
 
+app.use('/api/events', eventsRouter)
+
 app.get('/health', health)
 app.get('/zk/health', health)
 
@@ -117,7 +121,10 @@ app.post('/zk/prove', async (req, res) => {
   }
 })
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`ZK Prover on http://localhost:${PORT}`)
   ensureProver().catch(err => console.error('[prover] Init failed:', err))
 })
+
+const telemetry = attachTelemetryWebSocket(httpServer)
+export { telemetry }

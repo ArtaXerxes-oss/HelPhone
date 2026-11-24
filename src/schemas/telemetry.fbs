@@ -1,0 +1,54 @@
+// HelPhone live telemetry wire format (ADR-014).
+//
+// Compile with the official FlatBuffers compiler to (re)generate the JS
+// accessors in `telemetry_generated.js`:
+//
+//   flatc --js --strict-json --defaults-json -o src/schemas src/schemas/telemetry.fbs
+//
+// The `HPTL` file identifier lets ingest reject unrelated binary payloads
+// before doing any table walking. `MAX_OBJECTS_PER_FRAME` is enforced in the
+// encoder (src/lib/telemetryFrame.js) as well as being documented here: a
+// frame larger than 1000 objects is a dropped frame (RangeError), never a
+// partially encoded one.
+
+namespace HelPhone.Telemetry;
+
+/// Kind of tracked map object. Kept as a byte so it packs into the typed-array
+/// fast path used by the map custom layer (see src/lib/telemetryBuffers.ts).
+enum Kind : byte {
+  Responder = 0,
+  Requester = 1,
+  Incident  = 2,
+}
+
+/// Lifecycle status. Also a byte for the same reason as `Kind`.
+enum Status : byte {
+  Active   = 0,
+  EnRoute  = 1,
+  OnScene  = 2,
+  Resolved = 3,
+}
+
+/// A single preallocated-record-shaped object on the live map.
+table TrackedObject {
+  id: uint;       // stable numeric id (string ids stay on the JSON detail path)
+  kind: byte;     // Kind
+  status: byte;   // Status
+  lat: double;
+  lng: double;
+  heading: float; // degrees, 0..360
+  speed: float;   // km/h
+}
+
+/// One WebSocket frame. At most 1000 objects; the encoder throws RangeError
+/// above that and the server counts it as a dropped frame.
+table Frame {
+  objects: [TrackedObject];
+  ts_sec: uint;   // Unix seconds (keeps the wire free of 64-bit fields)
+  seq: uint;      // monotonically increasing frame sequence
+  version: ushort; // schema version, bumped on breaking changes
+}
+
+root_type Frame;
+file_identifier "HPTL";
+file_extension "hptl";
