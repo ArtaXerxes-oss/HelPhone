@@ -11,6 +11,14 @@
  */
 
 import { trace, context, SpanStatusCode } from '@opentelemetry/api';
+import {
+  formatTraceparent,
+  parseTraceparent,
+  traceHeaders as wireTraceHeaders,
+  traceIdsFromTraceparent,
+  unwrapFromWorker as wireUnwrapFromWorker,
+  wrapForWorker as wireWrapForWorker,
+} from './traceWire.js';
 
 import {
   RingBuffer,
@@ -597,6 +605,90 @@ function spanIdFor(seq: number): string {
 
 const tracer = trace.getTracer('helphone');
 
+// #791: the trace id recorded on the IDB crash draft must be the same one the
+// HTTP/worker hops carry. sessionStorage is the fallback when no span is
+// active (e.g. a draft autosave between dispatches).
+const TRACE_ID_KEY = 'otel_trace_id'
+const SPAN_ID_KEY = 'otel_span_id'
+
+function storage(): Storage | null {
+  try {
+    return typeof sessionStorage === 'undefined' ? null : sessionStorage
+  } catch {
+    return null
+  }
+}
+
+function rememberTrace(traceparent: string | null | undefined): void {
+  const ids = traceIdsFromTraceparent(traceparent)
+  const store = storage()
+  if (!ids || !store) return
+  try {
+    store.setItem(TRACE_ID_KEY, ids.traceId)
+    store.setItem(SPAN_ID_KEY, ids.spanId)
+  } catch {}
+}
+
+function storedTraceparent(): string | null {
+  const store = storage()
+  if (!store) return null
+  try {
+    const traceId = store.getItem(TRACE_ID_KEY)
+    const spanId = store.getItem(SPAN_ID_KEY)
+    return traceId && spanId ? formatTraceparent({ traceId, spanId }) : null
+  } catch {
+    return null
+  }
+}
+
+function traceparentFromSpanContext(ctx: { traceId: string; spanId: string; traceFlags: number | string }): string {
+  const flags = typeof ctx.traceFlags === 'string'
+    ? ctx.traceFlags
+    : Number(ctx.traceFlags).toString(16).padStart(2, '0')
+  return formatTraceparent({ traceId: ctx.traceId, spanId: ctx.spanId, flags })
+}
+
+/** Active OTel span, or the last trace remembered on this tab. */
+function activeTraceparent(): string | null {
+  const span = trace.getActiveSpan()
+  if (span) {
+    const traceparent = traceparentFromSpanContext(span.spanContext())
+    if (parseTraceparent(traceparent)) return traceparent
+  }
+  return storedTraceparent()
+}
+
+/** Trace ids for crash dumps (#791). Null when this tab has no trace yet. */
+export function currentTraceIds(): { traceId: string; spanId: string } | null {
+  return traceIdsFromTraceparent(activeTraceparent())
+}
+
+/**
+ * PWA → HTTP hop. Adds a child `traceparent` to outgoing request headers and
+ * remembers it so a crash dump joins to the same trace.
+ */
+export function traceHeaders(headers: Record<string, string> = {}): Record<string, string> {
+  const next = wireTraceHeaders(headers, activeTraceparent() ?? undefined)
+  rememberTrace(next.traceparent)
+  return next
+}
+
+/** Main thread → worker hop (#791). */
+export function wrapForWorker<T extends Record<string, unknown>>(message: T): T & Record<string, unknown> {
+  return wireWrapForWorker(message, activeTraceparent() ?? undefined) as T & Record<string, unknown>
+}
+
+/** Worker → main-thread hop (#791): records the worker span as a link. */
+export function unwrapFromWorker<T extends Record<string, unknown>>(message: T): {
+  message: T
+  trace: { v: number; traceId: string; spanId: string; traceparent: string; links: Array<{ traceId: string; spanId: string }> } | null
+} {
+  return wireUnwrapFromWorker(message) as {
+    message: T
+    trace: { v: number; traceId: string; spanId: string; traceparent: string; links: Array<{ traceId: string; spanId: string }> } | null
+  }
+}
+
 export interface ErrorContext {
   source: string;
   component?: string;
@@ -608,7 +700,7 @@ export interface ErrorContext {
 /**
  * Record an error with OTel context (Issue #746)
  */
-export function recordError(error: Error, ctx: ErrorContext = {}): void {
+export function recordError(error: Error, ctx: ErrorContext = { source: 'unknown' }): void {
   const span = tracer.startSpan('error.record');
 
   try {
@@ -620,12 +712,10 @@ export function recordError(error: Error, ctx: ErrorContext = {}): void {
       span.setAttribute(key, String(value));
     });
 
-    // Store trace ID for linking
+    // Store trace + span ids for linking crash dumps and later hops (#791)
+    rememberTrace(traceparentFromSpanContext(span.spanContext()));
     const activeSpan = trace.getActiveSpan();
-    if (activeSpan) {
-      const traceId = activeSpan.spanContext().traceId;
-      sessionStorage.setItem('otel_trace_id', traceId);
-    }
+    if (activeSpan) rememberTrace(traceparentFromSpanContext(activeSpan.spanContext()));
   } finally {
     span.end();
   }

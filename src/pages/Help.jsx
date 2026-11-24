@@ -84,6 +84,10 @@ import {
   createOverlayRenderer,
 } from "../lib/offscreenCanvas.ts";
 import { useClusterer } from "../hooks/useClusterer.js";
+// ADR-008 clustering layer (kept alongside upstream's overlay pipeline).
+import ClusteredMapLayer from "../components/ClusteredMapLayer.jsx";
+import { useFeatureFlag } from "../lib/featureFlags.js";
+import { useElementSize } from "../hooks/useElementSize.js";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -367,6 +371,7 @@ export function saveMyRequestId(id) {
     try {
       localStorage.setItem(MY_REQUESTS_KEY, JSON.stringify(ids.slice(0, 20)));
     } catch {
+      // Storage may be disabled (private mode); the in-memory list still works.
     }
   }
 }
@@ -1594,6 +1599,16 @@ export default function Help() {
   const [showCancelConfirm, setShowCancelConfirm] = useState(null);
 
   const [openRequests, setOpenRequests] = useState([]);
+  // ADR-008: the canary renders clustered markers only; raw pins stay on the
+  // default path. The cluster grid follows the settled Mapbox view state.
+  const mapClusteringEnabled = useFeatureFlag("canary_map_clustering");
+  const mapContainerRef = useRef(null);
+  const mapSize = useElementSize(mapContainerRef);
+  const [mapViewState, setMapViewState] = useState({
+    longitude: DEFAULT_CENTER[1],
+    latitude: DEFAULT_CENTER[0],
+    zoom: 2,
+  });
   const [selectedRequest, setSelectedRequest] = useState(null);
   const [offerSubmitting, setOfferSubmitting] = useState(false);
   const [lastOfferReceipt, setLastOfferReceipt] = useState(null);
@@ -1964,7 +1979,9 @@ export default function Help() {
             );
           });
         }
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
       loading = false;
     }
 
@@ -2482,7 +2499,9 @@ export default function Help() {
         if (!found && mounted) {
           setResponders([]);
         }
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
     }
 
     poll();
@@ -2505,7 +2524,9 @@ export default function Help() {
           location[0],
           location[1],
         );
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
     }
     ping();
     const interval = setInterval(ping, 5000);
@@ -2529,7 +2550,9 @@ export default function Help() {
         if (mounted && req && req.lat != null && req.lng != null) {
           setRequesterLocation([req.lat, req.lng]);
         }
-      } catch {}
+      } catch {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
     }
     fetchRequester();
     const interval = setInterval(fetchRequester, 8000);
@@ -2561,7 +2584,9 @@ export default function Help() {
         );
         filtered.sort((a, b) => b.created_at - a.created_at);
         if (mounted) setMyRequests(filtered);
-      } catch (_) {}
+      } catch (_) {
+        // Best-effort fetch: keep the previous UI state on failure.
+      }
       if (mounted) setMyRequestsLoading(false);
     }
     fetchMyRequests();
@@ -4225,13 +4250,7 @@ export default function Help() {
         </div>
       </aside>
 
-      <div id="helphone-help-map" className={styles["hp-help-main"]} style={{ flex: 1, position: "relative" }}>
-        {mapboxFailed && isPredictiveEtaV2Enabled() && (
-          <div data-testid="mapbox-failure-notice" role="status"
-            style={{ position: "absolute", top: 12, left: 12, zIndex: 200, maxWidth: 260 }}>
-            Map data unavailable — showing offline ETA estimates.
-          </div>
-        )}
+      <div ref={mapContainerRef} id="helphone-help-map" className={styles["hp-help-main"]} style={{ flex: 1, position: "relative" }}>
         <Map
           mapboxAccessToken={MAPBOX_TOKEN}
           initialViewState={{
@@ -4249,6 +4268,8 @@ export default function Help() {
           }}
           onMove={(e) => {
             const vs = e?.viewState;
+            // ADR-008: keep the clustering grid in sync with the camera.
+            if (vs) setMapViewState(vs);
             if (!vs) return;
             const z = Number.isFinite(vs.zoom) ? vs.zoom : 2;
             const scale = Math.pow(2, Math.max(-4, Math.min(4, (z - 2) * 0.25)));
@@ -4366,7 +4387,7 @@ export default function Help() {
               </Fragment>
             ))}
 
-          {!isGetMode &&
+          {!mapClusteringEnabled && !isGetMode &&
             openRequests.map((req) => (
               <CharMarker
                 key={req.id}
@@ -4463,6 +4484,23 @@ export default function Help() {
               height: "100%",
               pointerEvents: "none",
             }}
+          />
+        )}
+
+        {mapClusteringEnabled && !isGetMode && openRequests.length > 0 && (
+          <ClusteredMapLayer
+            points={openRequests}
+            viewState={mapViewState}
+            width={mapSize.width}
+            height={mapSize.height}
+            onMarkerClick={(hit) => {
+              const req = openRequests[hit.index];
+              if (req) {
+                setSelectedRequest(req);
+                setPopupMarker(`req-${req.id}`);
+              }
+            }}
+            style={{ position: "absolute", inset: 0, zIndex: 5 }}
           />
         )}
 

@@ -4,7 +4,7 @@ import { subscribeContractEvents, subscribeFlagSnapshots } from "../lib/redisPub
 const EVENT_TOPICS = new Set(["RqCreated", "RqAcptd", "LocUpd", "Arrived", "Resolved", "Cancelled"]);
 const MAX_BUFFERED_BYTES = 1024 * 1024;
 
-export function attachWebSocketRelay(server, { heartbeatMs = 30_000 } = {}) {
+export function attachWebSocketRelay(server, { heartbeatMs = 30_000, deployManager = null } = {}) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 4096, clientTracking: true });
   const replay = [];
   let sequence = 0;
@@ -30,10 +30,14 @@ export function attachWebSocketRelay(server, { heartbeatMs = 30_000 } = {}) {
     const tenantId = tenant;
     const subscription = { tenantId, topics: new Set(EVENT_TOPICS) };
     client.isAlive = true;
+    // #758: the deploy manager owns connection draining and resume tokens.
+    deployManager?.registerWsConnection(client);
+    client.on("close", () => deployManager?.unregisterWsConnection(client));
     client.on("pong", () => { client.isAlive = true; });
     client.on("message", (raw) => {
       try {
         const message = JSON.parse(raw.toString());
+        if (Number.isSafeInteger(message?.seq)) client.lastSeenSeq = message.seq;
         if (message?.type === "peer-relay" && message.peerInstance && message.envelope) {
           // Route peer-instance envelope across connected tenants
           let relayed = 0;

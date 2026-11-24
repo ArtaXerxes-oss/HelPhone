@@ -356,25 +356,47 @@ export default TelemetryReceiver;
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
-import { scrubText } from "./lib/redact.js";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { scrubText } from "./lib/redact.js";
+import { publishFlagSnapshot } from "./lib/redisPubSub.js";
+import { createOtelSampler, createTailSamplingExporter } from "./lib/otelSamplingEngine.js";
 
 let sdk;
+let samplingEngine;
 
-export function initializeTelemetry() {
+/** Register the quota engine so /metrics can expose its drop counters. */
+export function registerSamplingEngine(engine) {
+  samplingEngine = engine;
+}
+
+export function initializeTelemetry({ samplingEngine: engine } = {}) {
   if (sdk) return;
+  if (engine) registerSamplingEngine(engine);
   const configuredEndpoint = process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT || process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
   const endpoint = configuredEndpoint
     ? configuredEndpoint.endsWith("/v1/traces")
       ? configuredEndpoint
       : `${configuredEndpoint.replace(/\/$/, "")}/v1/traces`
     : undefined;
+
+  // #759: the SDK sampler only suppresses noise. Every other span is recorded
+  // and the tail exporter makes the final quota/priority decision, so an error
+  // or P0 dispatch discovered late is never lost to quota exhaustion.
+  const sampler = engine ? createOtelSampler(engine) : undefined;
+  const exporter = endpoint
+    ? new OTLPTraceExporter({ url: endpoint })
+    : null;
+  const traceExporter = engine
+    ? createTailSamplingExporter(engine, exporter)
+    : (exporter || undefined);
+
   sdk = new NodeSDK({
     instrumentations: [getNodeAutoInstrumentations()],
-    ...(endpoint ? { traceExporter: new OTLPTraceExporter({ url: endpoint }) } : {}),
+    ...(sampler ? { sampler } : {}),
+    ...(traceExporter ? { traceExporter } : {}),
   });
   sdk.start();
 }
@@ -734,6 +756,42 @@ function fmtLabels(labels) {
   return e.length ? `{${e.map(([k, v]) => `${k}="${String(v).replaceAll("\\", "\\\\").replaceAll("\n", "\\n").replaceAll('"', '\\"')}"`).join(",")}}` : "";
 }
 
+/** #759: sampling/quota drop counters in Prometheus text format. */
+export function renderSamplingMetrics() {
+  if (!samplingEngine) return "";
+  const metrics = samplingEngine.getMetrics();
+  const lines = [];
+  const head = (name, type, helpText) => lines.push(
+    `# HELP ${name} ${helpText}`,
+    `# TYPE ${name} ${type}`,
+  );
+
+  head("helphone_otel_spans_dropped_total", "counter", "Spans shed by the sampling engine, by head-stage reason.");
+  for (const [reason, value] of Object.entries(metrics.byReason)) {
+    lines.push(`helphone_otel_spans_dropped_total{stage="head",reason="${reason}"} ${value}`);
+  }
+  head("helphone_otel_spans_exported_total", "counter", "Spans selected for export by the sampling engine.");
+  lines.push(`helphone_otel_spans_exported_total ${metrics.exportedTotal}`);
+  head("helphone_otel_spans_final_kept_total", "counter", "Spans kept after tail-stage evaluation.");
+  lines.push(`helphone_otel_spans_final_kept_total ${metrics.finalKept}`);
+  head("helphone_otel_spans_final_dropped_total", "counter", "Spans dropped after tail-stage evaluation.");
+  lines.push(`helphone_otel_spans_final_dropped_total ${metrics.finalDropped}`);
+  head("helphone_otel_spans_rescued_total", "counter", "Priority spans saved by tail sampling after a head-stage shed.");
+  lines.push(`helphone_otel_spans_rescued_total ${metrics.rescued}`);
+
+  head("helphone_otel_tenant_quota_exhausted_total", "counter", "Non-priority spans shed after a tenant quota was exhausted.");
+  const tenants = Object.entries(metrics.byTenant).sort((a, b) => b[1] - a[1]);
+  for (const [tenant, value] of tenants.slice(0, 20)) {
+    lines.push(`helphone_otel_tenant_quota_exhausted_total{tenant="${tenant}"} ${value}`);
+  }
+  if (tenants.length > 20) {
+    lines.push(`helphone_otel_tenant_quota_exhausted_total{tenant="other"} ${tenants.slice(20).reduce((sum, [, v]) => sum + v, 0)}`);
+  }
+  head("helphone_otel_exporter_circuit_active", "gauge", "1 while the OTLP exporter backoff circuit is tripped.");
+  lines.push(`helphone_otel_exporter_circuit_active ${metrics.circuitActive ? 1 : 0}`);
+  return `${lines.join("\n")}\n`;
+}
+
 /** Prometheus text for every telemetry family above; appended to /metrics. */
 export function renderTelemetryMetrics() {
   const lines = [];
@@ -762,7 +820,9 @@ export function renderTelemetryMetrics() {
     lines.push(`${h.name}_sum${fmtLabels(h.labels)} ${h.sum}`, `${h.name}_count${fmtLabels(h.labels)} ${h.count}`);
   }
   setGauge("helphone_flag_current_version", {}, Number(flagState.version));
-  return lines.length ? `${lines.join("\n")}\n` : "";
+  const sampling = renderSamplingMetrics();
+  const body = lines.length ? `${lines.join("\n")}\n` : "";
+  return `${body}${sampling}`;
 }
 
 export function resetTelemetryMetrics() {

@@ -13,6 +13,13 @@
 
 import { cellTotal } from "./gridParams.js";
 
+// ADR-008 follow-up 5: two pixel-pack buffers + fenceSync. readPixels writes
+// into a PBO and returns immediately; clientWaitSync(..., 0) only *polls* the
+// fence and yields to the event loop between checks, so the main thread never
+// blocks for the GPU. Two PBOs allow the next frame to start a read while the
+// previous one is still being consumed.
+export const PBO_COUNT = 2;
+
 const BIN_VS = `#version 300 es
 in vec2 a_pos;
 uniform vec2 u_origin;
@@ -65,6 +72,10 @@ in float v_dist;
 out vec4 o;
 void main() { o = vec4(v_dist, 0.0, 0.0, 0.0); }`;
 
+// Exported so the shared fixture conformance test can pin the GLSL<->JS
+// contract without needing a real WebGL2 context.
+export const WEBGL2_SHADERS = Object.freeze({ BIN_VS, BIN_FS, SPREAD_VS, SPREAD_FS });
+
 function getContext(canvas) {
   const gl = canvas.getContext("webgl2", { antialias: false, depth: false, stencil: false });
   if (!gl) return null;
@@ -105,7 +116,77 @@ function compile(gl, vsSrc, fsSrc) {
   return program;
 }
 
-export function createWebGL2Clusterer(params) {
+/**
+ * Non-blocking RGBA32F readback into a pixel-pack buffer, guarded by a fence.
+ * Returns null when the context lacks the needed API (the legacy sync path is
+ * kept for that case).
+ */
+export function createAsyncReadback(gl, bytes, { setTimeoutFn = globalThis.setTimeout } = {}) {
+  if (typeof gl?.fenceSync !== "function" || typeof gl?.getBufferSubData !== "function") return null;
+  const pbos = Array.from({ length: PBO_COUNT }, () => {
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, buffer);
+    gl.bufferData(gl.PIXEL_PACK_BUFFER, bytes, gl.STREAM_READ);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    return { buffer, busy: false };
+  });
+  let next = 0;
+
+  return {
+    pbos,
+    async read(fbo, width, height, pixels) {
+      let slot = null;
+      for (let i = 0; i < PBO_COUNT; i++) {
+        const candidate = pbos[(next + i) % PBO_COUNT];
+        if (!candidate.busy) {
+          slot = candidate;
+          next = (next + i + 1) % PBO_COUNT;
+          break;
+        }
+      }
+      if (!slot) throw new Error("all WebGL2 PBOs busy (one update per frame max)");
+      slot.busy = true;
+      let blockingMs = 0;
+      const t0 = performance.now();
+      try {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.buffer);
+        gl.readPixels(0, 0, width, height, gl.RGBA, gl.FLOAT, 0);
+        blockingMs += performance.now() - t0;
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+
+        const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+        gl.flush();
+        const tSubmitted = performance.now();
+        for (;;) {
+          const tPoll = performance.now();
+          const status = gl.clientWaitSync(sync, 0, 0);
+          blockingMs += performance.now() - tPoll;
+          if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) break;
+          if (status === gl.WAIT_FAILED) throw new Error("fenceSync wait failed");
+          // Yield: the cost of waiting is off the main thread's critical path.
+          await new Promise((resolve) => setTimeoutFn(resolve, 0));
+        }
+        const gpuWaitMs = performance.now() - tSubmitted;
+
+        const tCopy = performance.now();
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, slot.buffer);
+        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pixels);
+        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+        blockingMs += performance.now() - tCopy;
+        gl.deleteSync(sync);
+        return { gpuWaitMs, blockingMs };
+      } finally {
+        slot.busy = false;
+      }
+    },
+    destroy() {
+      for (const pbo of pbos) gl.deleteBuffer(pbo.buffer);
+    },
+  };
+}
+
+export function createWebGL2Clusterer(params, { asyncReadback = true } = {}) {
   const canvas = makeCanvas();
   const gl = canvas && getContext(canvas);
   if (!gl) throw new Error("WebGL2 with EXT_color_buffer_float + EXT_float_blend unavailable");
@@ -132,6 +213,7 @@ export function createWebGL2Clusterer(params) {
   };
   const bins = makeTarget();
   const spread = makeTarget();
+  const readback = asyncReadback ? createAsyncReadback(gl, cells * 16) : null;
 
   const vao = gl.createVertexArray();
   const vbo = gl.createBuffer();
@@ -186,11 +268,21 @@ export function createWebGL2Clusterer(params) {
     gl.drawArrays(gl.POINTS, 0, n);
     const tDrawn = performance.now();
 
-    // readPixels is synchronous: it also absorbs the GPU wait.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, bins.fbo);
-    gl.readPixels(0, 0, gridW, gridH, gl.RGBA, gl.FLOAT, binPixels);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, spread.fbo);
-    gl.readPixels(0, 0, gridW, gridH, gl.RGBA, gl.FLOAT, spreadPixels);
+    let gpuWaitMs = null;
+    let blockingReadbackMs = 0;
+    if (readback) {
+      const binsRead = await readback.read(bins.fbo, gridW, gridH, binPixels);
+      const spreadRead = await readback.read(spread.fbo, gridW, gridH, spreadPixels);
+      gpuWaitMs = Math.max(binsRead.gpuWaitMs, spreadRead.gpuWaitMs);
+      blockingReadbackMs = binsRead.blockingMs + spreadRead.blockingMs;
+    } else {
+      // Legacy path: readPixels is synchronous and absorbs the GPU wait.
+      gl.bindFramebuffer(gl.FRAMEBUFFER, bins.fbo);
+      gl.readPixels(0, 0, gridW, gridH, gl.RGBA, gl.FLOAT, binPixels);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, spread.fbo);
+      gl.readPixels(0, 0, gridW, gridH, gl.RGBA, gl.FLOAT, spreadPixels);
+      blockingReadbackMs = performance.now() - tDrawn;
+    }
     gl.bindTexture(gl.TEXTURE_2D, null);
     const tRead = performance.now();
 
@@ -212,7 +304,12 @@ export function createWebGL2Clusterer(params) {
         encodeMs: tUploaded - t0,
         gpuRoundTripMs: tRead - tUploaded,
         gpuPassMs: null,
+        // Wall-clock readback (includes the async fence wait when enabled).
         readbackMs: tDone - tRead,
+        // Time actually spent on the main thread — this is the <1 ms budget.
+        blockingReadbackMs,
+        gpuWaitMs,
+        asyncReadback: Boolean(readback),
         drawSubmitMs: tDrawn - tUploaded,
         totalMs: tDone - t0,
         uploadBytes: n * 8,
@@ -223,11 +320,14 @@ export function createWebGL2Clusterer(params) {
 
   return {
     backend: "webgl2",
+    asyncReadback: Boolean(readback),
+    pboCount: readback ? PBO_COUNT : 0,
     cluster,
     get memoryBytes() {
-      return vboBytes + cells * 16 * 2;
+      return vboBytes + cells * 16 * 2 + (readback ? cells * 16 * PBO_COUNT : 0);
     },
     destroy() {
+      readback?.destroy();
       gl.getExtension("WEBGL_lose_context")?.loseContext();
     },
   };

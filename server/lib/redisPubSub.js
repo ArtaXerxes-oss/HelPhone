@@ -65,7 +65,12 @@ function isContractEvent(value) {
 function withReceivedTrace(event) {
   const ctx = extractTrace(event);
   if (!ctx) return event;
-  return { ...event, trace: { ...event.trace, traceId: ctx.traceId, links: [{ traceId: ctx.traceId, spanId: ctx.spanId }] } };
+  const prior = Array.isArray(event.trace?.links) ? event.trace.links : [];
+  const link = { traceId: ctx.traceId, spanId: ctx.spanId };
+  const links = [...prior, link]
+    .filter((l, i, all) => all.findIndex((candidate) => candidate.traceId === l.traceId && candidate.spanId === l.spanId) === i)
+    .slice(-16);
+  return { ...event, trace: { ...event.trace, traceId: ctx.traceId, links } };
 }
 
 export async function publishContractEvent(event, { traceparent, tracestate } = {}) {

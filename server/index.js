@@ -1,7 +1,14 @@
 import "./telemetryBootstrap.js";
-import { telemetryErrorHandler, shutdownTelemetry, traceIdFromRequest, renderTelemetryMetrics, enforceKillSwitch } from "./telemetry.js";
-import { requestMetrics, renderMetrics } from "./middleware/metrics.js";
-import { createHealthRouter } from "./routes/health.js";
+import {
+  telemetryErrorHandler,
+  shutdownTelemetry,
+  traceIdFromRequest,
+  renderTelemetryMetrics,
+  enforceKillSwitch,
+} from "./telemetry.js";
+import { ZeroDowntimeDeployManager } from "./lib/zeroDowntimeDeploy.js";
+import { ChaosEngine, armStartupChaos } from "./lib/chaosEngine.js";
+import { createChaosAdmissionMiddleware, createChaosAdminRouter } from "./middleware/chaos.js";
 import { clockSyncHandler } from "./lib/clockSync.js";
 import cluster from "node:cluster";
 import { createServer } from "node:http";
@@ -16,6 +23,7 @@ import { rpc } from "@stellar/stellar-sdk";
 import { normalizeBase64 } from "./base64Utils.js";
 import { compression as brotliCompression } from "./middleware/compression.js";
 import { logger, poolMonitorMiddleware } from "./middleware/logger.js";
+import { observeDuration, renderMetrics, requestMetrics } from "./middleware/metrics.js";
 import { createCorsMiddleware } from "./middleware/cors.js";
 import { applyKeepAliveTuning, keepAliveMiddleware } from "./middleware/keepAlive.js";
 import { getPool } from "./db/connection.js";
@@ -33,12 +41,34 @@ import { createFederationRouter } from "./routes/federation.js";
 import { createDispatchRouters } from "./routes/dispatch.js";
 import { syncRouter } from "./routes/sync.js";
 import historyRouter from "./routes/history.js";
+import { createHealthRouter } from "./routes/health.js";
 import { createDocsRouter } from "./routes/docs.js";
+import { attachWebSocketRelay } from "./routes/wsCluster.js";
+import { closeEventBus, connectEventBus, publishContractEvent } from "./lib/redisPubSub.js";
 import { getRedis, isRedisConfigured } from "./lib/redis.js";
-import { eventsRouter } from "./routes/events.js";
-import { attachTelemetryWebSocket } from "./telemetry.js";
+import {
+  runtimeConfig,
+  runtimeAudit,
+  reloadRuntimeConfig,
+  startRuntimeConfigReload,
+} from "./lib/runtimeConfig.js";
+import { timingSafeEqual } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// #769: fault injection is opt-in and fails closed in production. When no
+// scenario is armed the engine reports no faults and admission is a no-op.
+export const chaosEngine = new ChaosEngine();
+export const chaosStartup = armStartupChaos(chaosEngine);
+if (chaosStartup.armed) {
+  console.warn(`[chaos] armed ${chaosStartup.run.scenario} (${chaosStartup.config.reason})`);
+}
+
+// #758: the deploy manager gates traffic with /readyz and owns WS draining.
+export const deployManager = new ZeroDowntimeDeployManager({
+  maxIndexerLag: Number(process.env.DEPLOY_MAX_INDEXER_LAG) || 50,
+  drainTimeoutMs: Number(process.env.DEPLOY_DRAIN_TIMEOUT_MS) || 15000,
+});
 
 // ── Rate limiter ─────────────────────────────────────────────────────────────
 // Rate limiter: counts requests per IP within a fixed window and returns 429
@@ -190,6 +220,13 @@ app.use((req, res, next) => {
   next();
 });
 app.use("/health", createHealthRouter({ readiness: () => _ready }));
+// #758: /healthz is liveness (Render health check); /readyz is the traffic
+// gate and stays 503 until migrations are applied and indexer lag is bounded.
+app.get("/healthz", (_req, res) => res.json(deployManager.checkHealthz()));
+app.get("/readyz", (_req, res) => {
+  const ready = deployManager.checkReadyz();
+  res.status(ready.httpCode).json(ready);
+});
 app.get("/metrics", (req, res) => {
   const token = process.env.METRICS_BEARER_TOKEN;
   if (token && req.get("authorization") !== `Bearer ${token}`) {
@@ -199,6 +236,11 @@ app.get("/metrics", (req, res) => {
 });
 app.post("/api/telemetry/errors", (req, res) => telemetryErrorHandler(req, res));
 app.get("/api/time", clockSyncHandler);
+
+// Bulkhead shed order (#769): runs before any feature routes so background
+// load never reaches the P0 dispatch path during a chaos rehearsal.
+app.use(createChaosAdmissionMiddleware(chaosEngine));
+app.use("/admin/chaos", createChaosAdminRouter(chaosEngine));
 
 // Behind a proxy (Render), req.ip is the proxy unless TRUST_PROXY is set to the
 // number of hops (e.g. "1"); whitelist matching and rate limiting both use it.
@@ -369,7 +411,9 @@ function health(_req, res) {
   let poolStats = null;
   try {
     poolStats = getPool().getStats();
-  } catch {}
+  } catch {
+    // Pool metrics are best-effort; health must still respond.
+  }
   res.json({
     status: _ready ? "ready" : "warming",
     ready: _ready,
@@ -655,7 +699,42 @@ app.post("/api/soroban/footprint/inspect", enforceKillSwitch("soroban.submit"), 
   }
 });
 
+// ── Runtime secret rotation (#760) ──────────────────────────────────────────
+// Credentials are read through the rotation manager on every access, so a
+// reload is visible immediately and a rejected (partial) reload changes
+// nothing. Responses deliberately expose fingerprints/status only — never
+// secret values.
+function requireAdmin(req, res, next) {
+  const configured = process.env.ADMIN_API_TOKEN;
+  if (!configured || typeof configured !== "string") {
+    return res.status(404).json({ error: "Not found" });
+  }
+  const presented = String(req.get("x-admin-token") || "");
+  const a = Buffer.from(configured);
+  const b = Buffer.from(presented);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return next();
+}
+
+app.get("/api/admin/rotation-status", requireAdmin, (_req, res) => {
+  res.json({ success: true, ...runtimeConfig.status(), audit: runtimeAudit.history().length });
+});
+
+app.post("/api/admin/reload-secrets", requireAdmin, async (_req, res) => {
+  try {
+    const result = await reloadRuntimeConfig();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    // Fail closed: the active snapshot is untouched. Error messages from the
+    // manager list target names, never values.
+    res.status(409).json({ success: false, code: err.code ?? "ROTATION_FAILED", error: err.message });
+  }
+});
+
 export function startServer() {
+  const stopReload = startRuntimeConfigReload();
   // Apply schema migrations automatically at boot so the database schema
   // stays in sync on every deploy (non-fatal; server serves even on failure).
   import("./db/migrator.js")
@@ -664,8 +743,7 @@ export function startServer() {
 
   void connectEventBus().catch((err) => console.error("[events] Redis relay unavailable:", err.message));
   const server = createServer(app);
-  const relay = attachWebSocketRelay(server);
-  const frameStream = attachTelemetryWebSocket(server);
+  const relay = attachWebSocketRelay(server, { deployManager });
   server.listen(PORT, () => {
     // Off-peak VACUUM ANALYZE / REINDEX CONCURRENTLY (opt-in: DB_MAINTENANCE_ENABLED=true)
     if (getMaintenanceConfig().enabled) startMaintenanceScheduler();
@@ -674,14 +752,16 @@ export function startServer() {
   });
   applyKeepAliveTuning(server);
   const shutdown = () => {
+    stopReload();
     relay.close().catch((err) => console.error("[events] WebSocket shutdown failed:", err.message));
     frameStream.close().catch((err) => console.error("[telemetry] frame stream shutdown failed:", err.message));
     closeEventBus().catch((err) => console.error("[events] Redis shutdown failed:", err.message));
     shutdownTelemetry().catch((err) => console.error("[telemetry] shutdown failed:", err.message));
     server.close();
   };
-  process.once("SIGTERM", shutdown);
-  process.once("SIGINT", shutdown);
+  const onSignal = () => shutdown().catch((err) => console.error("[shutdown] failed:", err.message));
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
   return server;
 }
 

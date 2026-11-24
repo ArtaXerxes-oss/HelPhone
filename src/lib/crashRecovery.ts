@@ -9,6 +9,7 @@
  */
 
 import { currentTraceIds } from './telemetry'
+import { compareFlagVersions, currentFlagVersion, evaluateKillSwitch } from './featureFlags'
 
 export const DB_NAME = 'helphone_crash_recovery'
 export const STORE_NAME = 'drafts'
@@ -39,19 +40,6 @@ export interface HelpDraft {
 }
 
 export type GetDraftFn = () => Omit<HelpDraft, 'createdAt' | 'updatedAt'> | null | undefined
-
-// ── Flag-version helper ────────────────────────────────────────────────────
-// Defined here so saveDraft can stamp drafts without importing from telemetry.
-// Callers that manage flag versions themselves can override via the `flagVersion`
-// field on the partial draft they pass to saveDraft.
-function currentFlagVersion(): string {
-  try {
-    // @ts-ignore – populated at build time or runtime by the flag system
-    return (globalThis as any).__FLAG_VERSION__ ?? '0'
-  } catch {
-    return '0'
-  }
-}
 
 export type ReplayVerdict =
   | { allowed: true }
@@ -137,6 +125,7 @@ export async function saveDraft(partial: Omit<HelpDraft, 'createdAt' | 'updatedA
     if (existing?.createdAt) createdAt = existing.createdAt
   } catch {}
 
+  const traceIds = currentTraceIds()
   const draft: HelpDraft = {
     emergencyType: partial.emergencyType ?? null,
     nickname: partial.nickname ?? '',
@@ -144,10 +133,14 @@ export async function saveDraft(partial: Omit<HelpDraft, 'createdAt' | 'updatedA
     location: partial.location ?? null,
     searchQuery: partial.searchQuery ?? '',
     extra: partial.extra,
-    ...(currentTraceIds() ?? {}),
     // Stamp the flag-schema version so checkReplay can detect kill-switch drift
     // after a crash/relaunch cycle (#909).
     flagVersion: partial.flagVersion ?? currentFlagVersion(),
+    // An explicitly supplied join key (e.g. restored from a worker hop) wins;
+    // otherwise use the active tab trace. Absent ids stay absent — no new
+    // trace is invented at autosave time (#791, rollback-safe).
+    traceId: partial.traceId ?? traceIds?.traceId,
+    spanId: partial.spanId ?? traceIds?.spanId,
     createdAt,
     updatedAt: now,
   }
