@@ -9,6 +9,7 @@
  */
 
 import { currentTraceIds } from './telemetry'
+import { compareFlagVersions, currentFlagVersion, evaluateKillSwitch } from './featureFlags'
 
 export const DB_NAME = 'helphone_crash_recovery'
 export const STORE_NAME = 'drafts'
@@ -28,6 +29,8 @@ export interface HelpDraft {
   /** Join key back to the dispatch trace for post-crash forensics (#791). */
   traceId?: string
   spanId?: string
+  /** Flag version the draft was composed under (#797 stale replay guard). */
+  flagVersion?: string
   createdAt: number
   updatedAt: number
 }
@@ -118,6 +121,7 @@ export async function saveDraft(partial: Omit<HelpDraft, 'createdAt' | 'updatedA
     if (existing?.createdAt) createdAt = existing.createdAt
   } catch {}
 
+  const traceIds = currentTraceIds()
   const draft: HelpDraft = {
     emergencyType: partial.emergencyType ?? null,
     nickname: partial.nickname ?? '',
@@ -125,7 +129,12 @@ export async function saveDraft(partial: Omit<HelpDraft, 'createdAt' | 'updatedA
     location: partial.location ?? null,
     searchQuery: partial.searchQuery ?? '',
     extra: partial.extra,
-    ...(currentTraceIds() ?? {}),
+    flagVersion: partial.flagVersion ?? currentFlagVersion(),
+    // An explicitly supplied join key (e.g. restored from a worker hop) wins;
+    // otherwise use the active tab trace. Absent ids stay absent — no new
+    // trace is invented at autosave time (#791, rollback-safe).
+    traceId: partial.traceId ?? traceIds?.traceId,
+    spanId: partial.spanId ?? traceIds?.spanId,
     createdAt,
     updatedAt: now,
   }

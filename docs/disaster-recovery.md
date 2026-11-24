@@ -240,3 +240,38 @@ A compromised Mapbox CDN or adversarial proxy serving corrupted, manipulated, or
 4. **Field Fallback**:
    - When CDN upstream is untrusted, switch `CommunityMap.jsx` to offline SVG fallback mode until new tileset hashes are attested.
 
+## Chaos rehearsal record (#769, #791)
+
+Fault injection is **opt-in** (`CHAOS_ENABLED=true`) and is impossible in
+production without the explicit `CHAOS_BREAK_GLASS` value. Startup arming lives
+in `server/lib/chaosEngine.js` (`armStartupChaos`), the bulkhead shed order is
+enforced by `server/middleware/chaos.js`, and the admin controls are under
+`POST /admin/chaos/{start,abort}` with `CHAOS_ADMIN_TOKEN`.
+
+Scheduled staging runs: `.github/workflows/chaos-rehearsal.yml` (weekly
+03:00 UTC Monday + manual dispatch). The rehearsal is `node scripts/chaos-run.js`.
+
+Recorded rehearsal (generated locally, 2026-11-24):
+
+| Scenario | Faults | P0 admitted | Rescuer heartbeat | Map tiles shed | Critical lane | Integrity | Leak guard | Rollback |
+|---|---|---|---|---|---|---|---|---|
+| RED_WEDDING | Redis outage, Postgres partition detach, Stellar RPC 429 storm, CPU quota throttle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| REDIS+POSTGRES+STELLAR | Redis outage, Postgres partition detach, Stellar RPC 429 storm | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| STELLAR+CPU | Stellar RPC 429 storm, CPU quota throttle | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+Abort criteria remain those in `docs/spikes/769-multi-fault-chaos-bulkhead-report.md`:
+`chaosEngine.abort()` clears every fault and restores the CPU quota in one
+command; a non-zero indexer gap, CRDT resurrection or live SMS/mainnet side
+effect fails the run.
+
+## Zero-downtime deploys (#758)
+
+See `docs/zero-downtime-deploy-runbook.md` for the staged cutover, manual abort
+gate and rollback procedure. Rehearsal results are appended below.
+
+| Scenario | Result | WS handoffs | Rollback |
+|---|---|---|---|
+| Healthy staged deploy | COMPLETE | 3/3 | no |
+| Failed health check | ROLLED_BACK | n/a | automatic |
+| Manual abort gate | ROLLED_BACK | n/a | automatic |
+

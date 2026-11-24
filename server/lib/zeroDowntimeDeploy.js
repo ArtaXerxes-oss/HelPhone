@@ -18,6 +18,17 @@ export const DeployState = {
   TERMINATED: "TERMINATED",
 };
 
+export const DeployStage = Object.freeze({
+  MIGRATE: "MIGRATE",
+  INDEXER_CATCHUP: "INDEXER_CATCHUP",
+  HEALTH: "HEALTH",
+  DRAIN: "DRAIN",
+  DEPLOY: "DEPLOY",
+  CUTOVER: "CUTOVER",
+  ROLLBACK: "ROLLBACK",
+  COMPLETE: "COMPLETE",
+});
+
 export class ZeroDowntimeDeployManager {
   constructor(options = {}) {
     this.maxIndexerLag = options.maxIndexerLag || 50; // Max allowed ledger lag for /readyz
@@ -82,7 +93,10 @@ export class ZeroDowntimeDeployManager {
       this.state !== DeployState.DRAINING &&
       this.state !== DeployState.TERMINATED;
 
-    if (isReady && this.state === DeployState.INDEXER_CATCHUP) {
+    // A replica can become ready without passing through the explicit
+    // catch-up transition (e.g. migrations applied by a peer, or a restart
+    // with an already-current indexer), so promote from any live state.
+    if (isReady) {
       this.state = DeployState.READY;
     }
 
@@ -206,4 +220,106 @@ export class ZeroDowntimeDeployManager {
       }, 50); // fast simulation timeout in tests, or full timeout in prod
     });
   }
+}
+
+/**
+ * Release-workflow choreography (#758): migrate → indexer catch-up → health →
+ * drain → deploy → cutover, with a manual abort gate and automatic rollback.
+ *
+ * Stages are injectable so CI can rehearse the whole sequence without a real
+ * Render deploy or Postgres instance. The manager is still the single source
+ * of truth for migration locks, indexer lag, readiness and WS draining.
+ */
+export function createStagedDeploy({
+  manager,
+  stages = {},
+  abortGate = () => false,
+  onStage = () => {},
+  env = process.env,
+} = {}) {
+  if (!manager) throw new Error("ZeroDowntimeDeployManager is required");
+  const noop = async () => ({ ok: true });
+  const pipeline = [
+    [DeployStage.MIGRATE, stages.migrate || noop],
+    [DeployStage.INDEXER_CATCHUP, stages.indexerCatchup || noop],
+    [DeployStage.HEALTH, stages.health || (() => Promise.resolve({ ok: manager.checkReadyz().httpCode === 200 }))],
+    [DeployStage.DRAIN, stages.drain || (() => manager.initiateGracefulDrain())],
+    [DeployStage.DEPLOY, stages.deploy || noop],
+  ];
+
+  let abortRequested = false;
+  const history = [];
+
+  const record = (stage, outcome, detail) => {
+    const entry = { stage, outcome, at: Date.now(), detail };
+    history.push(entry);
+    onStage(entry);
+    return entry;
+  };
+
+  return {
+    get history() {
+      return [...history];
+    },
+    abort(reason = "manual_abort") {
+      abortRequested = true;
+      record(DeployStage.ABORTED, "ABORTED", { reason });
+      return { aborted: true, reason };
+    },
+    async run(context = {}) {
+      history.length = 0;
+      abortRequested = Boolean(context.abortBeforeCutover) || abortGate(context);
+      let failedStage = null;
+      let failure = null;
+
+      for (const [stage, fn] of pipeline) {
+        if (abortRequested) break;
+        try {
+          const detail = await fn(context);
+          const ok = detail === true || detail === undefined || detail?.ok === true || detail?.status === "OK";
+          record(stage, ok ? "PASSED" : "FAILED", detail);
+          if (!ok) {
+            failedStage = stage;
+            failure = "stage reported not ok";
+            break;
+          }
+        } catch (error) {
+          record(stage, "FAILED", { error: error?.message || String(error) });
+          failedStage = stage;
+          failure = error;
+          break;
+        }
+      }
+
+      // Manual abort gate: the operator can stop between DEPLOY and CUTOVER.
+      if (!failedStage && (abortRequested || abortGate({ ...context, stage: DeployStage.CUTOVER }))) {
+        failedStage = DeployStage.CUTOVER;
+        failure = "manual abort gate";
+      }
+
+      if (!failedStage) {
+        const cutover = await stages.cutover?.(context);
+        record(DeployStage.CUTOVER, "PASSED", cutover ?? { ok: true });
+        record(DeployStage.COMPLETE, "PASSED", { env: env.DEPLOY_ENV || "rehearsal" });
+        return { status: "COMPLETE", history: [...history] };
+      }
+
+      // Failed health checks (and any other failure before cutover) roll back.
+      let rollback;
+      try {
+        rollback = await (stages.rollback
+          ? stages.rollback({ failedStage, failure, context })
+          : { ok: true, reverted: true });
+        record(DeployStage.ROLLBACK, "PASSED", rollback);
+      } catch (error) {
+        record(DeployStage.ROLLBACK, "FAILED", { error: error?.message || String(error) });
+      }
+      return {
+        status: "ROLLED_BACK",
+        failedStage,
+        reason: failure?.message || failure,
+        history: [...history],
+      };
+    },
+  };
 }

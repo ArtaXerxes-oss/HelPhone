@@ -37,6 +37,54 @@ export const PoolLane = {
   BACKGROUND: "BACKGROUND",
 };
 
+/**
+ * Break-glass value required to arm chaos in production. Anything else — an
+ * unset flag, a typo, "true" — fails closed. CI/staging injects the same
+ * value from a protected secret.
+ */
+export const CHAOS_BREAK_GLASS_VALUE = "helphone-chaos-break-glass-2026";
+
+/** Resolve startup fault injection from environment without side effects. */
+export function chaosStartupConfig(env = process.env) {
+  const enabled = String(env.CHAOS_ENABLED || "").toLowerCase() === "true";
+  const nodeEnv = env.NODE_ENV || "development";
+  const production = nodeEnv === "production";
+  const requested = String(env.CHAOS_SCENARIO || ScenarioType.RED_WEDDING)
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  const scenario = requested.length > 1 ? requested : requested[0];
+  const breakGlassOk = env.CHAOS_BREAK_GLASS === CHAOS_BREAK_GLASS_VALUE;
+  const allowed = !production || breakGlassOk;
+  return {
+    enabled,
+    scenario,
+    nodeEnv,
+    production,
+    allowed,
+    reason: !enabled ? "disabled"
+      : !production ? "non_production"
+        : breakGlassOk ? "break_glass" : "production_requires_break_glass",
+  };
+}
+
+/** Refuse to run fault injection in production without explicit break glass. */
+export function assertChaosAllowed(config) {
+  if (config.enabled && !config.allowed) {
+    throw new Error("Chaos injection is disabled in production without CHAOS_BREAK_GLASS");
+  }
+  return config;
+}
+
+/** Arm the configured scenario at startup. No-op when CHAOS_ENABLED is unset. */
+export function armStartupChaos(engine, env = process.env) {
+  const config = assertChaosAllowed(chaosStartupConfig(env));
+  if (!config.enabled) return { armed: false, reason: config.reason, config };
+  const scenarios = Array.isArray(config.scenario) ? config.scenario : [config.scenario];
+  if (!scenarios.every((s) => Object.values(ScenarioType).includes(s))) {
+    throw new TypeError(`Unknown chaos scenario: ${config.scenario}`);
+  }
+  return { armed: true, config, run: engine.startScenario(config.scenario) };
+}
+
 export class ChaosEngine {
   constructor(options = {}) {
     this.activeScenario = null;
@@ -69,10 +117,24 @@ export class ChaosEngine {
    * Arm and execute a chaos scenario.
    */
   startScenario(scenario = ScenarioType.RED_WEDDING) {
-    this.activeScenario = scenario;
+    this.activeScenario = Array.isArray(scenario) ? scenario.join("+") : scenario;
     this.startTime = Date.now();
     this.abortTripped = false;
 
+    for (const single of Array.isArray(scenario) ? scenario : [scenario]) {
+      this.applyScenarioFaults(single);
+    }
+
+    return {
+      status: "RUNNING",
+      scenario: this.activeScenario,
+      faults: Array.from(this.injectedFaults),
+      cpuQuotaPercent: this.cpuQuotaPercent,
+      timestamp: this.startTime,
+    };
+  }
+
+  applyScenarioFaults(scenario) {
     if (scenario === ScenarioType.RED_WEDDING) {
       this.injectedFaults.add("REDIS_OUTAGE");
       this.injectedFaults.add("POSTGRES_PARTITION_DETACH");
@@ -89,14 +151,6 @@ export class ChaosEngine {
       this.injectedFaults.add("CPU_QUOTA_THROTTLE");
       this.cpuQuotaPercent = 25;
     }
-
-    return {
-      status: "RUNNING",
-      scenario: this.activeScenario,
-      faults: Array.from(this.injectedFaults),
-      cpuQuotaPercent: this.cpuQuotaPercent,
-      timestamp: this.startTime,
-    };
   }
 
   /**

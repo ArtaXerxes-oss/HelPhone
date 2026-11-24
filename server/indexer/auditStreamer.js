@@ -1,7 +1,12 @@
-import { extractTrace, hopAttributes, parseTraceparent } from "../lib/traceContext.js";
+import { extractTrace, hopAttributes, hopContext, parseTraceparent } from "../lib/traceContext.js";
 
 export function normalizeContractEvent(event, { source = "soroban", observedAt = new Date().toISOString() } = {}) {
   const id = event.id || event.pagingToken || `${event.ledger || "unknown"}:${event.txHash || event.transactionHash || "unknown"}:${event.topic || "event"}`;
+  const traceparent = traceparentOf(event);
+  // The indexer is a fan-out receiver: it keeps the submit/publish span as a
+  // link and gives the audit row its own child span id. Without a carrier
+  // neither is created, so an untraced ledger poll never starts a trace.
+  const hop = hopContext(traceparent, event.trace?.links);
   return {
     id,
     source,
@@ -16,7 +21,9 @@ export function normalizeContractEvent(event, { source = "soroban", observedAt =
     // `trace` envelope, or from a `traceparent` recorded off-chain at submit
     // time (Soroban itself carries no trace context). Absent → null, never a
     // fresh poll-time trace.
-    traceparent: traceparentOf(event),
+    traceparent,
+    spanId: hop?.spanId ?? null,
+    links: hop?.links ?? [],
     attributes: hopAttributes({
       dispatchId: event.dispatchId ?? event.requestId,
       txHash: event.txHash || event.transactionHash,

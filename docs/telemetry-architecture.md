@@ -33,11 +33,60 @@ Rules:
 - Fan-out receivers (Redis subscribers, indexer) record the publisher span as a **link**, not a parent.
 - If a message arrives without `trace`, nothing is attached. Don't start a new trace at poll time. Old publishers and workers keep working, so a rollback is safe for one release.
 
+The browser-side carriers live in `src/lib/telemetry.ts` (`traceHeaders`,
+`wrapForWorker`, `unwrapFromWorker`, `currentTraceIds`) and are backed by the
+dependency-free W3C helpers in `src/lib/traceWire.js`. `crashRecovery.ts` uses
+`currentTraceIds()` for the IDB draft and the flag-version helpers from
+`src/lib/featureFlags.ts` for stale replay checks. Server-side fan-out links
+are produced in `server/lib/redisPubSub.js` and joined onto audit rows in
+`server/indexer/auditStreamer.js` via `hopContext()` from `traceContext.js`.
+`node --test test/trace-propagation.node-test.mjs` follows one traceId through
+every hop and asserts the no-trace rollback rule.
+
 ```
 PWA tap ──traceparent──▶ Express ──trace{}──▶ Redis ──▶ subscriber (link)
    │                         │
    └─ worker (__traceparent) └─ Soroban submit ─(txHash↔traceparent, off-chain)─▶ indexer row
 ```
+
+### Sampling and quotas (#759)
+
+The OTel Node SDK is configured at boot by `server/telemetryBootstrap.js`, which
+builds an `OtelSamplingEngine` and registers it with `server/telemetry.js`.
+Sampling is hybrid:
+
+- The SDK sampler applies Pareto noise rules first (`/healthz`, `/readyz`,
+  static assets, heartbeats). Those spans are `NOT_RECORD` — no span is allocated.
+- Every other span is `RECORD_ONLY`. `createTailSamplingExporter` makes the
+  final decision when the span ends, so an error or P0 path discovered late is
+  never lost to quota exhaustion.
+- Priority rules run before quotas: 100% of errors, `emergency_dispatch` flows,
+  `helphone.p0` spans and spans at or above the latency threshold are kept.
+- Per-tenant quotas (`tenantQuotas`) gate background traffic. Exhaustion
+  degrades the tenant to `DROP`/`RECORD_ONLY`; errors and P0 paths continue.
+
+Configuration (all optional, documented defaults):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `OTEL_HEAD_SAMPLE_RATIO` | `0.05` | Baseline background sample ratio |
+| `OTEL_DEFAULT_TENANT_QUOTA` | head ratio | Quota for tenants without an explicit entry |
+| `OTEL_TENANT_QUOTAS` | `{}` | JSON map of tenant id → ratio, e.g. `{"tenant-a":0.01}` |
+| `OTEL_HIGH_LATENCY_THRESHOLD_MS` | `1000` | Slow spans are always kept |
+| `OTEL_EXPORTER_BACKOFF_MS` | `30000` | Circuit-breaker window after an OTLP `429` |
+| `OTEL_PII_SALT` | built-in | Salt for pseudonymising wallet/IP/responder identifiers |
+| `OTEL_P0_PATHS` | dispatch/help/error ingest | Comma-separated regexes for P0 routes |
+
+Drop counters are exported on `GET /metrics`:
+`helphone_otel_spans_dropped_total{stage="head",reason=...}`,
+`helphone_otel_spans_exported_total`,
+`helphone_otel_spans_final_kept_total`,
+`helphone_otel_spans_final_dropped_total`,
+`helphone_otel_spans_rescued_total`,
+`helphone_otel_tenant_quota_exhausted_total{tenant=...}` (top 20 tenants, rest
+aggregated as `tenant="other"`) and `helphone_otel_exporter_circuit_active`.
+Tenant labels and drop reasons are bounded so quota exhaustion cannot create a
+cardinality incident.
 
 ## Redaction (#792)
 
