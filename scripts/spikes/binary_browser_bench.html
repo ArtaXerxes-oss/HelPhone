@@ -1,0 +1,18 @@
+<!doctype html>
+<!-- Static page driven by scripts/spikes/binary_browser_benchmark.js (ADR-014).
+     Query: ?scenario=flatbuffers/positions&frameSize=1000&rate=10000&seconds=10 -->
+<meta charset="utf-8">
+<title>Telemetry decode bench</title>
+<canvas id="c" width="480" height="320"></canvas>
+<script type="module">
+  import { runTelemetryBench } from "/src/utils/telemetryBench.js";
+  const q = new URLSearchParams(location.search);
+  window.__bench = runTelemetryBench({
+    scenario: q.get("scenario") ?? "flatbuffers/positions",
+    frameSize: Number(q.get("frameSize") ?? 1000),
+    rate: Number(q.get("rate") ?? 10000),
+    seconds: Number(q.get("seconds") ?? 10),
+    canvas: document.getElementById("c"),
+    wasmUrl: "/src/wasm/telemetry_reader.wasm",
+  }).catch((err) => ({ error: String(err && err.stack || err) }));
+</script>

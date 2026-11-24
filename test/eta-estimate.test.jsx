@@ -47,7 +47,8 @@ describe("estimateEta", () => {
   it("marks offline estimates degraded", () => {
     const e = estimateEta({ etaSeconds: 900, trafficAware: false });
     expect(e.degraded).toBe(true);
-    expect(e.confidence).toBe(FITTED_ETA_CONSTANTS.minConfidence);
+    expect(e.confidence).toBe('low')
+    expect(e.confidenceScore).toBe(FITTED_ETA_CONSTANTS.minConfidence);
   });
 
   it("marks a forced Mapbox failure degraded", () => {
@@ -66,7 +67,7 @@ describe("estimateEta", () => {
     const fresh = estimateEta({ etaSeconds: 900, runs: 0 });
     const tired = estimateEta({ etaSeconds: 900, runs: 10 });
     expect(tired.min).toBeLessThan(fresh.min);
-    expect(tired.confidence).toBeLessThanOrEqual(fresh.confidence);
+    expect(tired.confidenceScore).toBeLessThanOrEqual(fresh.confidenceScore);
   });
 
   it("saturates the fatigue bonus", () => {

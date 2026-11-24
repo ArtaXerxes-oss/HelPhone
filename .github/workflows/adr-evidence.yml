@@ -1,0 +1,20 @@
+name: ADR evidence
+
+on:
+  pull_request:
+    paths: ['docs/adr/**', 'docs/spikes/results/**', 'scripts/check-adr-evidence.mjs', '.github/workflows/adr-evidence.yml']
+  push:
+    branches: [main]
+    paths: ['docs/adr/**', 'docs/spikes/results/**', 'scripts/check-adr-evidence.mjs', '.github/workflows/adr-evidence.yml']
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/check-adr-evidence.mjs

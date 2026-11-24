@@ -1,0 +1,1307 @@
+{
+  "meta": {
+    "date": "2026-09-24T12:01:57.418Z",
+    "browser": "Chrome/149.0.7827.55",
+    "v8": "14.9.207.21",
+    "cpu": "Intel(R) Core(TM) i5-8265U CPU @ 1.60GHz",
+    "rate": 10000,
+    "seconds": 8,
+    "frameSizes": [
+      100,
+      1000,
+      10000
+    ],
+    "repeats": 1,
+    "cpuThrottle": 1
+  },
+  "runs": [
+    {
+      "rep": 0,
+      "scenario": "json/materialize",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 30025,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.649,
+        "p50": 16.66,
+        "p95": 17.65,
+        "p99": 18.78,
+        "max": 21.07
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 1.997,
+        "p50": 1.975,
+        "p95": 2.81,
+        "p99": 3.27,
+        "max": 9.855
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.807,
+        "p50": 0.815,
+        "p95": 1.045,
+        "p99": 1.205,
+        "max": 2.35
+      },
+      "nsPerObject": 8069.3,
+      "heapBeforeMB": 5.4,
+      "heapAfterMB": 2.35,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8016.7,
+        "count": 12,
+        "totalMs": 12.272,
+        "maxMs": 1.47,
+        "over4ms": 0,
+        "byType": {
+          "MinorGC": {
+            "count": 12,
+            "totalMs": 12.272,
+            "maxMs": 1.47
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "protobuf/materialize",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 10627,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.636,
+        "p50": 16.665,
+        "p95": 17.76,
+        "p99": 18.945,
+        "max": 23.975
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 1.969,
+        "p50": 1.87,
+        "p95": 2.785,
+        "p99": 3.335,
+        "max": 7.9
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.805,
+        "p50": 0.83,
+        "p95": 1.07,
+        "p99": 1.34,
+        "max": 2.82
+      },
+      "nsPerObject": 8051.9,
+      "heapBeforeMB": 2.58,
+      "heapAfterMB": 3.24,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8007.6,
+        "count": 19,
+        "totalMs": 19.111,
+        "maxMs": 1.384,
+        "over4ms": 0,
+        "byType": {
+          "MinorGC": {
+            "count": 19,
+            "totalMs": 19.111,
+            "maxMs": 1.384
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "protobuf/positions",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 10627,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.649,
+        "p50": 16.665,
+        "p95": 17.325,
+        "p99": 19.06,
+        "max": 27.37
+      },
+      "droppedFrames": 1,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.963,
+        "p50": 0.88,
+        "p95": 1.295,
+        "p99": 3.24,
+        "max": 12.535
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.161,
+        "p50": 0.16,
+        "p95": 0.225,
+        "p99": 0.31,
+        "max": 2.365
+      },
+      "nsPerObject": 1607.7,
+      "heapBeforeMB": 30.8,
+      "heapAfterMB": 14.02,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8022.7,
+        "count": 1,
+        "totalMs": 7.156,
+        "maxMs": 7.156,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 7.156,
+            "maxMs": 7.156
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/positions",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 16528,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.632,
+        "p50": 16.65,
+        "p95": 18.185,
+        "p99": 19.85,
+        "max": 21.275
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.712,
+        "p50": 0.68,
+        "p95": 0.9,
+        "p99": 1.27,
+        "max": 7.795
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.024,
+        "p50": 0.02,
+        "p95": 0.04,
+        "p99": 0.065,
+        "max": 0.29
+      },
+      "nsPerObject": 236.4,
+      "heapBeforeMB": 20.84,
+      "heapAfterMB": 33.81,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8004.2,
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0,
+        "over4ms": 0,
+        "byType": {}
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/fields",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 16528,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.656,
+        "p50": 16.665,
+        "p95": 18.19,
+        "p99": 20.91,
+        "max": 22.965
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.752,
+        "p50": 0.71,
+        "p95": 0.97,
+        "p99": 1.725,
+        "max": 7.775
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.032,
+        "p50": 0.03,
+        "p95": 0.045,
+        "p99": 0.075,
+        "max": 0.43
+      },
+      "nsPerObject": 317.8,
+      "heapBeforeMB": 20.98,
+      "heapAfterMB": 33.97,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8016,
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0,
+        "over4ms": 0,
+        "byType": {}
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/wasm",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 16528,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 480,
+        "mean": 16.672,
+        "p50": 16.67,
+        "p95": 18.935,
+        "p99": 21.285,
+        "max": 24.88
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 481,
+        "mean": 0.812,
+        "p50": 0.73,
+        "p95": 0.99,
+        "p99": 3.49,
+        "max": 13.835
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.034,
+        "p50": 0.03,
+        "p95": 0.055,
+        "p99": 0.08,
+        "max": 0.295
+      },
+      "nsPerObject": 338.4,
+      "heapBeforeMB": 49.27,
+      "heapAfterMB": 31.63,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8010.7,
+        "count": 1,
+        "totalMs": 4.651,
+        "maxMs": 4.651,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 4.651,
+            "maxMs": 4.651
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "capnp/positions",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 16488,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.655,
+        "p50": 16.66,
+        "p95": 19.175,
+        "p99": 22.16,
+        "max": 24.055
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.815,
+        "p50": 0.77,
+        "p95": 1.02,
+        "p99": 1.95,
+        "max": 8.795
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.04,
+        "p50": 0.04,
+        "p95": 0.065,
+        "p99": 0.1,
+        "max": 0.19
+      },
+      "nsPerObject": 398.3,
+      "heapBeforeMB": 14.47,
+      "heapAfterMB": 27.55,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8016.4,
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0,
+        "over4ms": 0,
+        "byType": {}
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "capnp/wasm",
+      "frameSize": 100,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 16488,
+      "frames": 800,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.656,
+        "p50": 16.665,
+        "p95": 19.415,
+        "p99": 21.39,
+        "max": 27.415
+      },
+      "droppedFrames": 1,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.762,
+        "p50": 0.71,
+        "p95": 0.995,
+        "p99": 1.89,
+        "max": 13.54
+      },
+      "decodePerFrameMs": {
+        "n": 800,
+        "mean": 0.03,
+        "p50": 0.025,
+        "p95": 0.05,
+        "p99": 0.075,
+        "max": 0.805
+      },
+      "nsPerObject": 300.7,
+      "heapBeforeMB": 49.14,
+      "heapAfterMB": 31.63,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8019.1,
+        "count": 1,
+        "totalMs": 4.076,
+        "maxMs": 4.076,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 4.076,
+            "maxMs": 4.076
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "json/materialize",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 302081,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 480,
+        "mean": 16.671,
+        "p50": 16.655,
+        "p95": 19.78,
+        "p99": 22.355,
+        "max": 23.66
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 481,
+        "mean": 2.016,
+        "p50": 0.47,
+        "p95": 10.33,
+        "p99": 13.63,
+        "max": 16.27
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 8.377,
+        "p50": 8.605,
+        "p95": 13.5,
+        "p99": 15.45,
+        "max": 15.45
+      },
+      "nsPerObject": 8376.6,
+      "heapBeforeMB": 16.54,
+      "heapAfterMB": 11.62,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8006.9,
+        "count": 6,
+        "totalMs": 6.306,
+        "maxMs": 1.233,
+        "over4ms": 0,
+        "byType": {
+          "MinorGC": {
+            "count": 6,
+            "totalMs": 6.306,
+            "maxMs": 1.233
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "protobuf/materialize",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 107862,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 479,
+        "mean": 16.7,
+        "p50": 16.655,
+        "p95": 19.825,
+        "p99": 23.555,
+        "max": 41
+      },
+      "droppedFrames": 2,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 480,
+        "mean": 1.983,
+        "p50": 0.485,
+        "p95": 10.185,
+        "p99": 13.67,
+        "max": 26.32
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 8.416,
+        "p50": 8.32,
+        "p95": 13.64,
+        "p99": 20.61,
+        "max": 20.61
+      },
+      "nsPerObject": 8415.7,
+      "heapBeforeMB": 13.12,
+      "heapAfterMB": 10.08,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8010.7,
+        "count": 5,
+        "totalMs": 14.916,
+        "maxMs": 6.801,
+        "over4ms": 2,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 6.801,
+            "maxMs": 6.801
+          },
+          "MinorGC": {
+            "count": 4,
+            "totalMs": 8.115,
+            "maxMs": 4.066
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "protobuf/positions",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 107862,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.654,
+        "p50": 16.665,
+        "p95": 17.06,
+        "p99": 17.67,
+        "max": 25.19
+      },
+      "droppedFrames": 1,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.738,
+        "p50": 0.45,
+        "p95": 2.345,
+        "p99": 2.91,
+        "max": 13.65
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 1.356,
+        "p50": 1.34,
+        "p95": 1.85,
+        "p99": 2.055,
+        "max": 2.055
+      },
+      "nsPerObject": 1356.1,
+      "heapBeforeMB": 32.35,
+      "heapAfterMB": 20.11,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8020.8,
+        "count": 1,
+        "totalMs": 5.145,
+        "maxMs": 5.145,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 5.145,
+            "maxMs": 5.145
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/positions",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 164048,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.65,
+        "p50": 16.665,
+        "p95": 19.45,
+        "p99": 21.745,
+        "max": 24.36
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.604,
+        "p50": 0.425,
+        "p95": 1.185,
+        "p99": 3.105,
+        "max": 8.89
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 0.168,
+        "p50": 0.14,
+        "p95": 0.235,
+        "p99": 1.76,
+        "max": 1.76
+      },
+      "nsPerObject": 167.9,
+      "heapBeforeMB": 51.16,
+      "heapAfterMB": 24.34,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8019.5,
+        "count": 1,
+        "totalMs": 4.528,
+        "maxMs": 4.528,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 4.528,
+            "maxMs": 4.528
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/fields",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 164048,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 477,
+        "mean": 16.737,
+        "p50": 16.645,
+        "p95": 21.1,
+        "p99": 23.955,
+        "max": 47.995
+      },
+      "droppedFrames": 5,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 478,
+        "mean": 0.687,
+        "p50": 0.43,
+        "p95": 1.425,
+        "p99": 3.66,
+        "max": 25.525
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 0.285,
+        "p50": 0.25,
+        "p95": 0.38,
+        "p99": 1.78,
+        "max": 1.78
+      },
+      "nsPerObject": 285.4,
+      "heapBeforeMB": 51.34,
+      "heapAfterMB": 24.51,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8022.1,
+        "count": 1,
+        "totalMs": 13.047,
+        "maxMs": 13.047,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 13.047,
+            "maxMs": 13.047
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/wasm",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 164048,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 480,
+        "mean": 16.667,
+        "p50": 16.665,
+        "p95": 17.725,
+        "p99": 19.92,
+        "max": 29.07
+      },
+      "droppedFrames": 2,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 481,
+        "mean": 0.689,
+        "p50": 0.49,
+        "p95": 1.43,
+        "p99": 2.12,
+        "max": 21.61
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 0.23,
+        "p50": 0.235,
+        "p95": 0.285,
+        "p99": 0.415,
+        "max": 0.415
+      },
+      "nsPerObject": 230.2,
+      "heapBeforeMB": 51.12,
+      "heapAfterMB": 21.97,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8018.9,
+        "count": 1,
+        "totalMs": 9.842,
+        "maxMs": 9.842,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 9.842,
+            "maxMs": 9.842
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "capnp/positions",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 164392,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 480,
+        "mean": 16.658,
+        "p50": 16.66,
+        "p95": 19.025,
+        "p99": 22.35,
+        "max": 25.915
+      },
+      "droppedFrames": 2,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 481,
+        "mean": 0.634,
+        "p50": 0.49,
+        "p95": 1.35,
+        "p99": 1.485,
+        "max": 11.84
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 0.147,
+        "p50": 0.15,
+        "p95": 0.215,
+        "p99": 0.32,
+        "max": 0.32
+      },
+      "nsPerObject": 147.4,
+      "heapBeforeMB": 51.33,
+      "heapAfterMB": 23.62,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8007.9,
+        "count": 1,
+        "totalMs": 5.186,
+        "maxMs": 5.186,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 5.186,
+            "maxMs": 5.186
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "capnp/wasm",
+      "frameSize": 1000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 164392,
+      "frames": 80,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.645,
+        "p50": 16.64,
+        "p95": 19.08,
+        "p99": 21.35,
+        "max": 23.565
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.627,
+        "p50": 0.48,
+        "p95": 1.2,
+        "p99": 1.92,
+        "max": 10.78
+      },
+      "decodePerFrameMs": {
+        "n": 80,
+        "mean": 0.169,
+        "p50": 0.17,
+        "p95": 0.23,
+        "p99": 0.49,
+        "max": 0.49
+      },
+      "nsPerObject": 169.2,
+      "heapBeforeMB": 51.21,
+      "heapAfterMB": 21.54,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8020.1,
+        "count": 1,
+        "totalMs": 6.134,
+        "maxMs": 6.134,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 6.134,
+            "maxMs": 6.134
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "json/materialize",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 3035588,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 453,
+        "mean": 17.652,
+        "p50": 16.665,
+        "p95": 19.935,
+        "p99": 80.095,
+        "max": 105.4
+      },
+      "droppedFrames": 33,
+      "longFrames50ms": 8,
+      "workPerRafMs": {
+        "n": 454,
+        "mean": 1.908,
+        "p50": 0.43,
+        "p95": 0.915,
+        "p99": 78.675,
+        "max": 102.545
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 71.287,
+        "p50": 70.285,
+        "p95": 91.42,
+        "p99": 91.42,
+        "max": 91.42
+      },
+      "nsPerObject": 7128.7,
+      "heapBeforeMB": 37.67,
+      "heapAfterMB": 47.83,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8003.1,
+        "count": 1,
+        "totalMs": 1.442,
+        "maxMs": 1.442,
+        "over4ms": 0,
+        "byType": {
+          "MinorGC": {
+            "count": 1,
+            "totalMs": 1.442,
+            "maxMs": 1.442
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "protobuf/materialize",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 1081782,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 458,
+        "mean": 17.457,
+        "p50": 16.65,
+        "p95": 20.185,
+        "p99": 64.815,
+        "max": 107.335
+      },
+      "droppedFrames": 30,
+      "longFrames50ms": 8,
+      "workPerRafMs": {
+        "n": 459,
+        "mean": 1.68,
+        "p50": 0.4,
+        "p95": 0.83,
+        "p99": 63.635,
+        "max": 98.745
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 66.974,
+        "p50": 61.8,
+        "p95": 94.54,
+        "p99": 94.54,
+        "max": 94.54
+      },
+      "nsPerObject": 6697.4,
+      "heapBeforeMB": 19.02,
+      "heapAfterMB": 8.69,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8004.2,
+        "count": 3,
+        "totalMs": 15.254,
+        "maxMs": 11.897,
+        "over4ms": 1,
+        "byType": {
+          "MinorGC": {
+            "count": 2,
+            "totalMs": 3.357,
+            "maxMs": 1.699
+          },
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 11.897,
+            "maxMs": 11.897
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "protobuf/positions",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 1081782,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 479,
+        "mean": 16.706,
+        "p50": 16.67,
+        "p95": 19.455,
+        "p99": 20.84,
+        "max": 42.48
+      },
+      "droppedFrames": 3,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 480,
+        "mean": 0.677,
+        "p50": 0.395,
+        "p95": 0.645,
+        "p99": 13.285,
+        "max": 30.64
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 10.94,
+        "p50": 10.905,
+        "p95": 14.13,
+        "p99": 14.13,
+        "max": 14.13
+      },
+      "nsPerObject": 1094,
+      "heapBeforeMB": 39.1,
+      "heapAfterMB": 16.84,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8011,
+        "count": 1,
+        "totalMs": 3.421,
+        "maxMs": 3.421,
+        "over4ms": 0,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 3.421,
+            "maxMs": 3.421
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/positions",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 1640040,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.649,
+        "p50": 16.655,
+        "p95": 19.62,
+        "p99": 23.065,
+        "max": 26.545
+      },
+      "droppedFrames": 3,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.58,
+        "p50": 0.455,
+        "p95": 0.66,
+        "p99": 6.87,
+        "max": 12.63
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 1.216,
+        "p50": 1.34,
+        "p95": 1.94,
+        "p99": 1.94,
+        "max": 1.94
+      },
+      "nsPerObject": 121.6,
+      "heapBeforeMB": 57.78,
+      "heapAfterMB": 26.59,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8025.8,
+        "count": 1,
+        "totalMs": 8.109,
+        "maxMs": 8.109,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 8.109,
+            "maxMs": 8.109
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/fields",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 1640040,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.644,
+        "p50": 16.655,
+        "p95": 17.61,
+        "p99": 19.325,
+        "max": 25.71
+      },
+      "droppedFrames": 1,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.623,
+        "p50": 0.49,
+        "p95": 0.67,
+        "p99": 6.78,
+        "max": 13.74
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 1.913,
+        "p50": 1.955,
+        "p95": 2.525,
+        "p99": 2.525,
+        "max": 2.525
+      },
+      "nsPerObject": 191.3,
+      "heapBeforeMB": 59.37,
+      "heapAfterMB": 28.17,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8019.9,
+        "count": 1,
+        "totalMs": 8.983,
+        "maxMs": 8.983,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 8.983,
+            "maxMs": 8.983
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "flatbuffers/wasm",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 1640040,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.639,
+        "p50": 16.66,
+        "p95": 17.385,
+        "p99": 18.645,
+        "max": 28.195
+      },
+      "droppedFrames": 1,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.62,
+        "p50": 0.49,
+        "p95": 0.72,
+        "p99": 6.71,
+        "max": 13.825
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 1.985,
+        "p50": 2.225,
+        "p95": 2.465,
+        "p99": 2.465,
+        "max": 2.465
+      },
+      "nsPerObject": 198.5,
+      "heapBeforeMB": 57.73,
+      "heapAfterMB": 23.46,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8019,
+        "count": 1,
+        "totalMs": 11.167,
+        "maxMs": 11.167,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 11.167,
+            "maxMs": 11.167
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "capnp/positions",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 1643504,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.644,
+        "p50": 16.66,
+        "p95": 17.955,
+        "p99": 19.735,
+        "max": 23.27
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.628,
+        "p50": 0.495,
+        "p95": 0.8,
+        "p99": 5.925,
+        "max": 12.435
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 0.927,
+        "p50": 0.925,
+        "p95": 1.3,
+        "p99": 1.3,
+        "max": 1.3
+      },
+      "nsPerObject": 92.7,
+      "heapBeforeMB": 57.9,
+      "heapAfterMB": 26.64,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8024.7,
+        "count": 1,
+        "totalMs": 8.607,
+        "maxMs": 8.607,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 8.607,
+            "maxMs": 8.607
+          }
+        }
+      }
+    },
+    {
+      "rep": 0,
+      "scenario": "capnp/wasm",
+      "frameSize": 10000,
+      "rate": 10000,
+      "seconds": 8,
+      "frameBytes": 1643504,
+      "frames": 8,
+      "rafIntervalMs": {
+        "n": 481,
+        "mean": 16.654,
+        "p50": 16.665,
+        "p95": 17.2,
+        "p99": 18.42,
+        "max": 20.84
+      },
+      "droppedFrames": 0,
+      "longFrames50ms": 0,
+      "workPerRafMs": {
+        "n": 482,
+        "mean": 0.583,
+        "p50": 0.45,
+        "p95": 0.7,
+        "p99": 5.72,
+        "max": 15.025
+      },
+      "decodePerFrameMs": {
+        "n": 8,
+        "mean": 1.441,
+        "p50": 1.34,
+        "p95": 1.965,
+        "p99": 1.965,
+        "max": 1.965
+      },
+      "nsPerObject": 144.1,
+      "heapBeforeMB": 57.83,
+      "heapAfterMB": 23.49,
+      "crossOriginIsolated": true,
+      "cpuThrottle": 1,
+      "gc": {
+        "windowMs": 8026.7,
+        "count": 1,
+        "totalMs": 11.518,
+        "maxMs": 11.518,
+        "over4ms": 1,
+        "byType": {
+          "MajorGC": {
+            "count": 1,
+            "totalMs": 11.518,
+            "maxMs": 11.518
+          }
+        }
+      }
+    }
+  ]
+}

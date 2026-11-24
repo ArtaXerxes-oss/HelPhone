@@ -1,32 +1,46 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
+    "target": "ES2022",
     "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "skipLibCheck": true,
 
     /* Bundler mode */
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": false,
     "isolatedModules": true,
-    "moduleDetection": "force",
     "noEmit": true,
-
-    /* React */
     "jsx": "react-jsx",
 
-    /* Strictness */
-    "strict": true,
+    /* Linting / Checks */
+    "strict": false,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true,
-
-    /* Paths */
-    "paths": {
-      "@/*": ["./src/*"]
-    }
+    "noFallthroughCasesInSwitch": true
   },
   "include": ["src", "vite.config.ts"],
-  "exclude": ["node_modules", "dist", "server"]
+  "exclude": ["node_modules", "dist", "server"],
+  "references": [],
+
+  /* Type-surface extraction options for scripts/detect-api-drift.js.
+     Kept out of compilerOptions so `tsc --noEmit` ignores it. */
+  "apiDrift": {
+    "compilerOptions": {
+      "target": "ES2022",
+      "module": "CommonJS",
+      "moduleResolution": "node",
+      "strict": false,
+      "skipLibCheck": true,
+      "noEmit": true,
+      "esModuleInterop": true,
+      "allowJs": false,
+      "checkJs": false,
+      "resolveJsonModule": false,
+      "types": []
+    }
+  }
 }

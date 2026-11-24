@@ -1,0 +1,43 @@
+name: Incident Tape Retention Sweep
+
+on:
+  schedule:
+    # Daily at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      grace_days:
+        description: 'Reversible quarantine grace window (days)'
+        required: false
+        default: '7'
+
+permissions:
+  contents: read
+
+jobs:
+  retention-sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run incident-tape retention sweep
+        run: |
+          mkdir -p artifacts/incident-tapes
+          node scripts/sweep-incident-tapes.js \
+            --dir artifacts/incident-tapes \
+            --grace-days "${{ github.event.inputs.grace_days || '7' }}" \
+            --json > artifacts/tape-retention-summary.json
+
+      - name: Upload retention audit log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: incident-tape-retention-audit
+          path: |
+            artifacts/tape-retention-summary.json
+            artifacts/incident-tapes/retention-audit.jsonl
+          if-no-files-found: warn

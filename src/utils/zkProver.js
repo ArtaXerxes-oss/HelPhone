@@ -10,6 +10,17 @@
  * single-location `aegis` circuit. See docs/adr/ADR-005-zk-proof-aggregation.md.
  *
  * Pinned to nargo 1.0.0-beta.9 + bb.js 0.87.x (see circuits/recursive_verifier).
+ *
+ * ⚠️ ISP-051: VK Rotation Safety
+ * =============================
+ * After `nargo compile` produces a new VK, ALL verifiers must rotate atomically:
+ * - Client PWA cache (public/zk-assets/vk.json)
+ * - Server verification (server/routes/zk.ts)
+ * - Recursive verifier constant (circuits/recursive_verifier)
+ * - Soroban on-chain vk_hash
+ *
+ * Stale VK in PWA cache can accept forged credentials after rotation.
+ * Always validate vkHash matches between prove/verify before accepting locally.
  */
 
 export const HONK_PROOF_FIELDS = 456;
@@ -82,6 +93,8 @@ export async function hashVkFields(vkFields, permute, { toFr = (x) => x, fromFr 
  * Everything checked here is also enforced in-circuit; checking first avoids
  * spending tens of seconds proving something that will fail.
  *
+ * ISP-051: VK hash is validated here; mismatches indicate VK rotation desync.
+ *
  * @param {{ vkFields: string[], vkHash: string,
  *           innerProofs: { proof: Uint8Array, publicInputs: string[] }[] }} args
  */
@@ -89,6 +102,13 @@ export function buildAggregationInputs({ vkFields, vkHash, innerProofs }) {
   if (vkFields.length !== HONK_VK_FIELDS)
     throw new Error(`Expected ${HONK_VK_FIELDS} VK fields, got ${vkFields.length}`);
   if (!innerProofs.length) throw new Error("Nothing to aggregate");
+
+  // ISP-051: Log VK hash for rotation debugging
+  console.log("[zkProver] buildAggregationInputs", {
+    vkHash: vkHash.slice(0, 12) + "...",
+    innerProofCount: innerProofs.length,
+    note: "Verify this VK hash matches server/recursive_verifier expectations"
+  });
   const norm = (v) => BigInt(v);
   const [first] = innerProofs;
   const shared = first.publicInputs.slice(1, 4).map(norm);

@@ -1,6 +1,11 @@
+import "./telemetryBootstrap.js";
+import { telemetryErrorHandler, shutdownTelemetry, traceIdFromRequest, renderTelemetryMetrics, enforceKillSwitch } from "./telemetry.js";
+import { requestMetrics, renderMetrics } from "./middleware/metrics.js";
+import { createHealthRouter } from "./routes/health.js";
+import { clockSyncHandler } from "./lib/clockSync.js";
 import cluster from "node:cluster";
+import { createServer } from "node:http";
 import express from "express";
-import cors from "cors";
 import compression from "compression";
 import { readFileSync } from "fs";
 import { availableParallelism, cpus } from "os";
@@ -11,23 +16,52 @@ import { rpc } from "@stellar/stellar-sdk";
 import { normalizeBase64 } from "./base64Utils.js";
 import { compression as brotliCompression } from "./middleware/compression.js";
 import { logger, poolMonitorMiddleware } from "./middleware/logger.js";
+import { createCorsMiddleware } from "./middleware/cors.js";
+import { applyKeepAliveTuning, keepAliveMiddleware } from "./middleware/keepAlive.js";
 import { getPool } from "./db/connection.js";
+import {
+  createDefaultRedisClient,
+  createWhitelistAdminRouter,
+  createWhitelistMiddleware,
+  createWhitelistStore,
+  isWhitelisted,
+} from "./middleware/whitelist.js";
+import { startMaintenanceScheduler } from "./db/maintenance.js";
+import { getMaintenanceConfig } from "./env.js";
+import { createPasskeyAuthRouter } from "./routes/passkey-auth.js";
+import { createFederationRouter } from "./routes/federation.js";
+import { createDispatchRouters } from "./routes/dispatch.js";
+import { syncRouter } from "./routes/sync.js";
+import historyRouter from "./routes/history.js";
+import { createDocsRouter } from "./routes/docs.js";
+import { getRedis, isRedisConfigured } from "./lib/redis.js";
 import { eventsRouter } from "./routes/events.js";
 import { attachTelemetryWebSocket } from "./telemetry.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ── Rate limiter ─────────────────────────────────────────────────────────────
-// In-memory sliding-window rate limiter. Tracks request counts per IP within
-// a rolling window and returns 429 when the limit is exceeded.
+// Rate limiter: counts requests per IP within a fixed window and returns 429
+// when the limit is exceeded. With REDIS_URL set the counter lives in Redis so
+// every Render replica shares one budget; without it, each process keeps its
+// own in-memory counter (single-instance dev and tests).
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX || 60);
+
+// Atomic increment + expiry: the TTL is set only when the key is first created,
+// so a crash between the two commands cannot leave a counter that never expires.
+const FIXED_WINDOW_LUA = `local c = redis.call('INCR', KEYS[1])
+if c == 1 then redis.call('PEXPIRE', KEYS[1], ARGV[1]) end
+return c`;
 
 export function createRateLimiter({
   windowMs = RATE_LIMIT_WINDOW_MS,
   max = RATE_LIMIT_MAX,
+  skip = isWhitelisted,
+  keyPrefix = "ratelimit:general",
 } = {}) {
   const hits = new Map();
+  const redisPending = isRedisConfigured() ? getRedis() : null;
 
   function cleanup(now) {
     for (const [key, entry] of hits) {
@@ -35,7 +69,39 @@ export function createRateLimiter({
     }
   }
 
+  function rejectIfOver(res, count, next) {
+    res.setHeader("X-RateLimit-Limit", max);
+    res.setHeader("X-RateLimit-Remaining", Math.max(0, max - count));
+    if (count > max) {
+      return res.status(429).json({
+        success: false,
+        error: "Too many requests. Please try again later.",
+      });
+    }
+    next();
+  }
+
+  // Shared budget across replicas. Fails open on Redis errors so emergency
+  // traffic keeps flowing during an outage; every failure is logged for alerting.
+  async function sharedMiddleware(req, res, next) {
+    if (skip(req)) return next();
+    const ip = req.ip || req.socket?.remoteAddress || "unknown";
+    let count;
+    try {
+      const redis = await redisPending;
+      if (!redis) throw new Error("Redis client unavailable");
+      count = Number(await redis.eval(FIXED_WINDOW_LUA, 1, `${keyPrefix}:${ip}`, windowMs));
+    } catch (err) {
+      console.error(`[rate-limit] Redis unavailable, failing open: ${err.message}`);
+      return next();
+    }
+    return rejectIfOver(res, count, next);
+  }
+
   function middleware(req, res, next) {
+    if (redisPending) return sharedMiddleware(req, res, next);
+    // Whitelisted emergency-service callers bypass throttling entirely.
+    if (skip(req)) return next();
     const ip = req.ip || req.socket?.remoteAddress || "unknown";
     const now = Date.now();
     cleanup(now);
@@ -108,28 +174,67 @@ app.use(
   }),
 );
 // Observability: structured logger + pool monitoring
+// Reuse TCP sockets across sequential requests (see middleware/keepAlive.js)
+app.use(keepAliveMiddleware());
 app.use(logger({ slowThresholdMs: 1000 }));
 app.use(poolMonitorMiddleware);
 
-// Solves Issue 1: Restrict CORS policy on ZK Prover Server
-app.use(
-  cors({
-    origin: process.env.ALLOWED_ORIGINS
-      ? process.env.ALLOWED_ORIGINS.split(",")
-      : ["https://helphone.com", "https://staging.helphone.com"],
-    methods: ["GET", "POST", "OPTIONS"],
-    preflightContinue: false,
-    optionsSuccessStatus: 204,
-  }),
-);
+// Solves Issue 1: Restrict CORS policy — stateful regex validation + 24h preflight cache (Access-Control-Max-Age: 86400)
+app.use(createCorsMiddleware());
 app.use(compression());
 app.use(express.json({ limit: "1mb" }));
+app.use(requestMetrics);
+app.use((req, res, next) => {
+  const traceId = traceIdFromRequest(req);
+  if (traceId) res.setHeader("x-trace-id", traceId);
+  next();
+});
+app.use("/health", createHealthRouter({ readiness: () => _ready }));
+app.get("/metrics", (req, res) => {
+  const token = process.env.METRICS_BEARER_TOKEN;
+  if (token && req.get("authorization") !== `Bearer ${token}`) {
+    return res.status(401).end();
+  }
+  res.type("text/plain; version=0.0.4; charset=utf-8").send(renderMetrics() + renderTelemetryMetrics());
+});
+app.post("/api/telemetry/errors", (req, res) => telemetryErrorHandler(req, res));
+app.get("/api/time", clockSyncHandler);
+
+// Behind a proxy (Render), req.ip is the proxy unless TRUST_PROXY is set to the
+// number of hops (e.g. "1"); whitelist matching and rate limiting both use it.
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY);
+  app.set("trust proxy", Number.isNaN(hops) ? process.env.TRUST_PROXY : hops);
+}
+
+// Whitelist of verified emergency-service subnets / API keys (Redis-backed
+// when REDIS_URL is set). Must run before the rate limiter, which honours it.
+export const whitelistStore = createWhitelistStore(createDefaultRedisClient());
+const whitelist = createWhitelistMiddleware(whitelistStore);
+app.use(whitelist);
+app.use(
+  "/admin/whitelist",
+  createWhitelistAdminRouter({
+    store: whitelistStore,
+    adminToken: process.env.WHITELIST_ADMIN_TOKEN,
+    onChange: () => whitelist.invalidate(),
+  }),
+);
 
 // Rate limiter on all routes (disabled in test)
 if (process.env.NODE_ENV !== "test") {
   const rateLimiter = createRateLimiter();
   app.use(rateLimiter);
 }
+app.use("/api/auth/passkey", createPasskeyAuthRouter());
+const dispatchRouters = createDispatchRouters();
+app.use("/api/dispatch", dispatchRouters.api);
+app.use("/metrics", dispatchRouters.metrics);
+app.use("/api/sync", syncRouter);
+app.use("/api/history", historyRouter);
+app.use("/api/federation", createFederationRouter());
+app.use("/docs", createDocsRouter());
+app.use("/api/events", eventsRouter);
 
 // ── Contract event bridge ────────────────────────────────────────
 // Issue #177: the frontend used to poll the contract directly on a timer
@@ -169,6 +274,7 @@ function decodeTopicSymbol(topicScVal) {
 }
 
 function broadcast(event) {
+  void publishContractEvent(event).catch((err) => console.error("[events] relay publish failed:", err.message || err));
   const payload = `data: ${JSON.stringify(event)}\n\n`;
   for (const res of sseClients) {
     res.write(payload);
@@ -183,6 +289,7 @@ async function seedCursor() {
 }
 
 async function pollContractEvents() {
+  const startedAt = process.hrtime.bigint();
   try {
     if (eventCursor === null) {
       eventCursor = await seedCursor();
@@ -205,6 +312,9 @@ async function pollContractEvents() {
     // A single failed poll must not kill the loop or drop the cursor —
     // just retry next tick. Log so operators can notice sustained failure.
     console.error("[events] poll failed:", err.message || err);
+  } finally {
+    observeDuration("helphone_soroban_rpc_duration_seconds", { operation: "get_events" },
+      Number(process.hrtime.bigint() - startedAt) / 1e9);
   }
 }
 
@@ -268,8 +378,6 @@ function health(_req, res) {
   });
 }
 
-app.use("/api/events", eventsRouter);
-
 app.get("/health", health);
 app.get("/zk/health", health);
 
@@ -284,6 +392,8 @@ app.get("/health/pool", (req, res) => {
 });
 
 app.post("/zk/prove", async (req, res) => {
+  const startedAt = process.hrtime.bigint();
+  let outcome = "success";
   try {
     const { inputs } = req.body;
     if (!inputs) {
@@ -310,8 +420,12 @@ app.post("/zk/prove", async (req, res) => {
       nullifier,
     });
   } catch (err) {
+    outcome = "error";
     console.error("[prover] Error:", err);
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    observeDuration("helphone_zk_proof_duration_seconds", { outcome },
+      Number(process.hrtime.bigint() - startedAt) / 1e9);
   }
 });
 
@@ -473,12 +587,101 @@ app.get("/api/feedback/:requestId", (req, res) => {
   res.json(entry);
 });
 
+// ── Soroban Footprint Inspection (#517) ────────────────────────────────
+// Mirror of the server/index.ts endpoint: inspects a contract function's
+// storage footprint via an RPC simulateTransaction call so clients can build
+// envelopes with the required read-only / read-write ledger keys pre-attached.
+app.post("/api/soroban/footprint/inspect", enforceKillSwitch("soroban.submit"), async (req, res) => {
+  try {
+    const { contractId, functionName, args = [] } = req.body || {};
+    if (typeof contractId !== "string" || !contractId)
+      return res.status(400).json({ success: false, error: "contractId is required" });
+    if (typeof functionName !== "string" || !functionName)
+      return res.status(400).json({ success: false, error: "functionName is required" });
+
+    const { Account, Keypair, BASE_FEE, Networks, TransactionBuilder, Operation, nativeToScVal, SorobanDataBuilder } = await import("@stellar/stellar-sdk");
+    const simServer = new rpc.Server(
+      process.env.SOROBAN_RPC_URL || "https://soroban-testnet.stellar.org",
+      { timeout: 30_000 },
+    );
+    const source = new Account(Keypair.random().publicKey(), "0");
+    const probe = new TransactionBuilder(source, {
+      fee: BASE_FEE,
+      networkPassphrase: process.env.SOROBAN_NETWORK_PASSPHRASE || Networks.TESTNET,
+    })
+      .addOperation(
+        Operation.invokeContractFunction({
+          contract: contractId,
+          function: functionName,
+          args: args.map((arg) =>
+            arg && typeof arg === "object" && arg.type && "value" in arg
+              ? nativeToScVal(arg.value, { type: arg.type })
+              : nativeToScVal(arg),
+          ),
+        }),
+      )
+      .setTimeout(30)
+      .build();
+
+    const sim = await simServer.simulateTransaction(probe);
+    if (sim?.error) {
+      return res.status(422).json({ success: false, error: String(sim.error) });
+    }
+
+    let builder;
+    if (typeof sim?.transactionData === "string") {
+      builder = new SorobanDataBuilder(sim.transactionData);
+    } else if (sim?.transactionData?.build) {
+      builder = new SorobanDataBuilder(sim.transactionData.build());
+    } else {
+      builder = new SorobanDataBuilder();
+    }
+
+    const readOnly = builder.getReadOnly();
+    const readWrite = builder.getReadWrite();
+    res.json({
+      success: true,
+      template: {
+        contractId,
+        functionName,
+        readOnlyCount: readOnly.length,
+        readWriteCount: readWrite.length,
+        resourceFee: String(sim?.minResourceFee ?? "0"),
+        footprintXdr: builder.build().toXDR("base64"),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err?.message || String(err) });
+  }
+});
+
 export function startServer() {
-  const server = app.listen(PORT, () => {
+  // Apply schema migrations automatically at boot so the database schema
+  // stays in sync on every deploy (non-fatal; server serves even on failure).
+  import("./db/migrator.js")
+    .then(({ runMigrationsAtStartup }) => runMigrationsAtStartup())
+    .catch((err) => console.error("[migrate] startup failure:", err));
+
+  void connectEventBus().catch((err) => console.error("[events] Redis relay unavailable:", err.message));
+  const server = createServer(app);
+  const relay = attachWebSocketRelay(server);
+  const frameStream = attachTelemetryWebSocket(server);
+  server.listen(PORT, () => {
+    // Off-peak VACUUM ANALYZE / REINDEX CONCURRENTLY (opt-in: DB_MAINTENANCE_ENABLED=true)
+    if (getMaintenanceConfig().enabled) startMaintenanceScheduler();
     console.log(`ZK Prover worker ${process.pid} on http://localhost:${PORT}`);
     ensureProver().catch((err) => console.error("[prover] Init failed:", err));
   });
-  attachTelemetryWebSocket(server);
+  applyKeepAliveTuning(server);
+  const shutdown = () => {
+    relay.close().catch((err) => console.error("[events] WebSocket shutdown failed:", err.message));
+    frameStream.close().catch((err) => console.error("[telemetry] frame stream shutdown failed:", err.message));
+    closeEventBus().catch((err) => console.error("[events] Redis shutdown failed:", err.message));
+    shutdownTelemetry().catch((err) => console.error("[telemetry] shutdown failed:", err.message));
+    server.close();
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
   return server;
 }
 

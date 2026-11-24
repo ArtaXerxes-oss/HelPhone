@@ -22,7 +22,8 @@ function datasetRecords(): CalibrationRecord[] {
       area: o.area,
       displayedMin: o.displayed_min,
       displayedMax: o.displayed_max,
-      confidence: 0,
+      confidence: o.mode === 'traffic' ? 'normal' : 'low',
+      confidenceScore: 0,
       degraded: o.mode !== 'traffic',
       etaRealizedSeconds: o.eta_realized,
       errorSeconds: Math.round(Math.abs(realizedMin - midpointMin) * 60),
@@ -96,7 +97,7 @@ export default function CalibrationDashboard() {
               {Object.keys(FITTED_ETA_CONSTANTS).map((key) => (
                 <tr key={key}>
                   <td style={cell}>{key}</td>
-                  <td style={cell} opacity={0.6}>{legacy[key]}</td>
+                  <td style={{ ...cell, opacity: 0.6 }}>{legacy[key]}</td>
                   <td style={cell}>{fit[key]}</td>
                 </tr>
               ))}

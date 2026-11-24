@@ -30,7 +30,7 @@ export function EtaLabel({ etaSeconds, degraded, runs }: EtaLabelProps) {
     <span
       data-testid="eta-range"
       className={range.degraded ? 'eta-degraded' : 'eta-range'}
-      title={`Confidence ${Math.round(range.confidence * 100)}%`}
+      title={`Confidence ${range.confidence} (${Math.round(range.confidenceScore * 100)}%)`}
     >
       {range.label}
     </span>

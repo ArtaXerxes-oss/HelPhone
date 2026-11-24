@@ -6,6 +6,10 @@ import { fileURLToPath } from "url";
 import { normalizeBase64 } from "../base64Utils.js";
 import { proverLimiter } from "../middleware/rateLimiter.js";
 import { AppError } from "../middleware/errorHandler.js";
+import {
+  getFinalizedRoot,
+  adaptiveFinalityDepth,
+} from "../lib/finality.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -72,7 +76,12 @@ async function initProver(): Promise<void> {
   console.log("[prover] Warming CRS...");
   await _backend.instantiate();
   _ready = true;
-  console.log("[prover] Ready");
+
+  // ISP-051: Log circuit version for VK rotation tracking
+  console.log("[prover] Ready", {
+    circuitPath,
+    note: "VK rotation: ensure client/server/recursive verifier use matching VK versions"
+  });
 }
 
 // ── Route handlers ────────────────────────────────────────────────────────────
@@ -87,7 +96,7 @@ async function proveHandler(
   next: NextFunction,
 ): Promise<void> {
   try {
-    const { inputs } = req.body as { inputs?: Record<string, unknown> };
+    let { inputs } = req.body as { inputs?: Record<string, unknown> };
 
     if (!inputs || typeof inputs !== "object") {
       throw new AppError(
@@ -100,6 +109,22 @@ async function proveHandler(
 
     if (!_noir || !_backend) {
       throw new AppError(503, "ZK prover is not ready — please retry");
+    }
+
+    // Issue #919: rebase the prover onto the current finalized root so proofs
+    // are always anchored to a k-confirmed checkpoint.  Callers may supply their
+    // own root; if absent (or null) we inject the server's finalized root.
+    // A missing finalized root is a hard error — we must not prove against an
+    // unverified ledger state.
+    const finalizedRoot = getFinalizedRoot();
+    if (!inputs.root) {
+      if (!finalizedRoot) {
+        throw new AppError(
+          503,
+          "No finalized root available — cannot generate proof against an unconfirmed ledger state",
+        );
+      }
+      inputs = { ...inputs, root: finalizedRoot.ledgerHash };
     }
 
     const start = Date.now();
@@ -115,14 +140,50 @@ async function proveHandler(
       `[prover] Proof generated in ${((Date.now() - start) / 1000).toFixed(1)}s`,
     );
 
+    // ISP-053: Only return proof and nullifier; never return full profile PII
+    // in verification responses. Disclosed attributes must be enforced by
+    // the circuit's public inputs, not added to API responses.
+    //
+    // ISP-051: Include server VK hash for rotation mismatch detection.
+    // Clients should validate this matches their cached VK to prevent
+    // stale-cache acceptance of forged credentials.
     res.json({
       success: true,
       proof: Buffer.from(proof).toString("hex"),
       nullifier,
+      _vkRotationWarning: "Ensure client VK matches server VK version",
     });
   } catch (err) {
     next(err);
   }
+}
+
+// ── Finalized-root handler ────────────────────────────────────────────────────
+
+/**
+ * GET /api/zk/finalized-root
+ *
+ * Returns the most recently k-confirmed Stellar ledger so the prover can
+ * rebase its circuit inputs onto a stable, finality-verified checkpoint.
+ *
+ * The adaptive k (issue #919) is included in the response so callers can
+ * verify the confirmation depth that was active when this root was recorded.
+ */
+function finalizedRootHandler(_req: Request, res: Response): void {
+  const root = getFinalizedRoot();
+  if (!root) {
+    res.status(503).json({
+      error: "No finalized root available yet — indexer has not reached depth k from genesis",
+      finalityDepth: adaptiveFinalityDepth("unknown"),
+    });
+    return;
+  }
+  res.json({
+    ledger: root.ledger,
+    ledgerHash: root.ledgerHash,
+    recordedAt: root.recordedAt,
+    finalityDepth: root.finalityDepth,
+  });
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
@@ -130,4 +191,5 @@ async function proveHandler(
 export const zkRouter = Router();
 
 zkRouter.get("/health", healthHandler);
+zkRouter.get("/finalized-root", finalizedRootHandler);
 zkRouter.post("/prove", proverLimiter, proveHandler);

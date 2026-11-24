@@ -1,0 +1,44 @@
+name: Routing tile reproducibility
+
+# #893: an HPGR routing tile must be byte-for-byte reproducible from its
+# input. This job builds a tile from a generated fixture, then rebuilds it in a
+# fresh process from the same roads in a different feature and tag order, and
+# fails if a single byte of the tile or manifest differs. The build scripts
+# import only repo sources, so no npm install is needed.
+on:
+  pull_request:
+    paths:
+      - "src/utils/graphTraversal.js"
+      - "src/lib/routingTiles.js"
+      - "src/lib/offlineBundle.js"
+      - "scripts/build-routing-tiles.js"
+      - "scripts/generate-routing-fixture.js"
+      - ".github/workflows/routing-tiles.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/utils/graphTraversal.js"
+      - "src/lib/routingTiles.js"
+      - "src/lib/offlineBundle.js"
+      - "scripts/build-routing-tiles.js"
+      - "scripts/generate-routing-fixture.js"
+
+permissions:
+  contents: read
+
+jobs:
+  reproducible-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+      - name: Generate the fixture twice (second copy shuffled)
+        run: |
+          node scripts/generate-routing-fixture.js --out "$RUNNER_TEMP/roads.geojson"
+          node scripts/generate-routing-fixture.js --out "$RUNNER_TEMP/roads-shuffled.geojson" --shuffle-seed 3
+      - name: Build the tile
+        run: node scripts/build-routing-tiles.js --input "$RUNNER_TEMP/roads.geojson" --zone fixture-zone --version 1 --out "$RUNNER_TEMP/tiles"
+      - name: Rebuild from the shuffled input and compare bytes
+        run: node scripts/build-routing-tiles.js --input "$RUNNER_TEMP/roads-shuffled.geojson" --zone fixture-zone --version 1 --check "$RUNNER_TEMP/tiles"

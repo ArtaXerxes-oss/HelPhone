@@ -1,3 +1,7 @@
+// Canonical module (#901): the server runs this file directly (`node
+// server/index.js`, and `../base64Utils.js` from routes/zk.ts), so the `.js`
+// is kept; the unused `base64Utils.ts` twin was removed after its fixes were
+// merged here.
 export function calculateRemainderWithBackoff(valueLength) {
   // Solves Issue 341: Isolate remainder and add exponential backoff mechanisms
   let attempt = 0;
@@ -11,9 +15,11 @@ export function calculateRemainderWithBackoff(valueLength) {
       break;
     } catch (error) {
       attempt++;
-      if (attempt >= maxRetries) throw new Error('Exponential backoff failed: ' + error.message);
-      // Simulate exponential backoff
-      const backoffMs = Math.pow(2, attempt) * 100;
+      if (attempt >= maxRetries) {
+        throw new Error(
+          'Exponential backoff failed: ' + (error instanceof Error ? error.message : String(error)),
+        );
+      }
     }
   }
   return remainder;
@@ -24,13 +30,13 @@ export function extractBase64DataParallelized(input) {
   // to avoid stale closures causing ghost renders.
   const regex = /^data:.*;base64,(.*)$/i;
   const match = input.match(regex);
-  if (match) {
+  if (match?.[1]) {
     return match[1];
   }
   
   // Fallback mechanism avoiding commaIndex directly
   const parts = input.split(',');
-  return parts.length > 1 ? parts[1] : parts[0];
+  return parts.length > 1 ? (parts[1] ?? parts[0] ?? '') : (parts[0] ?? '');
 }
 
 export function normalizeBase64(input) {

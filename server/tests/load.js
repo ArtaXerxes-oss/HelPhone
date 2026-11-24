@@ -26,7 +26,7 @@ const BASE_URL = __ENV.BASE_URL || "http://localhost:3001";
 const proveLatency = new Trend("prove_latency_ms", true);
 const proveFailureRate = new Rate("prove_failure_rate");
 
-// Matches the `inputs` shape sent by src/lib/zk.js's _requestServerProof —
+// Matches the `inputs` shape sent by src/lib/zk.ts's _requestServerProof —
 // synthetic but structurally valid so the circuit executes the same code
 // path as a real client request, rather than short-circuiting on bad input.
 function proveInputs() {

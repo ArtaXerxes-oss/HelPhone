@@ -1,0 +1,23 @@
+# WASM render-path reader for FlatBuffers / Cap'n Proto telemetry frames
+# (spike, ADR-014). No dependencies. Build with:
+#   bash src/wasm/telemetry_reader/build.sh
+[package]
+name = "telemetry_reader"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+# Standalone: not part of the Soroban workspace in contract/.
+[workspace]
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+debug = false
+strip = true

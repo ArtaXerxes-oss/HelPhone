@@ -19,7 +19,8 @@ export interface CalibrationRecord {
   area: string
   displayedMin: number
   displayedMax: number
-  confidence: number
+  confidence: 'normal' | 'low'
+  confidenceScore: number
   degraded: boolean
   etaRealizedSeconds: number
   /** Absolute error against the midpoint of the displayed range, seconds. */
@@ -62,6 +63,7 @@ export function recordEtaOutcome(input: {
     displayedMin: displayed.min,
     displayedMax: displayed.max,
     confidence: displayed.confidence,
+    confidenceScore: displayed.confidenceScore,
     degraded: displayed.degraded,
     etaRealizedSeconds,
     errorSeconds: Math.round(Math.abs(realizedMin - midpointMin) * 60),

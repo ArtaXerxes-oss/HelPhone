@@ -1,4 +1,19 @@
+import styles from "./Help.module.css";
+import { cx } from "../styles/cssModules";
+import { sanitizeText, SanitizedHtml } from "../lib/htmlSanitizer";
+import { collapseResponderPins } from "../lib/responderPins";
 import { useState, useEffect, useRef, Fragment, useCallback } from "react";
+// ── Field ops (ISP-131 rugged/SOS, ISP-134 NFC staging, ISP-135 radio) ──
+import RadioSheet from "../components/field/RadioSheet";
+import StagingSheet from "../components/field/StagingSheet";
+import SosSheet from "../components/field/SosSheet";
+import { useRadioBridge } from "../hooks/useRadioBridge";
+import { useNfcCheckIn } from "../hooks/useNfcCheckIn";
+import { useHardwareSOS } from "../hooks/useHardwareSOS";
+import { useRuggedMode } from "../hooks/useRuggedMode";
+import { queueDepth, PRIO } from "../lib/field/offlineQueue";
+import { getTransport, transportBadge } from "../lib/field/transportEstimator";
+import { MSG } from "../lib/radio/protocol";
 import { Link } from "react-router-dom";
 import { StellarWalletsKit } from "@creit-tech/stellar-wallets-kit/sdk";
 import { KitEventType } from "@creit-tech/stellar-wallets-kit/types";
@@ -26,6 +41,18 @@ import {
   updateLocation,
   recordExpertVerification,
 } from "../lib/contract";
+import { EtaLabel, DegradedEtaNotice } from "../components/EtaLabel";
+import { isPredictiveEtaV2Enabled } from "../lib/featureFlags";
+import { rankByRealisticEta } from "../lib/etaEstimate";
+import { NetworkStatusIndicator } from "../components/NetworkStatusIndicator.jsx";
+import { ReplicaStaleBadge } from "../components/ReplicaStaleBadge.jsx";
+import OfflineRoutePanel from "../features/help/OfflineRoutePanel.jsx";
+import IncidentMapSyncPanel from "../features/help/IncidentMapSyncPanel.jsx";
+import { useReplicaLag } from "../hooks/useReplicaLag.js";
+import {
+  dispatchOverrideMessage,
+  requiresDispatchOverride,
+} from "../lib/replicaLag.js";
 import {
   buildLocationProofZone,
   generateLocationProof,
@@ -36,9 +63,27 @@ import {
   MAX_DIMENSION,
   DEFAULT_QUALITY,
 } from "../lib/imageProcessor.js";
-import { EtaLabel, DegradedEtaNotice } from "../components/EtaLabel";
-import { isPredictiveEtaV2Enabled } from "../lib/featureFlags";
-import { rankByRealisticEta } from "../lib/etaEstimate";
+import {
+  restoreDraft,
+  startAutoSave,
+  clearDraft as clearCrashDraft,
+} from "../lib/crashRecovery.ts";
+import {
+  buildResponderKeyRecords,
+  encryptEmergencyPayload,
+  exportPrivateKeyJwk,
+  exportPublicKeyHex,
+  generateEncryptionKeyPair,
+  importPrivateKeyJwk,
+} from "../lib/crypto";
+import { redactProfile, jitterCoordinates } from "../lib/privacy.ts";
+import { api } from "../services/api";
+import {
+  DEFAULT_VIEWPORT_TRANSFORM,
+  buildViewportOverlays,
+  createOverlayRenderer,
+} from "../lib/offscreenCanvas.ts";
+import { useClusterer } from "../hooks/useClusterer.js";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
 
@@ -133,19 +178,52 @@ function MapController({ center, zoom = 14 }) {
   return null;
 }
 
-function distance(a, b) {
+export function distance(a, b) {
+  if (
+    !Number.isFinite(a?.[0]) ||
+    !Number.isFinite(a?.[1]) ||
+    !Number.isFinite(b?.[0]) ||
+    !Number.isFinite(b?.[1])
+  ) {
+    return null;
+  }
   const R = 6371;
-  const dLat = ((b[0] - a[0]) * Math.PI) / 180;
-  const dLng = ((b[1] - a[1]) * Math.PI) / 180;
+  const DEG2RAD = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * DEG2RAD;
+  const dLng = (b[1] - a[1]) * DEG2RAD;
   const sinLat = Math.sin(dLat / 2);
   const sinLng = Math.sin(dLng / 2);
+
+  if (!Number.isFinite(sinLat) || !Number.isFinite(sinLng)) {
+    return null;
+  }
+
   const h =
     sinLat * sinLat +
     Math.cos((a[0] * Math.PI) / 180) *
       Math.cos((b[0] * Math.PI) / 180) *
       sinLng *
       sinLng;
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+
+  if (!Number.isFinite(h)) {
+    return null;
+  }
+
+  const result = R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return Number.isFinite(result) ? result : null;
+}
+
+export function buildRouteFeature(from, to) {
+  return {
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates: [
+        [from[1], from[0]],
+        [to[1], to[0]],
+      ],
+    },
+  };
 }
 
 function RouteLine({ id: routeId, from, to, color = "#7357FF" }) {
@@ -154,16 +232,7 @@ function RouteLine({ id: routeId, from, to, color = "#7357FF" }) {
     <Source
       id={id}
       type="geojson"
-      data={{
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: [
-            [from[1], from[0]],
-            [to[1], to[0]],
-          ],
-        },
-      }}
+      data={buildRouteFeature(from, to)}
     >
       <Layer
         id={`${id}-line`}
@@ -179,52 +248,159 @@ function RouteLine({ id: routeId, from, to, color = "#7357FF" }) {
   );
 }
 
-function loadProfile() {
+export function loadProfile() {
   try {
-    return JSON.parse(localStorage.getItem("hp_profile") || "{}");
+    const parsed = JSON.parse(localStorage.getItem("hp_profile") || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
   } catch {
     return {};
   }
 }
 
-const DEFAULT_CENTER = [20, 0];
+// ── End-to-end encrypted emergency details ──────────────────────────
+//
+// The contact number and medical notes are sealed on-device for the requester
+// plus every registered responder before anything is submitted. `createRequest`
+// refuses a plaintext payload, so there is no code path that can put a phone
+// number or a medical note in a ledger entry or in a relay store.
+//
+// See src/lib/crypto.ts for the envelope format and docs/security-architecture.md
+// for the threat model. The responder private key never leaves the browser.
+
+const RESPONDER_KEY_PREFIX = "hp_responder_e2ee_v1:";
+
+/** Load this wallet's responder key pair, minting and publishing one if needed. */
+async function loadOrCreateResponderKey(wallet) {
+  const storageKey = `${RESPONDER_KEY_PREFIX}${wallet}`;
+  const stored = sessionStorage.getItem(storageKey);
+  if (stored) {
+    try {
+      const parsed = JSON.parse(stored);
+      return {
+        publicKey: parsed.publicKey,
+        privateKey: await importPrivateKeyJwk(parsed.jwk),
+      };
+    } catch {
+      sessionStorage.removeItem(storageKey);
+    }
+  }
+  const pair = await generateEncryptionKeyPair();
+  const publicKey = await exportPublicKeyHex(pair.publicKey);
+  const jwk = await exportPrivateKeyJwk(pair.privateKey);
+  // sessionStorage, not localStorage: the private key is wiped when the tab
+  // closes. A production build should move this into the encrypted
+  // SecureStorage (src/lib/secureStorage.ts) to survive restarts.
+  sessionStorage.setItem(storageKey, JSON.stringify({ jwk, publicKey }));
+  // Publishing is best-effort: failing to register only costs dispatch offers.
+  api.registerDispatchKey(wallet, publicKey).catch(() => {});
+  return { publicKey, privateKey: pair.privateKey };
+}
+
+/**
+ * Build the plaintext payload and the recipient key list for a submission.
+ * Returns the envelope already sealed against a fresh submission id, plus the
+ * inputs needed to re-seal against the on-chain request id once it is known.
+ */
+async function sealRequestPayload({ requester, profile }) {
+  const payload = {
+    contact: (profile?.contact || "").trim(),
+    medicalNotes: (profile?.notes || profile?.medicalNotes || "").trim(),
+    nickname: (profile?.nickname || "").trim(),
+  };
+  // An entirely empty payload is not worth a transaction; seal a marker so the
+  // contract's "payload required" rule is satisfied without leaking anything.
+  if (!payload.contact && !payload.medicalNotes && !payload.nickname) {
+    payload.medicalNotes = "No details supplied.";
+  }
+
+  const own = await loadOrCreateResponderKey(requester);
+  const registry = await api.getDispatchRecipientKeys();
+  const registered = registry.success && Array.isArray(registry.keys) ? registry.keys : [];
+
+  // Always include the requester so they can re-read what they submitted.
+  const recipients = await buildResponderKeyRecords([
+    { wallet: requester, publicKey: own.publicKey },
+    ...registered.map((k) => ({ wallet: k.wallet, publicKey: k.publicKey })),
+  ]);
+  const recipientKeys = recipients.map((r) => r.publicKey);
+
+  // The on-chain request id is assigned by the contract, so it cannot be part
+  // of the pre-signature binding. Use a client-generated submission id instead
+  // and record it in the envelope (tamper-evident, not secret).
+  const submissionId = newSubmissionId();
+  const envelope = await encryptEmergencyPayload(payload, recipientKeys, submissionId);
+  return { envelope, payload, recipientKeys, submissionId };
+}
+
+/** Unpredictable, collision-resistant id used as the payload's binding context. */
+function newSubmissionId() {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  if (c && typeof c.getRandomValues === "function") {
+    const bytes = c.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return `sub-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+export const DEFAULT_CENTER = Object.freeze([20, 0]);
 
 const MY_REQUESTS_KEY = "hp_my_requests";
 
-function loadMyRequestIds() {
+export function loadMyRequestIds() {
   try {
-    return JSON.parse(localStorage.getItem(MY_REQUESTS_KEY) || "[]");
+    const parsed = JSON.parse(localStorage.getItem(MY_REQUESTS_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => Number.isFinite(id));
   } catch {
     return [];
   }
 }
 
-function saveMyRequestId(id) {
+export function saveMyRequestId(id) {
+  if (!Number.isFinite(id)) return;
   const ids = loadMyRequestIds();
   if (!ids.includes(id)) {
     ids.unshift(id);
-    localStorage.setItem(MY_REQUESTS_KEY, JSON.stringify(ids.slice(0, 20)));
+    try {
+      localStorage.setItem(MY_REQUESTS_KEY, JSON.stringify(ids.slice(0, 20)));
+    } catch {
+    }
   }
 }
 
-function anonymizeLocation(location) {
-  if (!location) return location;
+export function anonymizeLocation(location) {
+  if (
+    !Array.isArray(location) ||
+    !Number.isFinite(location[0]) ||
+    !Number.isFinite(location[1])
+  ) {
+    throw new Error("Unable to read your location. Try again.");
+  }
   return [
     Math.round(location[0] * 100) / 100,
     Math.round(location[1] * 100) / 100,
   ];
 }
 
-function privateRequestLabel(id) {
-  return `Private request #${id || "pending"}`;
+export function privateRequestLabel(id) {
+  const safeId =
+    typeof id === "string" || typeof id === "number" ? id : "pending";
+  return `Private request #${safeId || "pending"}`;
 }
 
-function txExplorerUrl(hash) {
-  if (!hash) return null;
-  return `https://stellar.expert/explorer/testnet/tx/${hash}`;
+const TX_HASH_PATTERN = /^[0-9a-f]{16,64}$/i;
+
+export function txExplorerUrl(hash) {
+  if (typeof hash !== "string") return null;
+  const trimmed = hash.trim();
+  if (!TX_HASH_PATTERN.test(trimmed)) return null;
+  return `https://stellar.expert/explorer/testnet/tx/${trimmed}`;
 }
 
-function ExplorerLink({ label, hash }) {
+export function ExplorerLink({ label, hash }) {
   const url = txExplorerUrl(hash);
   if (!url) return null;
   return (
@@ -486,7 +662,26 @@ function Step({ n, title, subtitle, done, active, children }) {
   );
 }
 
-function HelpOnboardingModal({ open, onClose, onConnectWallet }) {
+export const HELP_ONBOARDING_STEPS = [
+  {
+    label: "Request",
+    title: "Help when you need it",
+    body: "HelPhone connects you with people nearby when you're in an emergency. You can request help or offer help to others. Everything runs on Stellar — fast, public, and verifiable.",
+  },
+  {
+    label: "Receipt",
+    title: "Your action goes on-chain first",
+    body: "When you request or offer help, Stellar confirms it in seconds. That creates a public transaction hash — your receipt.",
+  },
+  {
+    label: "Wallet",
+    title: "Connect your preferred wallet",
+    body: "Your Stellar wallet only signs transactions — it's not a tracking tool. Connect to request help, offer help, or verify your identity on the network.",
+    isLast: true,
+  },
+];
+
+export function HelpOnboardingModal({ open, onClose, onConnectWallet }) {
   const [step, setStep] = useState(0);
   useEffect(() => {
     if (open) setStep(0);
@@ -494,27 +689,8 @@ function HelpOnboardingModal({ open, onClose, onConnectWallet }) {
 
   if (!open) return null;
 
-  const totalSteps = 3;
-
-  const steps = [
-    {
-      label: "Request",
-      title: "Help when you need it",
-      body: "HelPhone connects you with people nearby when you're in an emergency. You can request help or offer help to others. Everything runs on Stellar — fast, public, and verifiable.",
-    },
-    {
-      label: "Receipt",
-      title: "Your action goes on-chain first",
-      body: "When you request or offer help, Stellar confirms it in seconds. That creates a public transaction hash — your receipt.",
-    },
-    {
-      label: "Wallet",
-      title: "Connect your preferred wallet",
-      body: "Your Stellar wallet only signs transactions — it's not a tracking tool. Connect to request help, offer help, or verify your identity on the network.",
-      isLast: true,
-    },
-  ];
-
+  const totalSteps = HELP_ONBOARDING_STEPS.length;
+  const steps = HELP_ONBOARDING_STEPS;
   const current = steps[step];
 
   async function handleLastAction() {
@@ -721,6 +897,7 @@ function TrackingScreen({
   isMarkingArrived,
   onMarkArrived,
   onResolve,
+  overlayActive = false,
 }) {
   const dist =
     requesterLat != null && responderLat != null
@@ -740,7 +917,7 @@ function TrackingScreen({
           lat={responderLat}
           lng={responderLng}
         >
-          {!isArrived && (
+          {!isArrived && !overlayActive && (
             <div
               style={{
                 position: "absolute",
@@ -903,16 +1080,9 @@ function TrackingScreen({
                 ETA
               </div>
               <div style={{ fontSize: "11px", color: "#F4ECDC" }}>
-                {isArrived ? (
-                  "Arrived"
-                ) : etaMin != null ? (
-                  <EtaLabel
-                    etaSeconds={etaSeconds}
-                    degraded={!etaSeconds || mapboxFailed}
-                  />
-                ) : (
-                  "—"
-                )}
+                {isArrived ? "Arrived" : etaMin != null ? (
+                  <EtaLabel etaSeconds={etaSeconds} degraded={!etaSeconds || mapboxFailed} />
+                ) : "—"}
               </div>
             </div>
             <div
@@ -944,10 +1114,7 @@ function TrackingScreen({
             </div>
           </div>
 
-          <DegradedEtaNotice
-            etaSeconds={etaSeconds}
-            degraded={!etaSeconds || mapboxFailed}
-          />
+          <DegradedEtaNotice etaSeconds={etaSeconds} degraded={!etaSeconds || mapboxFailed} />
 
           <div style={{ display: "flex", gap: "8px" }}>
             {isResponderView && !isArrived && (
@@ -1144,7 +1311,245 @@ const ET_ICONS = {
   ),
 };
 
+// ── ZK state reducer ─────────────────────────────────────────────────────────
+
+export const LOG_RING_SIZE = 6;
+export const LOG_MAX_MSG_LENGTH = 200;
+
+export const ZK_INITIAL = Object.freeze({
+  status: "idle",
+  logs: [],
+  proof: null,
+  error: "",
+});
+
+export function zkReducer(state, action) {
+  switch (action.type) {
+    case "RESET":
+      return { ...ZK_INITIAL, logs: [] };
+
+    case "SET_STATUS":
+      if (state.status === action.payload) return state;
+      return { ...state, status: action.payload };
+
+    case "SET_ERROR":
+      if (state.error === action.payload) return state;
+      return { ...state, error: action.payload };
+
+    case "SET_PROOF":
+      return { ...state, proof: action.payload };
+
+    case "PATCH_PROOF":
+      if (!state.proof) return state;
+      return { ...state, proof: { ...state.proof, ...action.payload } };
+
+    case "PUSH_LOG": {
+      const raw = String(action.payload ?? "");
+      const msg =
+        raw.length > LOG_MAX_MSG_LENGTH
+          ? raw.slice(0, LOG_MAX_MSG_LENGTH) + "…"
+          : raw;
+      const prev = state.logs;
+      if (prev.length > 0 && prev[prev.length - 1] === msg) return state;
+      const next =
+        prev.length < LOG_RING_SIZE
+          ? [...prev, msg]
+          : [...prev.slice(-(LOG_RING_SIZE - 1)), msg];
+      return { ...state, logs: next };
+    }
+
+    default:
+      return state;
+  }
+}
+
+export function sanitizeWalletAddress(raw) {
+  if (typeof raw !== "string") return "";
+  const addr = raw.trim();
+  if (!/^G[A-Z2-7]{55}$/.test(addr)) return "";
+  return addr;
+}
+
+export function computeStep3Done(profile) {
+  if (!profile) return true;
+  return Boolean(profile.nickname || profile.contact || true);
+}
+
+export function computeUserCharacter(selectedChar, profile) {
+  if (selectedChar) return selectedChar;
+  const nickname = profile?.nickname || "me";
+  return pickChar("default", nickname);
+}
+
+const PHONE_REGEX = /^\+?[1-9]\d{1,14}$/;
+const TELEGRAM_REGEX = /^@[A-Za-z0-9_]{5,32}$/;
+const CONTACT_ALLOWLIST = [PHONE_REGEX, TELEGRAM_REGEX];
+
+export function validateContact(value) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) return { valid: true, error: "" };
+  if (trimmed.length > 40) return { valid: false, error: "Contact is too long (max 40 characters)." };
+  const passesAny = CONTACT_ALLOWLIST.some((re) => re.test(trimmed));
+  if (!passesAny) {
+    return {
+      valid: false,
+      error: "Use a phone number (+1234567890) or Telegram handle (@username).",
+    };
+  }
+  return { valid: true, error: "" };
+}
+
+export const STATUS_CONFIG = {
+  Pending: {
+    label: "WAITING FOR RESPONDER",
+    color: "#a2a586",
+    bg: "rgba(162,165,134,0.12)",
+    msg: "Your pin is live. Waiting for someone nearby.",
+  },
+  Enroute: {
+    label: "RESPONDER ON THE WAY",
+    color: "#7357FF",
+    bg: "rgba(115,87,255,0.12)",
+    msg: "Stay where you are. Help is coming.",
+  },
+  Resolved: {
+    label: "RESOLVED",
+    color: "#3F8487",
+    bg: "rgba(63,132,135,0.12)",
+    msg: "This request has been resolved.",
+  },
+  Cancelled: {
+    label: "CANCELLED",
+    color: "#a2a586",
+    bg: "rgba(162,165,134,0.12)",
+    msg: "Request cancelled.",
+  },
+};
+
+export const DEFAULT_STATUS_INFO = {
+  label: "UNKNOWN STATUS",
+  color: "#a2a586",
+  bg: "rgba(162,165,134,0.12)",
+  msg: "Status is currently unavailable.",
+};
+
+export function getStatusConfig(requestStatus) {
+  if (typeof requestStatus !== "string") return DEFAULT_STATUS_INFO;
+  return STATUS_CONFIG[requestStatus] || DEFAULT_STATUS_INFO;
+}
+
+export function checkIsGetMode(mode) {
+  if (typeof mode !== "string") return false;
+  return mode.trim().toLowerCase() === "get";
+}
+
+export function getAccentColor(isGetMode) {
+  return isGetMode ? "#FF7A6B" : "#7357FF";
+}
+
+export function createDebouncedSetter(setter, delay = 100) {
+  let latest = "";
+  let timer = null;
+
+  const debouncedSet = (value) => {
+    latest = value;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      setter(latest);
+    }, delay);
+  };
+
+  const flush = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+      setter(latest);
+    }
+  };
+
+  const cancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  return { debouncedSet, flush, cancel };
+}
+
+export function computeWalletStatus(address) {
+  const hasAddress = address !== "";
+  const isValid = sanitizeWalletAddress(address) !== "";
+  const isConnected = hasAddress && isValid;
+  const displayAddress = isConnected
+    ? `${address.slice(0, 8)}...${address.slice(-6)}`
+    : "";
+  return { isConnected, displayAddress };
+}
+
+export function cancellationToken() {
+  let cancelled = false;
+
+  function check() {
+    return !cancelled;
+  }
+
+  return {
+    get active() {
+      return check();
+    },
+    cancel() {
+      cancelled = true;
+    },
+    async wrap(promise) {
+      if (cancelled) {
+        promise.catch(() => {});
+        return undefined;
+      }
+      try {
+        const result = await promise;
+        if (cancelled) return undefined;
+        return result;
+      } catch (err) {
+        if (cancelled) return undefined;
+        throw err;
+      }
+    },
+  };
+}
+
+const RETRY_CLS = "hp-mobile-open";
+const RETRY_ID = "helphone-help-sidebar";
+const dlq = Object.create(null);
+
+export function safeToggleClass(
+  element,
+  isOpen,
+  id = RETRY_ID,
+  cls = RETRY_CLS,
+) {
+  if (element) {
+    element.classList.toggle(cls, isOpen);
+    delete dlq[id];
+    return true;
+  }
+
+  if (!dlq[id]) {
+    const raf = requestAnimationFrame(() => {
+      delete dlq[id];
+      const el = document.getElementById(id);
+      if (el) {
+        el.classList.toggle(cls, isOpen);
+      }
+    });
+    dlq[id] = raf;
+  }
+  return false;
+}
+
 export default function Help() {
+  const replicaLagMs = useReplicaLag();
   const [mode, setMode] = useState("get");
 
   const [profile, setProfile] = useState(() => {
@@ -1202,16 +1607,218 @@ export default function Help() {
   const [zkLogs, setZkLogs] = useState([]);
   const [zkProof, setZkProof] = useState(null);
   const [zkError, setZkError] = useState("");
+  const [mapViewport, setMapViewport] = useState(DEFAULT_VIEWPORT_TRANSFORM);
+  const [overlayMountKey, setOverlayMountKey] = useState(0);
+  const [overlayForceMain, setOverlayForceMain] = useState(false);
+  const overlayCanvasRef = useRef(null);
+  const overlayRendererRef = useRef(null);
+  const overlayRendererCanvasRef = useRef(null);
+
+  const clusterPoints = [
+    ...(location && Number.isFinite(location[0]) && Number.isFinite(location[1])
+      ? [
+          {
+            id: "self",
+            lat: location[0],
+            lng: location[1],
+            kind: mode === "get" ? "pending" : "responder",
+          },
+        ]
+      : []),
+    // #922: one pin per responder DID, not per contract slot.
+    ...collapseResponderPins(responders, { arrived: responderArrived }).map((pin) => ({
+      id: pin.id,
+      lat: pin.lat,
+      lng: pin.lng,
+      kind: pin.kind,
+    })),
+    ...openRequests
+      .filter((req) => req && Number.isFinite(req.lat) && Number.isFinite(req.lng))
+      .map((req) => ({
+        id: `req-${req.id}`,
+        lat: req.lat,
+        lng: req.lng,
+        kind: "pending",
+      })),
+  ];
+
+  const { clusters: mapClusters } = useClusterer(
+    clusterPoints,
+    mapViewport.zoom ?? 2,
+    mapViewport.bounds ?? DEFAULT_VIEWPORT_TRANSFORM.bounds,
+    {
+      scale: mapViewport.scale,
+      offsetX: mapViewport.offsetX,
+      offsetY: mapViewport.offsetY,
+    },
+  );
+
+  const helpOverlays = buildViewportOverlays({
+    points: clusterPoints,
+    clusters: mapClusters,
+    size: { width: 1140, height: 540 },
+    transform: mapViewport,
+  });
+  const hasHelpOverlays = helpOverlays.length > 0;
+
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!hasHelpOverlays || !canvas) return undefined;
+    let renderer = overlayRendererRef.current;
+    if (overlayRendererCanvasRef.current !== canvas) {
+      if (renderer) renderer.destroy();
+      overlayRendererRef.current = null;
+      overlayRendererCanvasRef.current = null;
+      try {
+        renderer = createOverlayRenderer(canvas, {
+          width: 1140,
+          height: 540,
+          dpr: Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2),
+          forceMainThread: overlayForceMain,
+          onError: () => {
+            setOverlayForceMain(true);
+            setOverlayMountKey((k) => k + 1);
+          },
+        });
+      } catch {
+        if (!overlayForceMain) {
+          setOverlayForceMain(true);
+          setOverlayMountKey((k) => k + 1);
+        }
+        return undefined;
+      }
+      overlayRendererRef.current = renderer;
+      overlayRendererCanvasRef.current = canvas;
+    }
+    return () => {
+      if (overlayRendererRef.current === renderer && renderer) {
+        renderer.destroy();
+        overlayRendererRef.current = null;
+        overlayRendererCanvasRef.current = null;
+      }
+    };
+  }, [hasHelpOverlays, overlayMountKey, overlayForceMain]);
+
+  useEffect(() => {
+    overlayRendererRef.current?.setOverlays(helpOverlays);
+    overlayRendererRef.current?.setViewport?.(mapViewport);
+  }, [helpOverlays, mapViewport, overlayMountKey, overlayForceMain]);
 
   const [walletAddress, setWalletAddress] = useState("");
   const activeWalletAddress = walletAddress;
   const isWalletConnected = !!activeWalletAddress;
+
+  // ── Field ops state (ISP-131/134/135) ─────────────────────────────────────
+  const [showRadioSheet, setShowRadioSheet] = useState(false);
+  const [showStagingSheet, setShowStagingSheet] = useState(false);
+  const [showSosSheet, setShowSosSheet] = useState(false);
+  const [sosDispatchedAt, setSosDispatchedAt] = useState(null);
+  const [online, setOnline] = useState(() =>
+    typeof navigator === "undefined" ? true : navigator.onLine,
+  );
+  const rugged = useRuggedMode();
+  const radio = useRadioBridge();
+  const nfc = useNfcCheckIn({ responderId: activeWalletAddress || "anonymous" });
+
+  useEffect(() => {
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
+  // Pocket-press gate: auto-dispatch only inside an active incident geofence;
+  // anywhere else the hardware key routes through the confirm sheet.
+  const canSosAutoDispatch = useCallback(() => {
+    if (!location || !Number.isFinite(location[0])) return false;
+    return openRequests.some(
+      (r) =>
+        r &&
+        Number.isFinite(r.lat) &&
+        Number.isFinite(r.lng) &&
+        distance(location, [r.lat, r.lng]) <= 0.5,
+    );
+  }, [location, openRequests]);
+
+  const handleSosCommit = useCallback(
+    ({ idempotencyKey }) => {
+      setMode("get");
+      setEmergencyType((prev) => prev || "fallen");
+      setSosDispatchedAt(Date.now());
+      radio.send(
+        {
+          type: "fallen",
+          severity: 3,
+          id: String(idempotencyKey || "").slice(-8),
+          ts: Date.now(),
+          lat: location?.[0],
+          lng: location?.[1],
+        },
+        { type: MSG.SOS, prio: PRIO.SOS },
+      );
+    },
+    [radio, location],
+  );
+
+  const sos = useHardwareSOS({
+    canAutoDispatch: canSosAutoDispatch,
+    onCommit: handleSosCommit,
+    onNeedsConfirm: () => setShowSosSheet(true),
+    // Coordinates are not stored in the offline queue (PII redaction), so the
+    // drain reads the device's current fix when it sends.
+    getLocation: () => (location ? { lat: location[0], lng: location[1] } : null),
+  });
+
   const styleSelectorRef = useRef(null);
   const profileRef = useRef(null);
   const sidebarRef = useRef(null);
   const handleOfferBusy = useRef(false);
   const handleOfferMounted = useRef(true);
   const handleOfferSeq = useRef(0);
+
+  // ── Crash Recovery: IndexedDB draft restore & auto-save ───────────────────
+  const [draftBanner, setDraftBanner] = useState(
+    /** @type {'idle'|'found'|'dismissed'} */ ("idle"),
+  );
+
+  // On mount: check for a saved draft and rehydrate form state
+  useEffect(() => {
+    let cancelled = false;
+    restoreDraft()
+      .then((draft) => {
+        if (cancelled || !draft) return;
+        if (draft.emergencyType) setEmergencyType(draft.emergencyType);
+        if (draft.nickname || draft.contact) {
+          setProfile((prev) => ({
+            nickname: draft.nickname || prev.nickname,
+            contact: draft.contact || prev.contact,
+          }));
+        }
+        if (draft.location) setLocation(draft.location);
+        if (draft.searchQuery) setSearchQuery(draft.searchQuery);
+        setDraftBanner("found");
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []); // mount-only — intentionally empty dep array (restoreDraft runs once)
+
+  // Auto-save form state to IndexedDB every 2s while filling the request form
+  useEffect(() => {
+    const stop = startAutoSave(() => ({
+      emergencyType: emergencyType ?? null,
+      nickname: profile.nickname,
+      contact: profile.contact,
+      location: location ?? null,
+      searchQuery,
+    }));
+    return stop;
+  }, [emergencyType, profile, location, searchQuery]);
 
   useEffect(() => {
     if (!location?.[0] || !location?.[1]) return;
@@ -1254,14 +1861,6 @@ export default function Help() {
     };
   }, []);
 
-  useEffect(() => {
-    if (!sidebarRef.current) return;
-    if (showMobileForm) {
-      sidebarRef.current.classList.add("hp-mobile-open");
-    } else {
-      sidebarRef.current.classList.remove("hp-mobile-open");
-    }
-  }, [showMobileForm]);
 
   useEffect(() => {
     if (!styleOpen) return;
@@ -1625,6 +2224,15 @@ export default function Help() {
       setSubmitError("Connect your Stellar wallet first.");
       return;
     }
+    // ISP-065 severe lag: responders may be looking at outdated history, so the
+    // sender must confirm before the request goes out.
+    if (
+      requiresDispatchOverride(replicaLagMs) &&
+      !window.confirm(dispatchOverrideMessage(replicaLagMs))
+    ) {
+      setSubmitError("Dispatch cancelled. Try again once history catches up.");
+      return;
+    }
     setSubmitting(true);
     setSubmitError("");
     resetZkCheckpoint();
@@ -1651,18 +2259,33 @@ export default function Help() {
         radiusMeters: 3000,
       });
       const publicLocation = anonymizeLocation(location);
+      // Seal the sensitive half of the request (contact number, medical notes)
+      // to this requester plus every registered responder *before* it touches
+      // the ledger. `createRequest` refuses a plaintext payload, so there is
+      // no path here that can put a phone number in a ledger entry.
+      const sealed = await sealRequestPayload({ requester: address, profile });
       const { requestId: id, hash } = await createRequest(
         address,
         publicLocation[0],
         publicLocation[1],
         emergencyType,
-        "",
-        "",
+        sealed.envelope,
         StellarWalletsKit,
       );
+      // Best-effort relay copy, indexed by the submission id the envelope is
+      // bound to and by the ledger request id so responders can find it from
+      // either. The on-chain copy stays authoritative if the relay is down.
+      const relayCopies = [api.storeDispatchEnvelope(sealed.submissionId, sealed.envelope)];
+      if (id !== undefined && id !== null) {
+        relayCopies.push(api.storeDispatchEnvelope(String(id), sealed.envelope));
+      }
+      await Promise.all(relayCopies.map((p) => p.catch(() => {})));
       setRequestId(id);
       setRequestStatus("Pending");
       saveMyRequestId(id);
+      // Draft submitted successfully — clear crash recovery data
+      clearCrashDraft().catch(() => {});
+      setDraftBanner("dismissed");
       setZkProof((prev) =>
         prev ? { ...prev, requestId: id, txHash: hash } : prev,
       );
@@ -1843,8 +2466,7 @@ export default function Help() {
                 next = [...prev, r];
               }
               // Flag off: preserve today's insertion order byte-for-byte.
-              if (!isPredictiveEtaV2Enabled() || !locationRef.current)
-                return next;
+              if (!isPredictiveEtaV2Enabled() || !locationRef.current) return next;
               return rankByRealisticEta(next, {
                 lat: locationRef.current[0],
                 lng: locationRef.current[1],
@@ -2037,6 +2659,7 @@ export default function Help() {
   return (
     <div
       id="helphone-help-wrap"
+      className={styles["hp-help-wrap"]}
       style={{
         display: "flex",
         height: "100vh",
@@ -2046,6 +2669,7 @@ export default function Help() {
       <aside
         ref={sidebarRef}
         id="helphone-help-sidebar"
+        className={cx(styles["hp-help-sidebar"], showMobileForm && styles["hp-mobile-open"])}
         style={{
           width: "340px",
           minWidth: "340px",
@@ -2133,6 +2757,94 @@ export default function Help() {
             ))}
           </div>
 
+          {/* Field tools card — radio bridge, NFC staging, rugged mode (ISP-131/134/135) */}
+          <div className={styles["hp-fieldops-card"]} data-testid="field-ops-card">
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "8px",
+                gap: "8px",
+              }}
+            >
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  letterSpacing: "0.8px",
+                  color: "rgba(242,236,220,0.55)",
+                }}
+              >
+                FIELD TOOLS
+              </span>
+              <span
+                className={styles["hp-fieldops-badge"]}
+                data-testid="field-transport-badge"
+                style={{
+                  color:
+                    radio.state.status === "linked"
+                      ? "#7DE2A8"
+                      : online
+                        ? "rgba(242,236,220,0.7)"
+                        : "#FFB3AA",
+                }}
+              >
+                {
+                  transportBadge(
+                    getTransport({
+                      online,
+                      radioLinked: radio.state.status === "linked",
+                    }),
+                  ).label
+                }
+              </span>
+            </div>
+            <div className={styles["hp-fieldops-row"]}>
+              <button
+                type="button"
+                className={styles["hp-fieldops-btn"]}
+                aria-label="Open radio bridge"
+                onClick={() => setShowRadioSheet(true)}
+              >
+                Radio
+              </button>
+              <button
+                type="button"
+                className={styles["hp-fieldops-btn"]}
+                aria-label="Open staging check-in"
+                onClick={() => setShowStagingSheet(true)}
+              >
+                Staging
+              </button>
+              <button
+                type="button"
+                className={styles["hp-fieldops-btn"]}
+                role="switch"
+                aria-checked={rugged.enabled}
+                aria-label="Rugged mode for glove use and sunlight"
+                data-testid="rugged-toggle"
+                onClick={rugged.toggle}
+              >
+                Rugged {rugged.enabled ? "ON" : "OFF"}
+              </button>
+            </div>
+            <div
+              style={{
+                marginTop: "8px",
+                fontSize: "10.5px",
+                color: "rgba(242,236,220,0.5)",
+              }}
+              data-testid="field-queue-depth"
+            >
+              Queue {queueDepth()}
+              {sosDispatchedAt
+                ? ` · SOS ${new Date(sosDispatchedAt).toLocaleTimeString()}`
+                : ""}
+              {sos.pttActive ? " · PTT live" : ""}
+            </div>
+          </div>
+
           <div
             style={{
               padding: "12px 13px",
@@ -2180,6 +2892,13 @@ export default function Help() {
                 ZK PRIVACY CHECKPOINT
               </span>
               <span
+                data-testid="zk-checkpoint-status"
+                data-pending={
+                  zkStatus === "proving" || zkStatus === "recording"
+                    ? "true"
+                    : "false"
+                }
+                data-finalized={zkStatus === "recorded" ? "true" : "false"}
                 style={{
                   marginLeft: "auto",
                   padding: "2px 7px",
@@ -2324,8 +3043,76 @@ export default function Help() {
             )}
           </div>
 
+          <NetworkStatusIndicator />
+          <ReplicaStaleBadge lagMs={replicaLagMs} />
+
+          {/* #893: offline A* routing from the selected location (routingWorker). */}
+          <OfflineRoutePanel location={location} />
+          {/* #894: pruned state-vector CRDT sync of the shared incident map. */}
+          <IncidentMapSyncPanel location={location} />
+
           {isGetMode && (
             <>
+              {draftBanner === "found" && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  style={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    gap: "10px",
+                    background: "rgba(63,132,135,0.14)",
+                    border: "1px solid rgba(63,132,135,0.35)",
+                    borderRadius: "10px",
+                    padding: "10px 12px",
+                    marginBottom: "14px",
+                  }}
+                >
+                  <span style={{ fontSize: "16px", lineHeight: 1 }}>💾</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div
+                      style={{
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        color: "#7fb8ba",
+                        marginBottom: "2px",
+                      }}
+                    >
+                      Draft restored
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "11px",
+                        color: "rgba(242,236,220,0.55)",
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      Your previous form data was recovered after the page
+                      closed.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Dismiss draft banner"
+                    onClick={() => {
+                      setDraftBanner("dismissed");
+                      clearCrashDraft().catch(() => {});
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      color: "rgba(242,236,220,0.4)",
+                      cursor: "pointer",
+                      fontSize: "14px",
+                      lineHeight: 1,
+                      padding: "2px 4px",
+                      flexShrink: 0,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               {requestStatus === "idle" ? (
                 <div style={{ marginBottom: "20px" }}>
                   <h2
@@ -2397,11 +3184,7 @@ export default function Help() {
                             color: "rgba(242,236,220,0.5)",
                           }}
                         >
-                          ETA{" "}
-                          <EtaLabel
-                            etaSeconds={responders[0].eta_seconds}
-                            degraded={mapboxFailed}
-                          />
+                          ETA <EtaLabel etaSeconds={responders[0].eta_seconds} degraded={mapboxFailed} />
                         </span>
                       )}
                   </div>
@@ -2446,11 +3229,7 @@ export default function Help() {
                         {responders[0].eta_seconds && !responderArrived && (
                           <>
                             {" "}
-                            · ETA{" "}
-                            <EtaLabel
-                              etaSeconds={responders[0].eta_seconds}
-                              degraded={mapboxFailed}
-                            />
+                            · ETA <EtaLabel etaSeconds={responders[0].eta_seconds} degraded={mapboxFailed} />
                           </>
                         )}
                         {location && responders[0] && (
@@ -2572,8 +3351,8 @@ export default function Help() {
                         aria-expanded={searchSuggestions.length > 0}
                         aria-controls="hp-search-suggestions"
                         aria-activedescendant={
-                          activeSuggestion >= 0
-                            ? `hp-suggestion-${activeSuggestion}`
+                          activeSuggestion >= 0 && searchSuggestions[activeSuggestion]
+                            ? `hp-suggestion-${searchSuggestions[activeSuggestion].id}`
                             : undefined
                         }
                       />
@@ -2625,7 +3404,7 @@ export default function Help() {
                             {searchSuggestions.map((feature, idx) => (
                               <button
                                 key={feature.id}
-                                id={`hp-suggestion-${idx}`}
+                                id={`hp-suggestion-${feature.id}`}
                                 role="option"
                                 aria-selected={idx === activeSuggestion}
                                 type="button"
@@ -2640,7 +3419,7 @@ export default function Help() {
                                       ? "rgba(255,255,255,0.07)"
                                       : "transparent",
                                   color: "rgba(242,236,220,0.9)",
-                                  textAlign: "left",
+                                  textAlign: "start",
                                   cursor: "pointer",
                                   display: "block",
                                 }}
@@ -3041,7 +3820,7 @@ export default function Help() {
                           color: "#F4ECDC",
                         }}
                       >
-                        {selectedRequest.nickname || "Anonymous"}
+                        {sanitizeText(selectedRequest.nickname) || "Anonymous"}
                       </div>
                       {(() => {
                         const et = EMERGENCY_TYPES.find(
@@ -3065,7 +3844,7 @@ export default function Help() {
                           color: "rgba(242,236,220,0.4)",
                         }}
                       >
-                        {selectedRequest.contact || ""}
+                        {sanitizeText(selectedRequest.contact) || ""}
                       </div>
                     </div>
                     <button
@@ -3187,7 +3966,7 @@ export default function Help() {
                           display: "flex",
                           alignItems: "center",
                           gap: "10px",
-                          textAlign: "left",
+                          textAlign: "start",
                         }}
                       >
                         <img
@@ -3208,7 +3987,7 @@ export default function Help() {
                               color: "#F4ECDC",
                             }}
                           >
-                            {req.nickname || "Anonymous"}
+                            {sanitizeText(req.nickname) || "Anonymous"}
                           </div>
                           {(() => {
                             const et = EMERGENCY_TYPES.find(
@@ -3446,19 +4225,10 @@ export default function Help() {
         </div>
       </aside>
 
-      <div id="helphone-help-map" style={{ flex: 1, position: "relative" }}>
+      <div id="helphone-help-map" className={styles["hp-help-main"]} style={{ flex: 1, position: "relative" }}>
         {mapboxFailed && isPredictiveEtaV2Enabled() && (
-          <div
-            data-testid="mapbox-failure-notice"
-            role="status"
-            style={{
-              position: "absolute",
-              top: 12,
-              left: 12,
-              zIndex: 200,
-              maxWidth: 260,
-            }}
-          >
+          <div data-testid="mapbox-failure-notice" role="status"
+            style={{ position: "absolute", top: 12, left: 12, zIndex: 200, maxWidth: 260 }}>
             Map data unavailable — showing offline ETA estimates.
           </div>
         )}
@@ -3473,9 +4243,22 @@ export default function Help() {
           mapStyle={MAP_STYLES[mapStyleIndex].url}
           onError={() => setMapboxFailed(true)}
           onClick={(e) => {
-            if (isGetMode && requestStatus === "idle") {
+            if (isGetMode && requestStatus === "idle" && e?.lngLat?.lat != null && e?.lngLat?.lng != null) {
               setLocation([e.lngLat.lat, e.lngLat.lng]);
             }
+          }}
+          onMove={(e) => {
+            const vs = e?.viewState;
+            if (!vs) return;
+            const z = Number.isFinite(vs.zoom) ? vs.zoom : 2;
+            const scale = Math.pow(2, Math.max(-4, Math.min(4, (z - 2) * 0.25)));
+            setMapViewport((prev) => ({
+              ...prev,
+              zoom: z,
+              scale,
+              offsetX: Number.isFinite(vs.longitude) ? -vs.longitude * 2 : 0,
+              offsetY: Number.isFinite(vs.latitude) ? vs.latitude * 2 : 0,
+            }));
           }}
         >
           {location && <MapController center={location} zoom={14} />}
@@ -3502,7 +4285,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -3533,7 +4316,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -3573,11 +4356,7 @@ export default function Help() {
                       {r.eta_seconds && (
                         <>
                           <br />
-                          ETA:{" "}
-                          <EtaLabel
-                            etaSeconds={r.eta_seconds}
-                            degraded={mapboxFailed}
-                          />
+                          ETA: <EtaLabel etaSeconds={r.eta_seconds} degraded={mapboxFailed} />
                         </>
                       )}
                     </Popup>
@@ -3608,7 +4387,7 @@ export default function Help() {
                     closeButton={false}
                   >
                     <strong style={{ color: "#FF7A6B" }}>
-                      {req.nickname || "Anonymous"}
+                      {sanitizeText(req.nickname) || "Anonymous"}
                     </strong>
                     <br />
                     <span style={{ fontSize: "11px", color: "#a2a586" }}>
@@ -3632,6 +4411,7 @@ export default function Help() {
               mapboxFailed={mapboxFailed}
               isArrived={responderArrived}
               isResponderView={false}
+              overlayActive={hasHelpOverlays}
               onResolve={async () => {
                 try {
                   await resolveRequest(
@@ -3666,9 +4446,25 @@ export default function Help() {
                 isResponderView={true}
                 isMarkingArrived={arrivalSubmitting}
                 onMarkArrived={handleMarkArrived}
+                overlayActive={hasHelpOverlays}
               />
             )}
         </Map>
+        {hasHelpOverlays && (
+          <canvas
+            key={overlayMountKey}
+            ref={overlayCanvasRef}
+            aria-hidden="true"
+            data-testid="help-map-overlay-canvas"
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              pointerEvents: "none",
+            }}
+          />
+        )}
 
         <div
           ref={styleSelectorRef}
@@ -3743,7 +4539,7 @@ export default function Help() {
                     color:
                       i === mapStyleIndex ? "#B3A6FF" : "rgba(242,236,220,0.7)",
                     cursor: "pointer",
-                    textAlign: "left",
+                    textAlign: "start",
                     display: "block",
                     transition: "background 0.15s",
                   }}
@@ -3930,7 +4726,7 @@ export default function Help() {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {profile.nickname || "Anonymous"}
+                      {sanitizeText(profile.nickname) || "Anonymous"}
                     </div>
                     <div
                       style={{
@@ -4166,6 +4962,27 @@ export default function Help() {
           open={showOnboarding}
           onClose={() => setShowOnboarding(false)}
           onConnectWallet={() => promptWalletConnection()}
+        />
+
+        <RadioSheet
+          open={showRadioSheet}
+          onClose={() => setShowRadioSheet(false)}
+          bridge={radio}
+        />
+
+        <StagingSheet
+          open={showStagingSheet}
+          onClose={() => setShowStagingSheet(false)}
+          checkIn={nfc}
+        />
+
+        <SosSheet
+          open={showSosSheet}
+          onCancel={() => setShowSosSheet(false)}
+          onConfirm={() => {
+            setShowSosSheet(false);
+            sos.commit({ source: "sos-sheet", force: true });
+          }}
         />
 
         {!location && (
@@ -4433,7 +5250,7 @@ export default function Help() {
                       border: `1.5px solid ${isSelected ? "#FF7A6B" : "rgba(255,255,255,0.08)"}`,
                       borderRadius: "14px",
                       cursor: "pointer",
-                      textAlign: "left",
+                      textAlign: "start",
                       transition: "border-color 0.15s, background 0.15s",
                     }}
                   >
@@ -4529,7 +5346,7 @@ export default function Help() {
             transition: transform 0.35s cubic-bezier(0.22, 0.75, 0.2, 1) !important;
             z-index: 2000 !important;
           }
-          #helphone-help-sidebar.hp-mobile-open {
+          #helphone-help-sidebar.${styles["hp-mobile-open"]} {
             transform: translateY(0) !important;
           }
           #helphone-help-sidebar::before {

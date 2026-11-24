@@ -39,8 +39,15 @@ jobs:
         run: npm ci --prefer-offline --no-audit
         timeout-minutes: 15
 
+      - name: Test vendor integrity checks
+        run: node --test test/vendor-deps.test.js
+
       - name: Vendor dependencies with integrity verification
         run: node scripts/security/vendor_deps.js
+        timeout-minutes: 20
+
+      - name: Verify vendored archives against both lockfiles
+        run: node scripts/security/vendor_deps.js --verify
         timeout-minutes: 5
 
       - name: Build (network-disabled)

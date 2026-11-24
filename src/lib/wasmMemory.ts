@@ -215,5 +215,122 @@ export function createWasmMemoryPool(maxBytes = MAX_MEMORY_BYTES): WasmMemoryPoo
   return new WasmMemoryPool(maxBytes);
 }
 
+// ── Telemetry-specific pooling ──────────────────────────────────────────────
+// The ZK pool above is about large witness buffers. Telemetry has the opposite
+// profile: thousands of small, fixed-size frames. Reusing a small set of
+// staging buffers (and views over WASM linear memory) removes the per-frame
+// allocation that showed up as GC pauses in telemetryBench.js.
+
+export interface TelemetryBufferLease {
+  buffer: ArrayBufferLike;
+  bytes: Uint8Array;
+  shared: boolean;
+}
+
+export interface TelemetryBufferPoolStats {
+  frameBytes: number;
+  pooled: number;
+  active: number;
+  allocationCount: number;
+  recycledCount: number;
+  shared: boolean;
+}
+
+export class TelemetryBufferPool {
+  private free: TelemetryBufferLease[] = [];
+  private active = new Set<TelemetryBufferLease>();
+  private allocationCount = 0;
+  private recycledCount = 0;
+  private readonly shared: boolean;
+
+  constructor(
+    readonly frameBytes = 4 * 1024,
+    private readonly maxBuffers = 64,
+    preferShared = true,
+  ) {
+    this.shared =
+      preferShared &&
+      typeof SharedArrayBuffer !== 'undefined' &&
+      typeof globalThis.crossOriginIsolated !== 'undefined' &&
+      globalThis.crossOriginIsolated === true;
+  }
+
+  acquire(): TelemetryBufferLease {
+    let lease = this.free.pop();
+    if (lease) {
+      this.recycledCount++;
+    } else {
+      const buffer = this.shared
+        ? new SharedArrayBuffer(this.frameBytes)
+        : new ArrayBuffer(this.frameBytes);
+      lease = {
+        buffer,
+        bytes: new Uint8Array(buffer),
+        shared: this.shared,
+      };
+      this.allocationCount++;
+    }
+    this.active.add(lease);
+    return lease;
+  }
+
+  release(lease: TelemetryBufferLease | null | undefined): void {
+    if (!lease || !this.active.delete(lease)) return;
+    if (this.free.length >= this.maxBuffers) return;
+    // Zero the staging buffer so stale frame bytes cannot leak into the next
+    // parse (and so encrypted payload remnants do not linger).
+    try {
+      lease.bytes.fill(0);
+    } catch {
+      // SharedArrayBuffer views are always writable; ignore exotic engines.
+    }
+    this.free.push(lease);
+  }
+
+  getStats(): TelemetryBufferPoolStats {
+    return {
+      frameBytes: this.frameBytes,
+      pooled: this.free.length,
+      active: this.active.size,
+      allocationCount: this.allocationCount,
+      recycledCount: this.recycledCount,
+      shared: this.shared,
+    };
+  }
+
+  destroy(): void {
+    this.free.length = 0;
+    this.active.clear();
+  }
+}
+
+/**
+ * Cached views over a WebAssembly.Memory.
+ *
+ * `memory.buffer` is detached and replaced whenever the module grows. Cache
+ * invalidation by buffer identity prevents the classic use-after-grow bug
+ * where a typed-array view points at the old, detached buffer.
+ */
+export class WasmViewCache {
+  private buffer: ArrayBufferLike | null = null;
+  private u8: Uint8Array | null = null;
+  private f64: Float64Array | null = null;
+  private refreshes = 0;
+
+  views(memory: WebAssembly.Memory): { u8: Uint8Array; f64: Float64Array } {
+    if (this.buffer !== memory.buffer) {
+      this.buffer = memory.buffer;
+      this.u8 = new Uint8Array(memory.buffer);
+      this.f64 = new Float64Array(memory.buffer);
+      this.refreshes++;
+    }
+    return { u8: this.u8 as Uint8Array, f64: this.f64 as Float64Array };
+  }
+
+  get refreshCount(): number {
+    return this.refreshes;
+  }
+}
+
 // Convenience re-exports for workers that import this as ESM
 export default WasmMemoryPool;

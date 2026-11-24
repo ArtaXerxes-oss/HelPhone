@@ -5,7 +5,7 @@ import "./Button.css";
  * Button — HelPhone design system.
  *
  * Variants: primary (coral), teal, purple, muted, ghost, outline, nav
- * Sizes: sm, md, lg
+ * Sizes: sm, md, lg, rugged (56px glove target, ISP-131)
  * Polymorphic: renders as <Link> when `to` prop is provided, otherwise <button> or <a>
  */
 export default function Button({

@@ -3,6 +3,7 @@
 - **Status:** Proposed (spike #607 complete; quota/eviction measurement outstanding, see below)
 - **Date:** 2026-09-23
 - **Evidence:** [Spike report](../spikes/607-storage-lock-contention-report.md) · [raw results](../spikes/results/storage-contention.json) · `scripts/spikes/storage_contention_benchmark.js`
+**Evidence check:** `storage-contention.json#/scenarios/0/throughputPerSec = 497`
 - **Prototype:** `src/services/storageEngine.js`, `src/workers/telemetryWorker.js`
 
 ## Context
@@ -39,10 +40,23 @@ No configuration dropped main-thread frames. Storage work stays off the UI threa
 2. **Do not open SQLite/OPFS from several workers or tabs.** An OPFS file allows one sync access handle at a time. Multiple connections spend their time fighting for it: 37–66 writes/s, reads stalled for up to 18 s, the VFS blocks worker event loops synchronously, and one run crashed the page. WAL is refused in this mode anyway, because it needs `locking_mode=EXCLUSIVE`.
 3. **If SQLite is adopted later** (for SQL queries, or throughput beyond about 3k/s), use exactly one **owner worker** per origin. It holds the only connection (`opfs-sahpool` VFS, `PRAGMA locking_mode=EXCLUSIVE; journal_mode=WAL`), and other workers and tabs forward writes to it over `MessagePort`. Owner election across tabs needs Web Locks or a SharedWorker. This topology gave the highest ceiling (4,721/s) with no lock waits. WAL and rollback journal differed little at 500/s (write p95 77 vs 90 ms).
 4. **Shed load when storage stalls.** Producers get a bounded backlog (`maxPending`) and drop the oldest telemetry fixes. Unbounded queues turned a slow disk into minutes of backlog in the direct-SQLite runs. Broadcast messages must not be shed: give them their own store with `overflow: "reject"`, and surface the error.
+5. **Rule: No full `VACUUM` on in-browser SQLite-WASM (ISP-064).** Full `VACUUM` rewrites the entire 200–600MB database file under an EXCLUSIVE lock, blocking telemetry workers and freezing the main thread (causing 2–6 fps jank, ANR on Android, and Jetsam kills on iOS). Maintenance must rely strictly on:
+   - **Time-partitioned tables (`telemetry_YYYYMM`)**: Retention reclamation is performed via metadata-only `DROP TABLE` operations, instantly reclaiming space with zero freelist bloat and zero page rewriting.
+   - **Budgeted `PRAGMA incremental_vacuum(50)`**: Page-budgeted incremental vacuuming scheduled exclusively during low-priority idle windows, guarded with a 5000ms `busy_timeout` and immediate abort (<100ms) upon any dispatch backlog or UI jank.
+6. **Single commit order & crash-atomic durability trinity (ISP-067):**
+   ```
+   1. SQLite WAL COMMIT  ──▶  2. OPFS syncfs  ──▶  3. IDB Mark Acked
+   (Source of Truth)         (Durability)         (Transport Journal)
+   ```
+   All dispatch mutations carry a monotonic commit sequence `(device_id, seq)` recorded synchronously across SQLite, the IDB journal, and CRDT snapshot headers. SQLite is the single source of truth; IDB acts as an unacknowledged replay journal during crashes; OPFS guarantees on-disk durability before IDB marks an operation acked.
+7. **Priority-aware transaction lanes:**
+   - **Dispatch lane (Lossless):** Executes using `BEGIN IMMEDIATE` with a 5000ms `busy_timeout`. On persistent `SQLITE_BUSY`, dispatches fall back directly to the IndexedDB durable outbox. Dispatches are never lost.
+   - **Telemetry lane (Lossy):** Executes using `BEGIN DEFERRED`. Under lock contention, telemetry coalesces from 5s to 30s cadence or drops non-critical fixes, incrementing the `dropped_telemetry` counter.
+8. **Worker isolation:** SQLite-WASM is strictly forbidden from running on the main UI thread. In browsers lacking OPFS SyncAccessHandle / Web Worker support (e.g. legacy Safari), the client degrades gracefully to IndexedDB-only storage with vacuuming completely disabled.
 
 ## Consequences
 
-- **Positive:** No new runtime dependency. The buffer is backend-agnostic, so moving to the SQLite owner later is a backend swap behind `createStorageEngine()`.
+- **Positive:** No new runtime dependency. The buffer is backend-agnostic, so moving to the SQLite owner later is a backend swap behind `createStorageEngine()`. Full VACUUM lock freezes and ANRs are completely eliminated.
 - **Negative:** Group commit trades durability for throughput. A crash loses up to one flush window (50 ms) of buffered telemetry, which is acceptable for GPS fixes. Messages should use a zero-delay flush.
 - **Outstanding (not measured):**
   - **Quota and eviction.** The quota run was invalid: its payload compressed. Chromium's IndexedDB compresses values, so 73k × 2 KB records took only 28.6 MB. The harness is fixed (random payload, owner topology) but was not re-run in this time box.
@@ -50,3 +64,38 @@ No configuration dropped main-thread frames. Storage work stays off the UI threa
 
   Until both are measured, the recommendation to batch is also the safe default for low-end phones.
 - **Follow-up:** `navigator.storage.persist()` on first incident join; a retention policy that deletes the oldest telemetry (tested: `deleteOldest` then write probes); and the two outstanding measurements above.
+
+
+## Follow-up: quota, CPU starvation and the storage policy (#895)
+
+- **Evidence:** [quota run](../spikes/results/storage-quota-895.json), [8 busy loops](../spikes/results/storage-cpu-stress-895.json), [16 busy loops](../spikes/results/storage-cpu-stress16-895.json), from `node scripts/spikes/storage_contention_benchmark.js` in Chrome 157 on an 8-core i7-10610U.
+- **Evidence check:** `storage-quota-895.json#/scenarios/0/totalCommitted = 18944`
+- **Evidence check:** `storage-cpu-stress-895.json#/scenarios/0/throughputPerSec = 486`
+- **Evidence check:** `storage-cpu-stress16-895.json#/scenarios/0/throughputPerSec = 481`
+- **Code:** `src/services/storagePolicy.js`, the lossless lane in `createStorageEngine` (`src/services/storageEngine.js`), and the persistence request in `hydratePaged` (`src/services/crdtSync.js`).
+
+### Quota, re-measured with random payloads
+
+| Scenario (40 MB origin quota, 2 KB random records) | Result |
+|---|---|
+| IndexedDB, batched | `QuotaExceededError` after **18,944** committed records (about 38.8 MB), at 4.7 s |
+| Recovery: delete the oldest 10 %, then write | **Failed.** The delete transaction itself threw `QuotaExceededError` |
+| SQLite on OPFS (`opfs-sahpool`, owner) | Writes failed with "No space available" from the sync access handle; 14,230 committed in 120 s, 118/s |
+
+The earlier run was invalid because its payload compressed; with random payloads the quota is reached at the expected size. The new finding is that **Chromium refuses even a delete once the origin is at quota**, so "delete the oldest after a quota error" cannot be the recovery path. Eviction has to happen before the limit. The retention policy therefore deletes the oldest telemetry when usage passes 80 % of quota and stops at 60 %, and it applies per-store record caps.
+
+### CPU starvation (`--cpu-stress`)
+
+| 4 workers, 500 writes/s | No stress (above) | 8 busy loops | 16 busy loops |
+|---|---|---|---|
+| IndexedDB, per-write | 497/s, write p95 4.1 ms | **486/s**, p95 14.1 ms | **481/s**, p95 36 ms |
+| IndexedDB, batched | 498/s, write p95 60 ms | **492/s**, p95 60.2 ms | **487/s**, p95 60.7 ms |
+
+Neither configuration collapsed on this 8-core machine. Per-write latency grew with load (4 → 14 → 36 ms), while batched latency stayed at the 50 ms flush window. The early uncontrolled run's drop to 264–287/s did not reproduce. It was probably a heavier load on a different machine, and these numbers do not rule it out on a 4-core budget phone. The recommendation to batch telemetry stands.
+
+### Policy now in code
+
+- **Lossless lane.** Messages and dispatches are written through their own buffer: zero-delay flush, `overflow: "reject"`. Before this change one shared buffer served every store, and its `drop-oldest` overflow could shed a broadcast message to make room for GPS fixes. Telemetry and frames keep the batched, drop-oldest buffer.
+- **Retention keeps the newest data.** Only `frames` and `telemetry` are evictable, oldest first. `messages` and `dispatches` are never evicted, and asking the retention manager to evict them throws.
+- **Quota errors.** `appendWithQuotaRecovery` frees telemetry and retries once. If that fails (including the case above, where the delete itself is refused), the error is surfaced, never swallowed.
+- **Persistence.** `requestPersistentStorage()` runs once per origin on the first incident join (`hydratePaged`). It skips the prompt when storage is already persistent and records `granted`, `denied`, `already-persisted` or `unsupported` in `localStorage`. Later joins and reloads reuse the recorded state, and `onPersistenceChange` lets the UI observe it.

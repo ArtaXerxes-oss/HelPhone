@@ -123,10 +123,5 @@ export function createTelemetryLayer(buffers: TelemetryBuffers, id = 'helphone-t
 
       gl.drawArrays(gl.POINTS, 0, buffers.count)
     },
-
-    // Let Mapbox drop the layer when the store empties and no frames arrive.
-    prune() {
-      return buffers.count === 0
-    },
   }
 }

@@ -10,8 +10,18 @@ export interface TelemetryLayerProps {
   id?: string
 }
 
+/** Minimal imperative surface we need from react-map-gl's map ref. */
+type MapLike = {
+  getLayer: (id: string) => unknown
+  addLayer: (layer: unknown) => void
+  removeLayer: (id: string) => void
+  isStyleLoaded: () => boolean
+  once: (event: string, cb: () => void) => void
+  off: (event: string, cb: () => void) => void
+}
+
 export default function TelemetryLayer({ buffers, id = 'helphone-telemetry' }: TelemetryLayerProps) {
-  const map = useMap().current
+  const map = useMap().current as unknown as MapLike | null
 
   useEffect(() => {
     if (!map) return

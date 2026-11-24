@@ -1,0 +1,64 @@
+name: CRDT hydration budget (#933)
+
+# Replays a 30-day incident history through the client hydration protocol under
+# a 250 MB heap budget and a 20 s time-to-actionable budget. The job fails, and
+# names the offending phase, on a breach. The run's JSON report is uploaded as
+# an artifact so the profile can be attached to ADR-004.
+
+on:
+  pull_request:
+    paths:
+      - 'src/services/crdtSync.js'
+      - 'src/lib/syncIntegrity.js'
+      - 'src/lib/syncPaging.js'
+      - 'src/lib/joinReceipt.js'
+      - 'src/lib/hydrationStore.js'
+      - 'server/routes/sync.ts'
+      - 'server/indexer/auditStreamer.js'
+      - 'scripts/spikes/crdt_hydration_budget.js'
+      - '.github/workflows/crdt-hydration-budget.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/services/crdtSync.js'
+      - 'src/lib/syncIntegrity.js'
+      - 'src/lib/syncPaging.js'
+      - 'src/lib/joinReceipt.js'
+      - 'src/lib/hydrationStore.js'
+      - 'server/routes/sync.ts'
+      - 'scripts/spikes/crdt_hydration_budget.js'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  hydration-budget:
+    name: Hydration heap and time-to-action budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+
+      # The budget script depends only on local modules and Node built-ins, so
+      # no `npm ci` is needed. --expose-gc measures retained heap after GC.
+      - name: Replay 30-day history under the heap and time budgets
+        run: |
+          node --expose-gc --max-old-space-size=512 \
+            scripts/spikes/crdt_hydration_budget.js \
+            --ops 15000 --budget-mb 250 --tta-ms 20000 \
+            --out artifacts/crdt-hydration-budget.json
+
+      - name: Upload budget report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crdt-hydration-budget
+          path: artifacts/crdt-hydration-budget.json
+          if-no-files-found: warn
