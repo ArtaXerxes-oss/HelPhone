@@ -7,7 +7,7 @@
 //! pro-rata by weight.
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN,
+    contract, contracterror, contractevent, contractimpl, contracttype, panic_with_error, symbol_short, token, Address, BytesN,
     Env, Map, Symbol, Vec,
 };
 
@@ -31,6 +31,29 @@ pub enum VaultError {
 pub struct Maintainer {
     pub address: Address,
     pub weight: u32,
+}
+
+#[contractevent(topics = ["maintainer_registered"], data_format = "map")]
+pub struct MaintainerRegisteredEvent<'a> {
+    #[topic]
+    pub package_hash: &'a BytesN<32>,
+    pub maintainer: &'a Address,
+    pub weight: &'a u32,
+}
+
+#[contractevent(topics = ["maintainer_removed"], data_format = "map")]
+pub struct MaintainerRemovedEvent<'a> {
+    #[topic]
+    pub package_hash: &'a BytesN<32>,
+}
+
+#[contractevent(topics = ["maintainer_payout"], data_format = "map")]
+pub struct MaintainerPayoutEvent<'a> {
+    #[topic]
+    pub package_hash: &'a BytesN<32>,
+    pub maintainer: &'a Address,
+    pub token: &'a Address,
+    pub amount: &'a i128,
 }
 
 #[contracttype]
@@ -106,18 +129,25 @@ impl MaintainerVault {
             return Err(VaultError::InvalidWeight);
         }
         let mut reg = registry(&env);
-        reg.set(package_hash, Maintainer { address: maintainer, weight });
+        reg.set(package_hash.clone(), Maintainer { address: maintainer.clone(), weight });
         env.storage().persistent().set(&key_registry(), &reg);
+        MaintainerRegisteredEvent {
+            package_hash: &package_hash,
+            maintainer: &maintainer,
+            weight: &weight,
+        }
+        .publish(&env);
         Ok(())
     }
 
     pub fn remove_maintainer(env: Env, package_hash: BytesN<32>) -> Result<(), VaultError> {
         admin(&env).require_auth();
         let mut reg = registry(&env);
-        if reg.remove(package_hash).is_none() {
+        if reg.remove(package_hash.clone()).is_none() {
             return Err(VaultError::NotRegistered);
         }
         env.storage().persistent().set(&key_registry(), &reg);
+        MaintainerRemovedEvent { package_hash: &package_hash }.publish(&env);
         Ok(())
     }
 
@@ -158,13 +188,21 @@ impl MaintainerVault {
             return 0;
         }
         let token = token_client(&env);
+        let token_address: Address = env.storage().instance().get(&key_token()).unwrap();
         let this = env.current_contract_address();
         let mut paid = 0i128;
-        for m in reg.values().iter() {
+        for (package_hash, m) in reg.iter() {
             let share = pool * m.weight as i128 / total_weight;
             if share > 0 {
                 token.transfer(&this, &m.address, &share);
                 paid += share;
+                MaintainerPayoutEvent {
+                    package_hash: &package_hash,
+                    maintainer: &m.address,
+                    token: &token_address,
+                    amount: &share,
+                }
+                .publish(&env);
             }
         }
         let s = env.storage().instance();

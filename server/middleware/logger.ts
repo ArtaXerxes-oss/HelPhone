@@ -1,6 +1,10 @@
 import morgan from 'morgan'
 import type { Request, Response, NextFunction, RequestHandler } from 'express'
 import { getPool } from '../db/connection.js'
+import { redactUrl } from '../lib/redact.js'
+
+// Never log raw query strings: phone/lat/lng travel in them (#792).
+morgan.token('redacted-url', (req) => redactUrl((req as Request).originalUrl || req.url))
 
 /**
  * HTTP request logger middleware (upstream).
@@ -10,7 +14,9 @@ import { getPool } from '../db/connection.js'
  * for ingestion by log aggregators.
  */
 export const requestLogger: RequestHandler = morgan(
-  process.env.NODE_ENV === 'production' ? 'combined' : 'dev',
+  process.env.NODE_ENV === 'production'
+    ? ':remote-addr - :remote-user [:date[clf]] ":method :redacted-url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"'
+    : ':method :redacted-url :status :response-time ms - :res[content-length]',
 )
 
 /**
@@ -31,6 +37,10 @@ export function logger(opts: LoggerOptions = {}) {
   return (req: Request, res: Response, next: NextFunction) => {
     const start = Date.now();
     const { method, originalUrl } = req;
+    const traceparent = req.get('traceparent');
+    const traceId = typeof traceparent === 'string' && /^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/i.test(traceparent)
+      ? traceparent.split('-')[1].toLowerCase()
+      : null;
 
     // Capture end to log
     const originalEnd = res.end.bind(res) as typeof res.end;
@@ -47,8 +57,9 @@ export function logger(opts: LoggerOptions = {}) {
 
       const entry: Record<string, unknown> = {
         ts: new Date().toISOString(),
+        traceId,
         method,
-        url: originalUrl,
+        url: redactUrl(originalUrl),
         status,
         durationMs: duration,
         bytes: len,

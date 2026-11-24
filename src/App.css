@@ -7,3 +7,73 @@
 @import "./styles/theme.css";
 @import "./styles/animations.css";
 @import "./styles/global.css";
+
+/* Multi-resolution layout — the header bar has to survive narrow phones.
+   The e2e matrix (tests/e2e/layout.spec.ts) asserts that no element is
+   clipped by the viewport edge on every supported resolution. */
+.hp-app-nav {
+  padding: 1rem 2rem;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  row-gap: 0.5rem;
+}
+
+.hp-app-nav-links {
+  justify-content: flex-end;
+  gap: 0.75rem 1.5rem;
+  min-width: 0;
+}
+
+@media (max-width: 480px) {
+  .hp-app-nav {
+    padding: 0.75rem 1rem;
+    justify-content: center;
+  }
+
+  .hp-app-nav-brand {
+    justify-content: center;
+  }
+
+  .hp-app-nav-links {
+    width: 100%;
+    justify-content: center;
+    gap: 0.5rem 1rem;
+  }
+
+  /* Status pills are decorative; they are the first thing to go when the
+     bar gets tight so the navigation itself always fits. */
+  .hp-app-nav-status {
+    display: none;
+  }
+}
+
+/* Print: ink-friendly A4 report output. Everything here is scoped to
+   @media print so the screen layout is untouched. Elements that must not
+   appear on paper opt out with .hp-print-hide; cards that must not split
+   across pages opt in with .hp-print-card. */
+@media print {
+  @page {
+    size: A4;
+    margin: 14mm;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  .hp-app-nav,
+  .hp-print-hide {
+    display: none !important;
+  }
+
+  .hp-print-card {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  [dir="rtl"] {
+    direction: rtl;
+  }
+}

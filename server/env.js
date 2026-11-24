@@ -88,3 +88,44 @@ export function getCorsConfig() {
     ],
   };
 }
+
+// ── Database maintenance (#538) ──────────────────────────────────────────────
+
+function envNumber(raw, fallback, { min, max }) {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= min && n <= max ? n : fallback;
+}
+/** Read maintenance settings, falling back to the default for any bad value. */
+export function getMaintenanceConfig(env = process.env) {
+  return {
+    enabled: env.DB_MAINTENANCE_ENABLED === "true",
+    bloatThresholdPct: envNumber(env.DB_BLOAT_THRESHOLD_PCT, 20, {
+      min: 1,
+      max: 100,
+    }),
+    windowStartHour: Math.trunc(
+      envNumber(env.DB_MAINTENANCE_WINDOW_START_UTC, 2, { min: 0, max: 23 }),
+    ),
+    windowEndHour: Math.trunc(
+      envNumber(env.DB_MAINTENANCE_WINDOW_END_UTC, 5, { min: 0, max: 23 }),
+    ),
+    intervalMs: envNumber(env.DB_MAINTENANCE_INTERVAL_MS, 15 * 60_000, {
+      min: 1_000,
+      max: 24 * 3_600_000,
+    }),
+    reindexCooldownMs: envNumber(
+      env.DB_REINDEX_COOLDOWN_MS,
+      7 * 24 * 3_600_000,
+      { min: 0, max: 365 * 24 * 3_600_000 },
+    ),
+    minTableTuples: envNumber(env.DB_MAINTENANCE_MIN_TUPLES, 1_000, {
+      min: 0,
+      max: Number.MAX_SAFE_INTEGER,
+    }),
+    partitionEvictionEnabled: env.DB_PARTITION_EVICTION_ENABLED === "true",
+    partitionRetentionDays: envNumber(env.DB_PARTITION_RETENTION_DAYS, 90, { min: 1, max: 3650 }),
+    partitionReversalDays: envNumber(env.DB_PARTITION_REVERSAL_DAYS, 7, { min: 1, max: 90 }),
+    partitionEvictionDryRun: env.DB_PARTITION_EVICTION_DRY_RUN === "true",
+  };
+}

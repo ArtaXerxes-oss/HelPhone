@@ -130,3 +130,108 @@
   font-weight: 700;
   letter-spacing: 0.4px;
 }
+
+/* ---------------------------------------------------------------------------
+   Rugged mode overrides (ISP-131) — activated by data-rugged="1" on <html>.
+   Glove targets >=48px, sunlight-readable contrast (WCAG AAA text), thicker
+   map-adjacent affordances. Scoped so default mode is untouched.
+--------------------------------------------------------------------------- */
+
+[data-rugged="1"] .hp-help-sidebar button,
+[data-rugged="1"] .hp-help-sidebar input,
+[data-rugged="1"] .hp-help-sidebar select,
+[data-rugged="1"] .hp-help-sidebar [role="switch"] {
+  min-height: 48px !important;
+}
+
+[data-rugged="1"] .hp-help-btn-ghost {
+  min-height: 48px;
+  font-size: 14px;
+  border-width: 2px;
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.45);
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+[data-rugged="1"] .hp-help-input {
+  min-height: 48px;
+  font-size: 16px; /* prevents iOS/Android zoom-on-focus */
+  color: #ffffff;
+  background: rgba(0, 0, 0, 0.55);
+  border: 2px solid rgba(255, 255, 255, 0.6);
+}
+
+[data-rugged="1"] .hp-help-sidebar {
+  color: #ffffff;
+}
+
+[data-rugged="1"] .hp-modal-title {
+  color: #ffffff;
+}
+
+[data-rugged="1"] .hp-modal-close {
+  width: 48px;
+  height: 48px;
+  font-size: 24px;
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+[data-rugged="1"] .hp-btn {
+  min-height: 48px;
+}
+
+[data-rugged="1"] .hp-btn:focus-visible,
+[data-rugged="1"] .hp-help-sidebar button:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+/* Sunlight mode: darken light surfaces so cream washout cannot eat text */
+[data-rugged="1"] .hp-help-main {
+  background: #d9cbb8;
+}
+
+/* Field-tools card (radio/staging/SOS) */
+.hp-fieldops-card {
+  border-radius: 12px;
+  padding: 12px 13px;
+  margin-bottom: 18px;
+  background: rgba(0, 0, 0, 0.28);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.hp-fieldops-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hp-fieldops-btn {
+  flex: 1;
+  min-width: 88px;
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(242, 236, 220, 0.92);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+[data-rugged="1"] .hp-fieldops-btn {
+  min-height: 52px;
+  font-size: 14px;
+  color: #ffffff;
+  border-width: 2px;
+}
+
+.hp-fieldops-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}

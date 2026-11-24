@@ -86,6 +86,8 @@ export function createCorsMiddleware(opts = {}) {
     res.setHeader("Access-Control-Allow-Origin", origin);
     res.setHeader("Access-Control-Allow-Methods", methods.join(", "));
     res.setHeader("Access-Control-Allow-Headers", headers.join(", "));
+    // #753: Allow credentials for wallet postMessage flows
+    res.setHeader("Access-Control-Allow-Credentials", "true");
     if (req.method === "OPTIONS") {
       res.setHeader("Access-Control-Max-Age", String(maxAge));
       return res.status(204).end();

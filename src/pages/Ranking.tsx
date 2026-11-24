@@ -5,24 +5,39 @@ import MainLayout from "../components/layout/MainLayout";
 import Badge from "../components/shared/Badge";
 import styles from "./Ranking.module.css";
 import { cx } from "../styles/cssModules";
+import { annotateLeaderboard, isProvenTierAllowed, type ReputationTier } from "../lib/rankingIntegrity";
+import { useFeatureFlag } from "../lib/featureFlags.js";
+import { sanitizeText } from "../lib/htmlSanitizer";
 
 const PERIODS = Object.freeze(["This Week", "This Month", "All Time"]);
 
 const MEDALS = Object.freeze(["🥇", "🥈", "🥉"]);
 
+type RankRow = RankingEntry & { tier?: ReputationTier; score?: number };
+
 export default function Ranking() {
-  const [rows, setRows] = useState<RankingEntry[]>([]);
+  const [rows, setRows] = useState<RankRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState("All Time");
+  const reputationGated = useFeatureFlag("reputationGatedRanking");
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       try {
         const entries = await getRanking();
-        const sorted = entries
-          .sort((a, b) => b.total_arrivals - a.total_arrivals)
-          .slice(0, 20);
+        // Local integrity events are empty until the sync pipeline feeds them;
+        // annotateLeaderboard still labels newcomers as probationary (#772).
+        const annotated = annotateLeaderboard(entries, []);
+        const provenAllowed = reputationGated && isProvenTierAllowed();
+        const sorted = annotated.slice(0, 20).map((row) => ({
+          responder: row.responder,
+          total_arrivals: row.total_arrivals,
+          // Tier badges stay on when the integrity flag is enabled (#772),
+          // and degrade to probationary when prover pins mismatch (#945).
+          tier: reputationGated ? (provenAllowed ? row.tier : "probationary") : undefined,
+          score: row.score,
+        }));
         setRows(sorted);
       } catch {
         setRows([]);
@@ -30,7 +45,7 @@ export default function Ranking() {
       setLoading(false);
     }
     load();
-  }, [period]);
+  }, [period, reputationGated]);
 
   return (
     <MainLayout navbar="solid" footer={false}>
@@ -138,8 +153,31 @@ export default function Ranking() {
                     {row.responder[7]?.toUpperCase() || "?"}
                   </div>
                   <span className={styles["hp-ranking-address"]}>
-                    {row.responder.slice(0, 8)}…{row.responder.slice(-4)}
+                    {sanitizeText(row.responder.slice(0, 8))}…{sanitizeText(row.responder.slice(-4))}
                   </span>
+                  {row.tier && (
+                    <span
+                      className={styles["hp-ranking-tier"]}
+                      aria-label={
+                        row.tier === "proven"
+                          ? "Proven responder"
+                          : "Probationary responder"
+                      }
+                      style={{
+                        fontSize: "0.7rem",
+                        padding: "0.15rem 0.45rem",
+                        borderRadius: "999px",
+                        background:
+                          row.tier === "proven"
+                            ? "var(--color-teal)"
+                            : "var(--color-cream)",
+                        color:
+                          row.tier === "proven" ? "#fff" : "var(--color-primary)",
+                      }}
+                    >
+                      {row.tier === "proven" ? "Proven" : "New"}
+                    </span>
+                  )}
                 </div>
 
                 {/* Arrivals — using shared Badge component */}

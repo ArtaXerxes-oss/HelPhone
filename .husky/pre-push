@@ -1,1 +1,35 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# ── Pre-push gate ─────────────────────────────────────────────────────────────
+# Runs the full test suite before every `git push`.
+# To bypass (e.g., pushing a WIP branch for CI feedback only):
+#   git push --no-verify
+#
+# ONBOARDING: If tests fail, run `npm test` locally to see the full output.
+# Flaky tests? Check test/setup.js for global mocks and docs/onboarding-ladder.md.
+
+echo ""
+echo "┌─────────────────────────────────────────────────────────────────┐"
+echo "│  HelPhone pre-push gate  (npm test)                             │"
+echo "└─────────────────────────────────────────────────────────────────┘"
+echo ""
+echo "▶  Running Vitest test suite…"
+echo "   This may take 30–90 seconds. Run 'npm test -- --reporter=verbose' for detail."
+
 npm run test
+TEST_EXIT=$?
+
+if [ $TEST_EXIT -ne 0 ]; then
+  echo ""
+  echo "✗ Tests failed (exit $TEST_EXIT)"
+  echo "  Fix the failing tests before pushing."
+  echo "  To investigate: npm test -- --reporter=verbose"
+  echo "  To skip (WIP push only): git push --no-verify"
+  echo "  Docs: docs/onboarding-ladder.md#stage-0-toolchain"
+  exit $TEST_EXIT
+fi
+
+echo ""
+echo "✓ Pre-push gate passed — pushing."
+echo ""

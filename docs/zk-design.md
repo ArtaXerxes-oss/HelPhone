@@ -278,3 +278,58 @@ This environment does not include `nargo`, so no new numeric benchmark result is
 claimed here. Run `bash circuits/scripts/benchmark.sh 5` on the low-power target,
 then retain browser proving only if every gate above passes; otherwise use the
 existing server prover path.
+
+## Differential-privacy zone checks (#529)
+
+`contracts/aegis_vault/src/privacy.rs` enforces a differential-privacy policy on the public bounding box of every funded zone.
+
+### What can and cannot be verified on-chain
+
+A claimant's coordinates are private witnesses. The chain never sees them, so it cannot verify that noise was added to them, and nothing here claims to. What it *can* enforce, using only the box already committed as public inputs, is that the region a proof is allowed to reveal is no finer than the noise bound it is supposed to hide behind. These are policy checks on public data, not a proof that noise was added.
+
+### The rules (`fund_zone`, before any token moves)
+
+| Check | Rule | Error |
+| --- | --- | --- |
+| Laplace bound | Each side >= `sensitivity / epsilon * t`, rounded up to the grid | `BoxTooSmall` (16) |
+| Grid alignment | All four edges are multiples of `grid` | `BoxNotOnGrid` (15) |
+| Well-formed | `min < max` on both axes, within `0..=3.6e9` / `0..=1.8e9`, every word fits a `u64` | `BoxMalformed` (14) |
+| Overlap guard (k-anonymity) | Two zones are disjoint, or intersect in at least the Laplace bound per axis **and** `k_cells` grid cells | `ZoneOverlapTooSmall` (17) |
+| Parameters | `epsilon`, `sensitivity`, `t`, `grid`, `k` all non-zero and the minimum box fits the map | `InvalidPrivacyParams` (13) |
+
+Laplace noise with scale `b = sensitivity / epsilon` stays within `b * t` of the true value with probability `1 - e^-t` (`t = 3` is about 95%). A box narrower than that cannot contain a location fuzzed at that epsilon. Smaller epsilon means more noise and a larger minimum box. Integer arithmetic throughout; the scale rounds up, never down.
+
+**Boxes are closed.** The circuit accepts `x <= box_x_max`, so a claimant on a shared edge is inside both neighbours. Two zones that merely touch therefore intersect in a zero-width line, the worst case for anonymity, and are rejected like any other too-small overlap.
+
+### Configuration
+
+Off by default: nothing changes for existing deployments until an admin calls `set_privacy_params`. Defaults once enabled: `epsilon = 1.0`, `sensitivity = 100_000` (0.01 deg, about 1.1 km), `t = 3`, `grid = 10_000` (about 110 m), `k_cells = 25`, giving a 300_000-unit (0.03 deg) minimum side.
+
+| Function | Purpose |
+| --- | --- |
+| `set_privacy_params(admin, params)` | Admin only; rejects nonsense parameters |
+| `privacy_params()` | Current parameters |
+| `min_box_dimension()` | Smallest allowed side under them |
+| `validate_zone(prefix)` | Dry run: applies every check, registers nothing |
+
+Tightening the parameters never strands funds: the checks run only when a zone is funded, so a zone funded earlier stays claimable.
+
+### Limits worth knowing
+
+- The overlap guard compares against the newest **128** funded zones (`MAX_TRACKED_ZONES`), which keeps the scan bounded. A zone that has aged out of that window is no longer checked against.
+- It constrains the *shape and overlap of public zones*. It does not stop a claimant from being identified by other means, and it does not bound how many claims a zone receives.
+- Enforcement is at funding time. A campaign funded again with the same id is not treated as overlapping itself.
+
+### Client (`src/lib/privacy.ts`)
+
+Mirrors the rules with the contract's `u64` semantics (BigInt), so a UI can preflight instead of finding out from a failed transaction: `validateZone`, `checkOverlap`, `minBoxDimension`, `alignZone` (snaps edges outward to the grid, then widens symmetrically to the bound, shifting rather than shrinking at the map edge; it never makes a region finer) and `buildPrivateLocationProofZone`. `getZonePrivacyPolicy()` in `src/lib/contract.ts` reads the live parameters. The Rust and JS tests share test vectors so they cannot drift.
+
+### Follow-up: circuit floor (not in this change)
+
+The issue also proposes noise-threshold assertions in `circuits/src/main.nr`. That is deliberately **not** included: `circuits/target/aegis.json` is a pinned build artifact (`aegis.sha256`, checked by `scripts/verify-wasm-build.sh`), and changing the circuit requires rebuilding it with `nargo` (1.0.0-beta.9), regenerating the verification key with `bb`, redeploying the verifier and re-recording the hash, none of which could be done or verified here. The contract check above enforces the same property meanwhile. If wanted, the circuit would add a fixed floor below the contract's default, after the existing geofence asserts (no new public inputs, so the 224-byte layout is unchanged):
+
+```noir
+global MIN_BOX_DIM: u64 = 30_000; // below the contract default of 300_000
+assert(box_x_max - box_x_min >= MIN_BOX_DIM, "Zone too narrow (longitude)");
+assert(box_y_max - box_y_min >= MIN_BOX_DIM, "Zone too narrow (latitude)");
+```

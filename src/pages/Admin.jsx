@@ -16,13 +16,27 @@ import {
   approveAdminProposal,
   executeAdminProposal,
   getAdminProposal,
+  getDaoProposal,
+  queueDaoProposal,
+  executeDaoProposal,
+  approveDaoCancellation,
+  cancelQueuedDaoProposal,
+  configureDaoSecurityMultisig,
+  getZonePrivacyPolicy,
+  setAegisPrivacyParams,
 } from "../lib/contract";
+import { DEFAULT_ZONE_PRIVACY } from "../lib/privacy";
 
 function sanitizeAddress(raw) {
   if (typeof raw !== "string") return "";
   const addr = raw.trim();
   if (!/^G[A-Z2-7]{55}$/.test(addr)) return "";
   return addr;
+}
+
+function variantName(value) {
+  if (typeof value === "string") return value;
+  return value && typeof value === "object" ? Object.keys(value)[0] || "Unknown" : "Unknown";
 }
 
 export default function Admin() {
@@ -44,11 +58,29 @@ export default function Admin() {
   const [proposalTarget, setProposalTarget] = useState("");
   const [proposalId, setProposalId] = useState("");
   const [proposal, setProposal] = useState(null);
+  const [daoProposalId, setDaoProposalId] = useState("");
+  const [daoProposal, setDaoProposal] = useState(null);
+  const [guardianInput, setGuardianInput] = useState("");
+  const [guardianThreshold, setGuardianThreshold] = useState("1");
+  const [clock, setClock] = useState(() => Math.floor(Date.now() / 1000));
 
   const isOwner =
     walletAddress &&
     contractAdmin &&
     walletAddress.trim() === contractAdmin.trim();
+  const daoStatus = variantName(daoProposal?.status);
+  const executeAfter = Number(daoProposal?.timelock?.execute_after || 0);
+  const votingEnds = Number(daoProposal?.voting_ends || 0);
+  const secondsRemaining = Math.max(0, executeAfter - clock);
+
+  const [privacyPolicy, setPrivacyPolicy] = useState(DEFAULT_ZONE_PRIVACY);
+  const [privacyDraft, setPrivacyDraft] = useState(DEFAULT_ZONE_PRIVACY);
+
+  useEffect(() => {
+    if (!daoProposal) return undefined;
+    const timer = window.setInterval(() => setClock(Math.floor(Date.now() / 1000)), 1000);
+    return () => window.clearInterval(timer);
+  }, [daoProposal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,16 +109,21 @@ export default function Admin() {
     setLoading(true);
     setMessage("");
     try {
-      const [admin, payout, pending] = await Promise.all([
+      const [admin, payout, pending, privacy] = await Promise.all([
         getAegisAdmin(),
         getAegisPayoutAmount(),
         getPendingOwner(),
+        getZonePrivacyPolicy(),
       ]);
       setContractAdmin(admin);
       setPayoutAmount(payout);
       setPendingOwner(pending);
+      if (privacy) {
+        setPrivacyPolicy(privacy);
+        setPrivacyDraft(privacy);
+      }
     } catch (err) {
-      setMessage("Failed to load admin data: " + err.message);
+      setMessage
       setMessageType("error");
     }
     setLoading(false);
@@ -195,6 +232,58 @@ export default function Admin() {
     setActionLoading(false);
   }
 
+  async function handleDaoAction(action) {
+    if (action === "configure") {
+      const guardians = guardianInput.split(/[\s,]+/).map(sanitizeAddress).filter(Boolean);
+      const threshold = Number(guardianThreshold);
+      if (!guardians.length || new Set(guardians).size !== guardians.length ||
+          !Number.isSafeInteger(threshold) || threshold < 1 || threshold > guardians.length) {
+        setMessage("Enter unique guardian Stellar addresses and a reachable positive threshold.");
+        setMessageType("error");
+        return;
+      }
+      setActionLoading(true);
+      try {
+        await configureDaoSecurityMultisig(walletAddress, guardians, threshold, StellarWalletsKit);
+        setMessage("DAO security multisig updated.");
+        setMessageType("success");
+      } catch (err) {
+        setMessage(`DAO security multisig update failed: ${err.message}`);
+        setMessageType("error");
+      } finally {
+        setActionLoading(false);
+      }
+      return;
+    }
+    const id = Number(daoProposalId);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      setMessage("Enter a valid DAO proposal ID.");
+      setMessageType("error");
+      return;
+    }
+    setActionLoading(true);
+    try {
+      if (action === "load") {
+        const loaded = await getDaoProposal(id);
+        if (!loaded) throw new Error("DAO proposal not found.");
+        setDaoProposal(loaded);
+      } else {
+        if (action === "queue") await queueDaoProposal(id, walletAddress, StellarWalletsKit);
+        if (action === "execute") await executeDaoProposal(id, walletAddress, StellarWalletsKit);
+        if (action === "approve") await approveDaoCancellation(id, walletAddress, StellarWalletsKit);
+        if (action === "cancel") await cancelQueuedDaoProposal(id, walletAddress, StellarWalletsKit);
+        setDaoProposal(await getDaoProposal(id));
+      }
+      setMessage(action === "load" ? "DAO proposal loaded." : `DAO proposal ${action} submitted.`);
+      setMessageType("success");
+    } catch (err) {
+      setMessage(`DAO proposal ${action} failed: ${err.message}`);
+      setMessageType("error");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function handleSetPayout() {
     const amt = Number(newPayout);
     if (!Number.isFinite(amt) || amt <= 0) {
@@ -243,6 +332,36 @@ export default function Admin() {
       setMessageType("error");
     }
     setActionLoading(false);
+  }
+
+  async function handleSetPrivacy() {
+    const next = {
+      enabled: privacyDraft.enabled,
+      epsilonMilli: Number(privacyDraft.epsilonMilli),
+      sensitivity: Number(privacyDraft.sensitivity),
+      tailMult: Number(privacyDraft.tailMult),
+      grid: Number(privacyDraft.grid),
+      kCells: Number(privacyDraft.kCells),
+    };
+    setActionLoading(true);
+    setMessage("");
+    try {
+      if (!privacyPolicy.enabled && next.enabled) {
+        const confirmed = window.confirm(
+          "Enabling zone privacy affects live campaigns immediately. Announce the migration, preflight active zones, and confirm dry-run results before enabling.");
+        if (!confirmed) return;
+      }
+      const result = await setAegisPrivacyParams(next, StellarWalletsKit);
+      setPrivacyPolicy(next);
+      setPrivacyDraft(next);
+      setMessage(`Privacy parameters ${next.enabled ? "enabled" : "disabled"}. TX: ${result.hash || "submitted"}`);
+      setMessageType("success");
+    } catch (err) {
+      setMessage(`Privacy update failed: ${err.message}`);
+      setMessageType("error");
+    } finally {
+      setActionLoading(false);
+    }
   }
 
   const cardStyle = {
@@ -945,6 +1064,119 @@ export default function Admin() {
                 {actionLoading ? "Revoking…" : "Revoke Transfer"}
               </button>
             )}
+        </div>
+
+        <section style={cardStyle} aria-labelledby="dao-timelock-heading">
+          <h2 id="dao-timelock-heading" style={{ color: "#F4ECDC", fontSize: "16px", margin: "0 0 8px" }}>
+            DAO proposal timelock
+          </h2>
+          <p style={{ color: "rgba(242,236,220,0.62)", fontSize: "12px", lineHeight: 1.5 }}>
+            Passed proposals must be queued and wait 48 hours before permissionless execution. Security guardians can approve emergency cancellation.
+          </p>
+          <div style={{ display: "grid", gap: "8px", marginBottom: "14px" }}>
+            <label htmlFor="dao-security-guardians" style={{ color: "#F4ECDC", fontSize: "12px" }}>Security guardian addresses</label>
+            <textarea
+              id="dao-security-guardians"
+              value={guardianInput}
+              onChange={(event) => setGuardianInput(event.target.value)}
+              placeholder="One G... address per line"
+              rows={3}
+              style={{ ...inputStyle, width: "100%", resize: "vertical" }}
+            />
+            <label htmlFor="dao-security-threshold" style={{ color: "#F4ECDC", fontSize: "12px" }}>Approval threshold</label>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              <input
+                id="dao-security-threshold"
+                type="number"
+                min="1"
+                max={guardianInput.split(/[\s,]+/).filter(Boolean).length || 1}
+                value={guardianThreshold}
+                onChange={(event) => setGuardianThreshold(event.target.value)}
+                style={{ ...inputStyle, width: "100px" }}
+              />
+              <button type="button" disabled={actionLoading || !guardianInput.trim()} onClick={() => handleDaoAction("configure")} style={btnPrimary}>
+                Configure security multisig
+              </button>
+            </div>
+          </div>
+          <label htmlFor="dao-proposal-id" style={{ display: "block", color: "#F4ECDC", fontSize: "12px", marginBottom: "6px" }}>
+            Proposal ID
+          </label>
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+            <input
+              id="dao-proposal-id"
+              inputMode="numeric"
+              value={daoProposalId}
+              onChange={(event) => setDaoProposalId(event.target.value)}
+              style={{ ...inputStyle, flex: "1 1 160px" }}
+            />
+            <button type="button" disabled={actionLoading || !daoProposalId} onClick={() => handleDaoAction("load")} style={btnPrimary}>
+              Load
+            </button>
+          </div>
+          {daoProposal && (
+            <div style={{ marginTop: "14px", borderTop: "1px solid rgba(255,255,255,0.1)", paddingTop: "12px" }}>
+              <p style={{ color: "#F4ECDC", fontSize: "13px", margin: "0 0 8px" }}>
+                Status: <strong>{daoStatus}</strong>
+              </p>
+              {daoStatus === "Queued" && (
+                <p role="timer" aria-live="polite" style={{ color: secondsRemaining ? "#7fb8ba" : "#3F8487", fontSize: "13px" }}>
+                  {secondsRemaining
+                    ? `Execution available in ${Math.floor(secondsRemaining / 3600)}h ${Math.floor((secondsRemaining % 3600) / 60)}m ${secondsRemaining % 60}s`
+                    : "Timelock expired; execution is available."}
+                </p>
+              )}
+              <p style={{ color: "rgba(242,236,220,0.62)", fontSize: "12px" }}>
+                Emergency approvals: {daoProposal.cancellationApprovals}/{daoProposal.cancellationThreshold}
+              </p>
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {(daoStatus === "Passed" || (daoStatus === "Active" && votingEnds > 0 && clock > votingEnds)) && <button type="button" disabled={actionLoading} onClick={() => handleDaoAction("queue")} style={btnPrimary}>Finalize and queue 48-hour delay</button>}
+                {daoStatus === "Queued" && secondsRemaining === 0 && <button type="button" disabled={actionLoading} onClick={() => handleDaoAction("execute")} style={btnPrimary}>Execute</button>}
+                {daoStatus === "Queued" && <>
+                  <button type="button" disabled={actionLoading} onClick={() => handleDaoAction("approve")} style={btnPrimary}>Approve emergency cancellation</button>
+                  <button type="button" disabled={actionLoading || daoProposal.cancellationApprovals < daoProposal.cancellationThreshold} onClick={() => handleDaoAction("cancel")} style={btnDanger}>Cancel queued proposal</button>
+                </>}
+              </div>
+            </div>
+          )}
+        </section>
+
+        {/* Differential-privacy zone policy */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: "10px", letterSpacing: "1.5px", color: "#7fb8ba", fontWeight: 900, marginBottom: "12px" }}>
+            DIFFERENTIAL-PRIVACY ZONES
+          </div>
+          <p style={{ color: "rgba(242,236,220,0.55)", fontSize: "12px", lineHeight: 1.6 }}>
+            Checks are {privacyPolicy.enabled ? "enabled" : "disabled"}. Enabling applies to live campaign validations; announce and dry-run first.
+          </p>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#F4ECDC", fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={!!privacyDraft.enabled}
+              onChange={(e) => setPrivacyDraft((p) => ({ ...p, enabled: e.target.checked }))}
+            />
+            Enable zone checks
+          </label>
+          {[
+            ["epsilonMilli", "Epsilon ×1000", "1000"],
+            ["sensitivity", "Sensitivity", "100000"],
+            ["tailMult", "Tail multiplier", "3"],
+            ["grid", "Grid units", "10000"],
+            ["kCells", "Minimum overlap cells", "25"],
+          ].map(([key, label, placeholder]) => (
+            <input
+              key={key}
+              aria-label={label}
+              type="number"
+              value={privacyDraft[key] ?? ""}
+              placeholder={placeholder}
+              onChange={(e) => setPrivacyDraft((p) => ({ ...p, [key]: Number(e.target.value) }))}
+              style={{ ...inputStyle, marginTop: "8px" }}
+            />
+          ))}
+          <button type="button" onClick={handleSetPrivacy} disabled={actionLoading} style={{ ...btnDanger, marginTop: "12px", width: "100%" }}>
+            {actionLoading ? "Submitting…" : "Apply with multisig admin approval"}
+          </button>
         </div>
 
         {/* Quick Actions */}

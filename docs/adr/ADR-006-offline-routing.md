@@ -3,6 +3,7 @@
 - **Status:** Proposed (spike #606 complete)
 - **Date:** 2026-09-23
 - **Evidence:** [Spike report](../spikes/606-routing-benchmark-report.md) · [raw results](../spikes/results/routing-benchmark.json) · `scripts/spikes/routing_benchmark.js`
+**Evidence check:** `routing-benchmark.json#/algorithms/astar/latencyMs/p95 = 19.004`
 - **Prototype:** `src/utils/graphTraversal.js`, `src/workers/routingWorker.js`
 
 ## Context
@@ -53,3 +54,29 @@ Data format options:
   - Wiring the worker into the Help map page. The issue names `src/App.jsx`, but the landing page is now `src/App.tsx` and routing belongs on `/help`, so this spike does not touch app UI.
   - Time-based weights (speed limits, closed roads) with the heuristic scaled by the maximum speed.
 - **Risk:** The grid is a pessimistic case for CH, because real road networks have hierarchy and produce far fewer shortcuts. The CH preprocessing cost here is an upper bound. The on-device conclusion still holds.
+
+## Follow-up: HPGR tiles, time weights and the /help worker (#893)
+
+- **Evidence:** [time-weighted](../spikes/results/offline-routing-893.json) and [distance-weighted](../spikes/results/offline-routing-893-distance.json) runs of `node --expose-gc scripts/benchmarks/offline_routing_benchmark.js` (317×317 spike network with road classes, speed limits and 2 % closed roads; 200 random pairs through the routing worker in a `worker_threads` Worker; Node 22, i7-10610U).
+- **Evidence check:** `offline-routing-893.json#/queries/workerQueryMs/p95 = 25.106`
+- **Evidence check:** `offline-routing-893-distance.json#/queries/workerQueryMs/p95 = 17.428`
+- **Code:** `src/lib/routingTiles.js` + `scripts/build-routing-tiles.js` (converter), `src/lib/offlineBundle.js` (versioning, SHA-256), `src/lib/offlineRouting.js` + `src/features/help/OfflineRoutePanel.jsx` (worker on `/help`), `.github/workflows/routing-tiles.yml` (reproducibility).
+
+| 100,473 nodes, 343,074 edges | Distance weights | Time weights |
+|---|---|---|
+| Tile size | 7.38 MiB | **7.38 MiB** (weights stay one Float64 per edge) |
+| Build, reproducible | 3.1 s, yes | 3.2 s, yes (two builds from shuffled input, same SHA-256) |
+| Nodes expanded per query | 15,364 | 27,590 |
+| Worker query p50 / p95 / max | 3.5 / 17.4 / 31.6 ms | 7.9 / **25.1** / 30.5 ms |
+
+- **Converter.** OSM-tagged road GeoJSON goes in, for example from `osmium export`. Speeds come from `maxspeed` (km/h, mph, or the lowest of a list) or a conservative per-`highway` default. `closed=yes`, `access=no|private` and `highway=construction` roads are left out. Shelters, hospitals, fire stations, police and assembly points become named destinations. Input is reduced to the tags routing uses and sorted first, so feature order, key order and unrelated tags do not change the tile.
+- **Header.** Header words 4..7 were reserved and zero, so they now carry the weighting code and the graph's max speed (float64). No format bump was needed: older buffers read as distance-weighted.
+- **Scaled heuristic.** For time weights, h = straight-line metres / max speed in the graph. This is admissible and consistent, and a 300-pair test checks A* against Dijkstra.
+- **Integrity.** The manifest lists the tile's SHA-256, size, node/edge counts and weighting. The client verifies all of them before the tile reaches the worker. A newer release that fails verification is ignored and the last verified tile stays in use. Only a manifest whose tile verified is cached.
+- **`Math.hypot` → `Math.sqrt`** in the heuristic, which is the same value and faster in V8. This brought distance-weighted p95 back to the spike's level.
+
+**Budget: not met for time weights.** The scaled heuristic is weaker: most roads run at 25 km/h but it must divide by the fastest (60 km/h), so A* expands 1.8× more nodes. Distance-weighted p95 here (17.4 ms) matches the spike's 19.0 ms, so this machine runs at about the spike laptop's speed. With the ADR's assumed 4× budget-phone slowdown, time-weighted p95 extrapolates to about **100–110 ms**, at or over the "well under 100 ms" driver; distance-weighted stays at about 70–80 ms. Exactness was kept rather than trading it for speed. Next options, in order:
+- **ALT landmarks:** about 1.6–3.2 MB per zone for directed roads.
+- **Server-precomputed CH (`HPCH`):** only for the largest zones.
+
+**Not done:** an on-device measurement, and a browser E2E with the network disabled. The offline E2E runs the real worker protocol in Node with fetch failing and tiles served from the Cache API.

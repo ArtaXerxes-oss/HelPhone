@@ -1,10 +1,13 @@
 {
   "version": "1.0.0",
-  "updatedAt": "2026-09-24T16:00:00Z",
+  "updatedAt": "2026-10-16T00:00:00Z",
   "flags": {
     "emergency_broadcaster": {
       "enabled": true,
       "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-dispatch-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
       "targets": {
         "roles": ["admin", "responder", "user"],
         "environments": ["production", "staging", "development"]
@@ -13,6 +16,9 @@
     "soroban_state_backup": {
       "enabled": true,
       "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-contract-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
       "targets": {
         "roles": ["admin", "responder"]
       }
@@ -20,6 +26,9 @@
     "passkey_authentication": {
       "enabled": true,
       "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-security-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
       "environmentOverrides": {
         "development": true,
         "production": true
@@ -28,13 +37,104 @@
     "canary_map_clustering": {
       "enabled": true,
       "rolloutPercentage": 50,
+      "canaryStage": "canary_50",
+      "owner": "@helphone-maps-owner",
+      "expiresAt": "2027-03-01T00:00:00Z",
       "targets": {
         "environments": ["staging", "development"]
       }
     },
+    "encrypted_dispatch": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-dispatch-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
+      "targets": {
+        "roles": ["responder", "user"],
+        "environments": ["production", "staging", "development"]
+      }
+    },
     "experimental_zk_v2": {
       "enabled": false,
-      "rolloutPercentage": 0
+      "rolloutPercentage": 0,
+      "canaryStage": "off",
+      "owner": "@helphone-zk-owner",
+      "expiresAt": "2027-03-01T00:00:00Z",
+      "requiresPinAlignment": true
+    },
+    "foldable_resilience": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-ui-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "slice_nav": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-ui-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "slice_hero": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-ui-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "multilingualSearchV2": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-ui-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "reputationGatedRanking": {
+      "enabled": true,
+      "generation": 1,
+      "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-maintainers",
+      "expiresAt": "2027-06-01T00:00:00Z",
+      "requiresPinAlignment": true,
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
+    },
+    "anomalyDetectorV2": {
+      "enabled": true,
+      "rolloutPercentage": 100,
+      "canaryStage": "ga_100",
+      "owner": "@helphone-telemetry-owner",
+      "expiresAt": "2027-06-01T00:00:00Z",
+      "targets": {
+        "environments": ["production", "staging", "development"]
+      }
     }
-  }
+  },
+  "auditLog": [
+    {
+      "timestamp": "2026-10-16T00:00:00Z",
+      "flagKey": "reputationGatedRanking",
+      "actor": "@helphone-maintainers",
+      "reason": "Prover pins aligned (generation 1) and promoted to ga_100 (#944)",
+      "fromStage": "canary_50",
+      "toStage": "ga_100",
+      "pinsAligned": true
+    }
+  ]
 }

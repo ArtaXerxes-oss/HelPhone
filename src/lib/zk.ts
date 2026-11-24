@@ -7,7 +7,7 @@
 // Full strict typing is tracked in a follow-up refactor.
 import { StrKey } from "@stellar/stellar-sdk";
 import type { LocationProof, ProofZone } from "../types/index";
-import { getWasmMemoryPool } from "./wasmMemory.js";
+import { getWasmMemoryPool } from "./wasmMemory";
 
 let _noir: {
   execute(
@@ -96,8 +96,38 @@ export function decodeBase64Utf8(input: string, label?: string): string {
 
 async function getCircuitArtifact() {
   if (_circuitArtifact) return _circuitArtifact;
-  const circuitModule = await import("../../circuits/target/aegis.json");
-  const circuit = circuitModule.default || circuitModule;
+  const manifestResponse = await fetch("/zk-assets/aegis.manifest.json", { cache: "force-cache" });
+  if (!manifestResponse.ok) throw new Error("Sharded ZK assets are missing; run npm run zk:shard");
+  const manifest = await manifestResponse.json();
+  if (manifest.version !== 1 || !Array.isArray(manifest.chunks)) throw new Error("Invalid aegis shard manifest");
+  const decoder = new TextDecoder();
+  let jsonText = "";
+  let totalBytes = 0;
+  for (const chunk of manifest.chunks) {
+    if (!/^aegis\.chunk\d{4}$/.test(chunk.file)) throw new Error("Invalid aegis shard name");
+    const response = await fetch(`/zk-assets/${chunk.file}`, { cache: "force-cache" });
+    if (!response.ok || !response.body) throw new Error(`Unable to load circuit shard ${chunk.file}`);
+    const reader = response.body.getReader();
+    const parts: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      parts.push(value);
+      size += value.byteLength;
+    }
+    if (size !== chunk.bytes) throw new Error(`Incorrect size for circuit shard ${chunk.file}`);
+    totalBytes += size;
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+    const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    if (hash !== chunk.sha256) throw new Error(`Integrity check failed for circuit shard ${chunk.file}`);
+    jsonText += decoder.decode(bytes, { stream: true });
+  }
+  if (totalBytes !== manifest.bytes) throw new Error("Incorrect total size for circuit artifact");
+  jsonText += decoder.decode();
+  const circuit = JSON.parse(jsonText);
   _circuitArtifact = {
     ...circuit,
     bytecode: normalizeBase64(circuit.bytecode, "ZK circuit bytecode"),

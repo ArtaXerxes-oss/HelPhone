@@ -21,6 +21,19 @@
 // travels on its own unidirectional stream, so a lost packet delays only the
 // alert it belongs to (no cross-alert head-of-line blocking).
 
+import {
+  createRaceTracker,
+  decideRace,
+  isRaceFlagOn,
+  readConnection,
+  readMeteredSignal,
+  readSyncBatteryLevel,
+} from "../lib/raceGate.ts";
+import {
+  buildTransportAttributes,
+  emitTransportTelemetry,
+} from "../lib/transportTelemetry.ts";
+
 export const TRANSPORTS = Object.freeze(["webtransport", "websocket", "sse"]);
 
 export const DEFAULTS = Object.freeze({
@@ -287,7 +300,18 @@ export function createNetworkTransport(options) {
   const network =
     options.network ??
     (typeof globals.addEventListener === "function" ? globals : null);
-  const connection = globals.navigator?.connection ?? null;
+  const connection = readConnection(globals.navigator);
+  const raceTracker = createRaceTracker(now);
+  const defaultRaceFlagOn =
+    typeof options.raceFlagOn === "boolean"
+      ? options.raceFlagOn
+      : isRaceFlagOn(
+          options.env?.VITE_MULTIPATH_RACE ??
+            (typeof import.meta !== "undefined"
+              ? import.meta.env?.VITE_MULTIPATH_RACE
+              : undefined) ??
+            globalThis.process?.env?.VITE_MULTIPATH_RACE,
+        );
 
   let state = "idle";
   let conn = null;
@@ -295,11 +319,15 @@ export function createNetworkTransport(options) {
   let attempt = 0;
   let offline = false;
   let lowPower = false;
+  let batteryLevel =
+    typeof options.batteryLevel === "number" ? options.batteryLevel : null;
   let retryTimer = null;
   let heartbeatTimer = null;
   let pongTimer = null;
   let graceTimer = null;
   let lastInboundAt = 0;
+  let lastPingSentAt = 0;
+  let lastRttMs = 0;
   let disconnectedAt = null;
   let lastId = null;
   let lastConnectionType =
@@ -316,6 +344,15 @@ export function createNetworkTransport(options) {
     heartbeatsSent: 0,
     networkChanges: 0,
     migrationsSurvived: 0,
+    racesFired: 0,
+    raceVetoes: {
+      "flag-off": 0,
+      "not-p0": 0,
+      "path-healthy": 0,
+      "metered-bearer": 0,
+      "low-battery": 0,
+      "hourly-cap": 0,
+    },
     failures: { webtransport: 0, websocket: 0, sse: 0 },
   };
 
@@ -351,14 +388,20 @@ export function createNetworkTransport(options) {
     } catch {
       return; // malformed frame: ignore rather than tear down the link
     }
-    if (msg?.type === "pong") return;
-    if (msg?.id != null) {
-      if (seen.has(msg.id)) {
+    if (msg?.type === "pong") {
+      if (lastPingSentAt > 0) {
+        lastRttMs = Math.max(0, lastInboundAt - lastPingSentAt);
+      }
+      return;
+    }
+    const dedupeKey = msg?.id ?? msg?.idempotencyKey;
+    if (dedupeKey != null) {
+      if (seen.has(dedupeKey)) {
         metrics.duplicatesDropped++;
         return;
       }
-      remember(msg.id);
-      lastId = msg.id;
+      remember(dedupeKey);
+      lastId = dedupeKey;
     }
     metrics.messages++;
     options.onMessage?.(msg);
@@ -375,6 +418,7 @@ export function createNetworkTransport(options) {
     if (!conn?.send) return;
     metrics.heartbeatsSent++;
     const sentAt = now();
+    lastPingSentAt = sentAt;
     Promise.resolve()
       .then(() => conn?.send(JSON.stringify({ type: "ping", t: sentAt })))
       .catch(() => {});
@@ -550,6 +594,9 @@ export function createNetworkTransport(options) {
       .call(globals.navigator)
       .then((battery) => {
         const update = () => {
+          if (typeof battery?.level === "number") {
+            batteryLevel = battery.level;
+          }
           const next = !battery.charging && battery.level <= 0.2;
           if (next !== lowPower) {
             lowPower = next;
@@ -561,6 +608,76 @@ export function createNetworkTransport(options) {
         battery.addEventListener?.("chargingchange", update);
       })
       .catch(() => {});
+  }
+
+  function normalizePayloadClass(raw) {
+    if (raw === "P0" || raw === "P1" || raw === "bulk") return raw;
+    return "P1";
+  }
+
+  function evaluateAndSend(msg, sendOpts = {}) {
+    const payload = normalizePayloadClass(
+      sendOpts.payload ?? msg?.payloadClass ?? msg?.priority ?? "P1",
+    );
+    const stalled =
+      typeof sendOpts.stalled === "boolean"
+        ? sendOpts.stalled
+        : pongTimer !== null ||
+          (lastPingSentAt > 0 && lastInboundAt < lastPingSentAt) ||
+          Boolean(options.stalled);
+    const metered =
+      typeof sendOpts.metered === "boolean"
+        ? sendOpts.metered
+        : readMeteredSignal(globals.navigator);
+    const currentBattery =
+      sendOpts.batteryLevel !== undefined
+        ? sendOpts.batteryLevel
+        : readSyncBatteryLevel(globals.navigator, batteryLevel);
+    const flagOn =
+      typeof sendOpts.raceFlagOn === "boolean"
+        ? sendOpts.raceFlagOn
+        : defaultRaceFlagOn;
+    const operatorOverride = Boolean(
+      sendOpts.operatorOverride ?? options.operatorOverride,
+    );
+    const rttMs =
+      typeof sendOpts.rttMs === "number" ? sendOpts.rttMs : lastRttMs;
+
+    const decision = decideRace(flagOn, {
+      payload,
+      path: { rttMs, stalled, metered },
+      batteryLevel: currentBattery,
+      racesLastHour: raceTracker.count(now()),
+      operatorOverride,
+    });
+
+    if (!conn?.send) {
+      if (!decision.race && decision.reason) {
+        metrics.raceVetoes[decision.reason] =
+          (metrics.raceVetoes[decision.reason] || 0) + 1;
+      }
+      return { sent: false, raced: false, decision };
+    }
+
+    const serialized = JSON.stringify(msg);
+    Promise.resolve()
+      .then(() => conn?.send(serialized))
+      .catch(() => {});
+
+    if (decision.race) {
+      raceTracker.record(now());
+      metrics.racesFired++;
+      const secondarySender =
+        sendOpts.secondarySend ?? options.secondarySend ?? conn.send;
+      Promise.resolve()
+        .then(() => secondarySender(serialized))
+        .catch(() => {});
+    } else if (decision.reason) {
+      metrics.raceVetoes[decision.reason] =
+        (metrics.raceVetoes[decision.reason] || 0) + 1;
+    }
+
+    return { sent: true, raced: decision.race, decision };
   }
 
   return {
@@ -588,12 +705,16 @@ export function createNetworkTransport(options) {
       options.onStatus?.({ state, transport: null });
     },
     /** Sends a JSON message; returns false on receive-only or closed transports. */
-    send(msg) {
-      if (!conn?.send) return false;
-      Promise.resolve()
-        .then(() => conn?.send(JSON.stringify(msg)))
-        .catch(() => {});
-      return true;
+    send(msg, sendOpts) {
+      return evaluateAndSend(msg, sendOpts).sent;
+    },
+    /** Sends a dispatch message with P0 multipath race gate evaluation (#959). */
+    sendDispatch(msg, sendOpts) {
+      return evaluateAndSend(msg, sendOpts);
+    },
+    /** Injects an inbound frame directly (used for secondary multipath receipt). */
+    receiveFrame(text) {
+      onFrame(typeof text === "string" ? text : JSON.stringify(text));
     },
     get state() {
       return state;
@@ -608,8 +729,18 @@ export function createNetworkTransport(options) {
       return {
         ...metrics,
         reconnectGapsMs: [...metrics.reconnectGapsMs],
+        raceVetoes: { ...metrics.raceVetoes },
         failures: { ...metrics.failures },
       };
+    },
+    /**
+     * Emit a transport field-telemetry span into `pipeline` (issue #913).
+     *
+     * Call this on `visibilitychange` → hidden, or after each fallback/migration
+     * event.  Returns true when the span was accepted by the ring.
+     */
+    emitTelemetry(pipeline) {
+      return emitTransportTelemetry(pipeline, this.getMetrics());
     },
   };
 }

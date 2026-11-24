@@ -1,0 +1,96 @@
+{
+  "graphql": {
+    "enums": {
+      "IncidentStatus": ["open", "assigned", "acknowledged", "resolved"],
+      "Priority": ["low", "normal", "high", "critical"],
+      "ResponderStatus": ["assigned", "en_route", "on_scene", "offline"]
+    },
+    "types": {
+      "Location": {
+        "kind": "type",
+        "fields": {
+          "lat": { "type": "Float", "required": true },
+          "lng": { "type": "Float", "required": true }
+        }
+      },
+      "AssignResponderInput": {
+        "kind": "input",
+        "fields": {
+          "incidentId": { "type": "ID", "required": true },
+          "responderId": { "type": "ID", "required": true },
+          "expectedVersion": { "type": "Int", "required": false }
+        }
+      },
+      "SyncFlushInput": {
+        "kind": "input",
+        "fields": {
+          "incidentId": { "type": "ID", "required": true },
+          "baseVersion": { "type": "Int", "required": true },
+          "patch": { "type": "JSON", "required": true }
+        }
+      }
+    }
+  },
+  "openapi": {
+    "paths": {
+      "/api/dispatch": ["get", "post"],
+      "/api/dispatch/{id}": ["get"],
+      "/api/dispatch/{id}/assign": ["post"],
+      "/api/dispatch/{id}/ack": ["post"],
+      "/api/events": ["get"],
+      "/api/events/ice-config": ["get"],
+      "/api/sync": ["post"],
+      "/api/sync/flush": ["post"],
+      "/api/telemetry/spans": ["post"],
+      "/graphql": ["post"],
+      "/api/federation/trust-bundle": ["get"],
+      "/api/federation/trust-bundle/gossip": ["post"],
+      "/api/federation/dispatch": ["post"],
+      "/api/federation/ack": ["post"],
+      "/api/federation/sync": ["post"],
+      "/api/federation/settlement": ["post"],
+      "/api/federation/status": ["get"],
+      "/api/history/timeline/{requestId}": ["get"]
+    }
+  },
+  "zod": {
+    "enums": {
+      "prioritySchema": ["low", "normal", "high", "critical"],
+      "statusSchema": ["open", "assigned", "acknowledged", "resolved"]
+    },
+    "objects": {
+      "locationSchema": {
+        "fields": {
+          "lat": { "required": true },
+          "lng": { "required": true }
+        }
+      },
+      "createIncidentSchema": {
+        "fields": {
+          "id": { "required": false },
+          "status": { "required": false },
+          "priority": { "required": false },
+          "location": { "required": true }
+        }
+      },
+      "assignSchema": {
+        "fields": {
+          "responderId": { "required": true },
+          "expectedVersion": { "required": false }
+        }
+      },
+      "ackSchema": {
+        "fields": {
+          "expectedVersion": { "required": false }
+        }
+      },
+      "flushSchema": {
+        "fields": {
+          "incidentId": { "required": true },
+          "baseVersion": { "required": true },
+          "patch": { "required": true }
+        }
+      }
+    }
+  }
+}

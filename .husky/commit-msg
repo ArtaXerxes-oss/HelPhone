@@ -1,1 +1,28 @@
+#!/bin/sh
+. "$(dirname "$0")/_/husky.sh"
+
+# ── Commit message verification ───────────────────────────────────────────────
+# Verifies that the commit message is signed by a recognised maintainer key.
+# See config/maintainer-keys.json and scripts/security/verify_commit_signatures.js.
+#
+# ONBOARDING: If this fails on your first commit, you need to set up commit
+# signing.  Quick setup (GPG):
+#   gpg --gen-key
+#   git config --global user.signingkey <your-key-id>
+#   git config --global commit.gpgsign true
+#
+# Or use SSH signing (simpler on modern Git ≥ 2.34):
+#   git config --global gpg.format ssh
+#   git config --global user.signingkey ~/.ssh/id_ed25519.pub
+#   git config --global commit.gpgsign true
+#
+# Then ask a maintainer to add your key to config/maintainer-keys.json.
+
 node scripts/security/verify_commit_signatures.js "$1"
+EXIT=$?
+if [ $EXIT -ne 0 ]; then
+  echo ""
+  echo "✗ Commit signature verification failed."
+  echo "  See onboarding instructions above or docs/onboarding-ladder.md#stage-0-toolchain"
+  exit $EXIT
+fi

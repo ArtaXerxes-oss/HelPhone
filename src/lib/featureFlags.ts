@@ -5,6 +5,7 @@ import type {
   UserContext,
   FlagEvaluationResult,
 } from '../types/index.js'
+import { createAuditTape } from './ringBuffer'
 
 // Deterministic hashing for percentage rollouts (0 - 99)
 export function hashString(str: string): number {
@@ -164,4 +165,297 @@ export function useFeatureFlag(flagKey: string, userContextOverride?: UserContex
 
   const effectiveContext = userContextOverride || context.userContext
   return context.evaluator.evaluateFlag(flagKey, effectiveContext).enabled
+}
+
+// ── Kill-switch runtime (#797) ──────────────────────────────────────────────
+// Versioned, TTL'd, offline-capable flag state shared by the main thread and
+// every worker. Kill-switches are evaluated against a staleness budget: a
+// critical kill whose last-known-good state is older than `maxStaleMs` fails
+// closed (feature disabled) instead of trusting a stale "on".
+
+export type FlagStaleness = 'fresh' | 'stale' | 'expired'
+
+export interface KillSwitchPolicy {
+  /** Age past which the cached state is "stale" (still honoured, labelled). */
+  ttlMs: number
+  /** Age past which the cached state is "expired" and `failClosed` applies. */
+  maxStaleMs: number
+  /** Expired → disabled (true) or expired → last-known-good (false). */
+  failClosed: boolean
+}
+
+/**
+ * Per-switch criticality. Soroban submit fails *open* when expired: blocking a
+ * rescue because a device was offline is worse than a late kill, and the
+ * server enforces the kill independently. Debug logs fail closed immediately.
+ */
+export const KILL_SWITCH_POLICIES: Record<string, KillSwitchPolicy> = {
+  'telemetry.upload': { ttlMs: 60_000, maxStaleMs: 24 * 3_600_000, failClosed: true },
+  'soroban.submit': { ttlMs: 60_000, maxStaleMs: 5 * 60_000, failClosed: false },
+  'yjs.sync': { ttlMs: 60_000, maxStaleMs: 3_600_000, failClosed: false },
+  'mapbox.highres': { ttlMs: 60_000, maxStaleMs: 3_600_000, failClosed: true },
+  'debug.verboseLogs': { ttlMs: 0, maxStaleMs: 0, failClosed: true },
+}
+
+export interface FlagSnapshot {
+  version: string
+  fetchedAt: number
+  /** Kill-switch key → enabled. Unknown keys are ignored by old clients. */
+  kills: Record<string, boolean>
+}
+
+const FLAG_STORAGE_KEY = 'helphone.flags'
+const FLAG_CHANNEL = 'helphone-flags'
+const UNVERSIONED = '0'
+
+let snapshot: FlagSnapshot = loadSnapshot()
+const listeners = new Set<(s: FlagSnapshot) => void>()
+let channel: BroadcastChannel | null = null
+/** Flag-change audit tape: every version transition this device saw. */
+export const flagAuditTape = createAuditTape(64)
+
+function loadSnapshot(): FlagSnapshot {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(FLAG_STORAGE_KEY) : null
+    const parsed = raw ? JSON.parse(raw) : null
+    if (parsed && typeof parsed.version === 'string' && typeof parsed.fetchedAt === 'number') {
+      return { version: parsed.version, fetchedAt: parsed.fetchedAt, kills: parsed.kills ?? {} }
+    }
+  } catch {}
+  return { version: UNVERSIONED, fetchedAt: 0, kills: {} }
+}
+
+/** Compares numeric-ish versions ("12" > "9"); falls back to string order. */
+export function compareFlagVersions(a: string, b: string): number {
+  const na = Number(a)
+  const nb = Number(b)
+  if (Number.isFinite(na) && Number.isFinite(nb)) return na - nb
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+export function currentFlagSnapshot(): FlagSnapshot {
+  return snapshot
+}
+
+export function currentFlagVersion(): string {
+  return snapshot.version
+}
+
+export function flagStaleness(key: string, now = Date.now(), s: FlagSnapshot = snapshot): FlagStaleness {
+  const policy = KILL_SWITCH_POLICIES[key]
+  const age = s.fetchedAt ? now - s.fetchedAt : Infinity
+  if (!policy) return age === Infinity ? 'expired' : 'fresh'
+  if (age <= policy.ttlMs) return 'fresh'
+  if (age <= policy.maxStaleMs) return 'stale'
+  return 'expired'
+}
+
+/**
+ * Offline-safe kill-switch evaluation. Never fetches; answers from the
+ * last-known-good snapshot with an explicit staleness label so the UI can
+ * show a degraded-mode banner.
+ */
+export function evaluateKillSwitch(key: string, now = Date.now(), s: FlagSnapshot = snapshot) {
+  const staleness = flagStaleness(key, now, s)
+  const policy = KILL_SWITCH_POLICIES[key]
+  // Unknown switches: experiments default open, never block on them.
+  const known = key in s.kills
+  let enabled = known ? s.kills[key] : true
+  if (staleness === 'expired' && policy?.failClosed) enabled = false
+  return { key, enabled, staleness, version: s.version, degraded: staleness !== 'fresh' }
+}
+
+/**
+ * Applies a snapshot (poll result or WS `flags.patch`) iff it is newer, then
+ * persists it and fans it out to other tabs and workers. Returns true when
+ * the state changed.
+ */
+export function applyFlagSnapshot(next: FlagSnapshot, { broadcast = true } = {}): boolean {
+  if (!next || typeof next.version !== 'string') return false
+  const newer = compareFlagVersions(next.version, snapshot.version) > 0
+  const sameButRefreshed = next.version === snapshot.version && next.fetchedAt > snapshot.fetchedAt
+  if (!newer && !sameButRefreshed) return false
+  if (newer) flagAuditTape.push({ at: Date.now(), kind: 'flags.version', from: snapshot.version, to: next.version })
+  snapshot = { version: next.version, fetchedAt: next.fetchedAt || Date.now(), kills: { ...next.kills } }
+  try {
+    localStorage.setItem(FLAG_STORAGE_KEY, JSON.stringify(snapshot))
+  } catch {}
+  if (broadcast) channel?.postMessage({ type: 'flags.patch', snapshot })
+  for (const fn of listeners) fn(snapshot)
+  return true
+}
+
+export function onFlagSnapshot(fn: (s: FlagSnapshot) => void): () => void {
+  listeners.add(fn)
+  return () => listeners.delete(fn)
+}
+
+/** Headers every envelope (dispatch, telemetry, replay) carries for server enforcement. */
+export function flagHeaders(): Record<string, string> {
+  return { 'x-helphone-flag-version': snapshot.version }
+}
+
+/**
+ * Starts kill-switch propagation: BroadcastChannel (tabs + workers), WS push
+ * when a socket is supplied, and a poll fallback that also runs in background
+ * tabs with exponential backoff on failure. Returns a stop function.
+ */
+export function startFlagSync({
+  url = '/api/flags',
+  pollMs = 15_000,
+  maxBackoffMs = 5 * 60_000,
+  socket,
+}: { url?: string; pollMs?: number; maxBackoffMs?: number; socket?: WebSocket } = {}): () => void {
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let delay = pollMs
+
+  if (typeof BroadcastChannel !== 'undefined' && !channel) {
+    channel = new BroadcastChannel(FLAG_CHANNEL)
+    channel.onmessage = (e) => {
+      if (e.data?.type === 'flags.patch') applyFlagSnapshot(e.data.snapshot, { broadcast: false })
+    }
+  }
+
+  const onSocket = (e: MessageEvent) => {
+    try {
+      const msg = typeof e.data === 'string' ? JSON.parse(e.data) : e.data
+      if (msg?.type === 'flags.patch') applyFlagSnapshot({ ...msg.snapshot, fetchedAt: Date.now() })
+    } catch {}
+  }
+  socket?.addEventListener('message', onSocket)
+
+  const poll = async () => {
+    if (stopped) return
+    try {
+      const res = await fetch(url, { headers: flagHeaders(), cache: 'no-store' })
+      if (!res.ok) throw new Error(String(res.status))
+      const body = await res.json()
+      applyFlagSnapshot({ version: String(body.version), kills: body.kills ?? {}, fetchedAt: Date.now() })
+      delay = pollMs
+    } catch {
+      delay = Math.min(delay * 2, maxBackoffMs)
+    }
+    if (!stopped) timer = setTimeout(poll, delay)
+  }
+  const onOnline = () => {
+    clearTimeout(timer)
+    delay = pollMs
+    void poll()
+  }
+  if (typeof window !== 'undefined') {
+    window.addEventListener('online', onOnline)
+    document.addEventListener('visibilitychange', onOnline)
+  }
+  void poll()
+
+  return () => {
+    stopped = true
+    clearTimeout(timer)
+    socket?.removeEventListener('message', onSocket)
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onOnline)
+    }
+  }
+}
+
+// ── Unified Remote + Field Flag Provenance (#943) ───────────────────────────
+// Precedence order (highest to lowest):
+//   1. env_override  (VITE_FLAG_*)
+//   2. remote_config (public/config.json via defaultEvaluator)
+//   3. field_local   (localStorage hp_feature_flags single-flag override)
+//   4. default       (field flag defaultOn, or false)
+
+export const FLAG_PRECEDENCE = Object.freeze([
+  'env_override',
+  'remote_config',
+  'field_local',
+  'default',
+] as const)
+
+export type FlagResolutionSource = (typeof FLAG_PRECEDENCE)[number]
+
+export interface FieldLayerInput {
+  override?: boolean | null
+  defaultOn?: boolean
+  version?: number | null
+}
+
+export interface UnifiedFlagResolution {
+  flagName: string
+  enabled: boolean
+  source: FlagResolutionSource
+  precedence: readonly FlagResolutionSource[]
+  provenance: {
+    remote: {
+      present: boolean
+      enabled: boolean
+      reason: string
+      version: string
+    }
+    field: {
+      present: boolean
+      enabled: boolean | null
+      defaultOn: boolean | null
+      version: number | null
+    }
+  }
+}
+
+/**
+ * Single unified resolver combining remote config.json (defaultEvaluator)
+ * and field localStorage flags with explicit, deterministic precedence.
+ */
+export function resolveUnifiedFlag(
+  flagName: string,
+  fieldLayer: FieldLayerInput = {},
+  userContext?: UserContext,
+  evaluator: FeatureFlagEvaluator = defaultEvaluator,
+): UnifiedFlagResolution {
+  const remoteEval = evaluator.evaluateFlag(flagName, userContext)
+  const remoteVersion = evaluator.getConfig()?.version ?? currentFlagVersion()
+  const remotePresent = remoteEval.reason !== 'default'
+
+  const fieldOverride = typeof fieldLayer.override === 'boolean' ? fieldLayer.override : null
+  const fieldDefault = typeof fieldLayer.defaultOn === 'boolean' ? fieldLayer.defaultOn : null
+  const fieldVersion = typeof fieldLayer.version === 'number' ? fieldLayer.version : null
+
+  let enabled = false
+  let source: FlagResolutionSource = 'default'
+
+  if (remoteEval.reason === 'env_override') {
+    enabled = remoteEval.enabled
+    source = 'env_override'
+  } else if (remotePresent) {
+    enabled = remoteEval.enabled
+    source = 'remote_config'
+  } else if (fieldOverride !== null) {
+    enabled = fieldOverride
+    source = 'field_local'
+  } else if (fieldDefault !== null) {
+    enabled = fieldDefault
+    source = 'default'
+  }
+
+  return {
+    flagName,
+    enabled,
+    source,
+    precedence: FLAG_PRECEDENCE,
+    provenance: {
+      remote: {
+        present: remotePresent,
+        enabled: remoteEval.enabled,
+        reason: remoteEval.reason,
+        version: remoteVersion,
+      },
+      field: {
+        present: fieldOverride !== null,
+        enabled: fieldOverride,
+        defaultOn: fieldDefault,
+        version: fieldVersion,
+      },
+    },
+  }
 }

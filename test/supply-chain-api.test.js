@@ -9,6 +9,7 @@ import {
   computeSupplyChainReport,
   createSupplyChainRouters,
   grade,
+  supplyChainAlerts,
   vulnerabilityScore,
 } from "../server/routes/supplyChainSecurity.ts";
 import {
@@ -113,6 +114,10 @@ describe("supply chain report", () => {
     });
     expect(r.index.partial).toBe(true);
     expect(r.index.components.vulnerabilities).toBeNull();
+    expect(supplyChainAlerts(r)).toContainEqual(expect.objectContaining({
+      rule: "supply_chain_index_partial",
+      severity: "page",
+    }));
   });
 
   it("treats a malformed audit report as unavailable rather than throwing", () => {

@@ -10,6 +10,8 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": false,
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
@@ -20,6 +22,25 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "server", "scripts", "test"],
-  "references": []
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "server"],
+  "references": [],
+
+  /* Type-surface extraction options for scripts/detect-api-drift.js.
+     Kept out of compilerOptions so `tsc --noEmit` ignores it. */
+  "apiDrift": {
+    "compilerOptions": {
+      "target": "ES2022",
+      "module": "CommonJS",
+      "moduleResolution": "node",
+      "strict": false,
+      "skipLibCheck": true,
+      "noEmit": true,
+      "esModuleInterop": true,
+      "allowJs": false,
+      "checkJs": false,
+      "resolveJsonModule": false,
+      "types": []
+    }
+  }
 }

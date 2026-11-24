@@ -1,10 +1,39 @@
 #!/usr/bin/env bash
-# Rebuilds src/wasm/telemetry_reader.wasm and its SHA-256 sidecar
-# (spike, ADR-014). Requires the wasm32-unknown-unknown Rust target.
+# Deterministic build for the telemetry frame reader.
+#
+# Usage:
+#   bash src/wasm/telemetry_reader/build.sh          # build + record SHA-256
+#   bash src/wasm/telemetry_reader/build.sh --check  # verify committed artifact
 set -euo pipefail
-CRATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT="$CRATE/../telemetry_reader.wasm"
-cargo build --manifest-path "$CRATE/Cargo.toml" --release --target wasm32-unknown-unknown
-cp "$CRATE/target/wasm32-unknown-unknown/release/telemetry_reader.wasm" "$OUT"
-sha256sum "$OUT" | awk '{print $1}' > "$OUT.sha256"
-echo "wrote $OUT ($(wc -c < "$OUT") bytes, sha256 $(cat "$OUT.sha256"))"
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$HERE/../../.." && pwd)"
+ARTIFACT="$ROOT/src/wasm/telemetry_reader.wasm"
+SIDECAR="$ROOT/src/wasm/telemetry_reader.wasm.sha256"
+TARGET="wasm32-unknown-unknown"
+
+if [[ "${1:-}" == "--check" ]]; then
+  if [[ ! -f "$ARTIFACT" || ! -f "$SIDECAR" ]]; then
+    echo "telemetry-wasm: FAIL (missing artifact or sidecar)" >&2
+    exit 1
+  fi
+  expected="$(tr -d ' \t\r\n' < "$SIDECAR")"
+  actual="$(sha256sum "$ARTIFACT" | awk '{print $1}')"
+  if [[ "$expected" != "$actual" ]]; then
+    echo "telemetry-wasm: FAIL (SHA-256 mismatch)" >&2
+    echo "  expected: $expected" >&2
+    echo "  actual:   $actual" >&2
+    exit 1
+  fi
+  echo "telemetry-wasm: SHA-256 OK ($actual)"
+  exit 0
+fi
+
+cd "$HERE"
+cargo build --target "$TARGET" --release
+mkdir -p "$(dirname "$ARTIFACT")"
+cp "target/$TARGET/release/telemetry_reader.wasm" "$ARTIFACT"
+sha256sum "$ARTIFACT" | awk '{print $1}' > "$SIDECAR"
+
+echo "telemetry-wasm: built $ARTIFACT"
+echo "telemetry-wasm: sha256 $(cat "$SIDECAR")"

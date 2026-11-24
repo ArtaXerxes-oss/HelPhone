@@ -50,7 +50,7 @@ vi.mock("@stellar/stellar-sdk", async (importOriginal) => {
   };
 });
 
-import { Keypair, Account, nativeToScVal } from "@stellar/stellar-sdk";
+import { Keypair, Account, Operation, nativeToScVal } from "@stellar/stellar-sdk";
 import {
   createRequest,
   resolveRequest,
@@ -61,6 +61,28 @@ const TX_HASH = "abc123hash";
 
 // Valid G... address (needed for address-typed contract arguments).
 const REQUESTER = FAKE_PK;
+
+// Stand-in for a sealed `EncryptedEnvelope`. `createRequest` only hex-encodes
+// the JSON, so the exact contents are irrelevant here — end-to-end behaviour
+// is covered by test/e2e-encryption.test.js.
+const SEALED_PAYLOAD = {
+  version: 1,
+  algorithm: "ECDH-P256-HKDF-SHA256+AES-256-GCM",
+  bindingContext: "sub-1",
+  ephemeralPublicKey: "04" + "11".repeat(64),
+  iv: "22".repeat(12),
+  ciphertext: "33".repeat(48),
+  authTag: "44".repeat(16),
+  wrappedKeys: [
+    {
+      keyId: "5566778899aabbcc",
+      wrappedKey: "66".repeat(32),
+      wrapIv: "77".repeat(12),
+      wrapAuthTag: "88".repeat(16),
+    },
+  ],
+  createdAt: 1_700_000_000_000,
+};
 
 function makeWallet() {
   return {
@@ -101,17 +123,31 @@ describe("contract.js — transaction submission and resolution", () => {
     });
 
     const wallet = makeWallet();
-    const result = await createRequest(
-      REQUESTER,
-      52.52,
-      13.405,
-      "fire",
-      "nick",
-      "contact",
-      wallet,
-    );
 
-    expect(result).toEqual({ requestId: 7, hash: TX_HASH });
+    // The built operation does not retain its args, so capture them at the
+    // call site rather than trying to introspect the assembled transaction.
+    const invokeSpy = vi.spyOn(Operation, "invokeContractFunction");
+    let result;
+    let invokeArg;
+    try {
+      result = await createRequest(
+        REQUESTER,
+        52.52,
+        13.405,
+        "fire",
+        SEALED_PAYLOAD,
+        wallet,
+      );
+      invokeArg = invokeSpy.mock.calls.at(-1)[0];
+    } finally {
+      invokeSpy.mockRestore();
+    }
+
+    expect(result).toEqual({
+      requestId: 7,
+      hash: TX_HASH,
+      priority: "Medium",
+    });
     expect(wallet.signTransaction).toHaveBeenCalledTimes(1);
 
     // Transaction building: one invoke_contract_function operation was simulated.
@@ -119,8 +155,59 @@ describe("contract.js — transaction submission and resolution", () => {
     expect(tx.operations).toHaveLength(1);
     expect(tx.operations[0].type).toBe("invokeHostFunction");
 
+    // The contract takes exactly five arguments: address, i32, i32, string,
+    // bytes. A sixth (the old phantom `priority`) made every submission revert.
+    expect(invokeArg.function).toBe("create_request");
+    expect(invokeArg.args).toHaveLength(5);
+    expect(invokeArg.args.map((a) => a.switch().name)).toEqual([
+      "scvAddress",
+      "scvI32",
+      "scvI32",
+      "scvString",
+      "scvBytes",
+    ]);
+
+    // The sensitive fields travel as sealed bytes, never as readable strings.
+    const decoded = Buffer.from(invokeArg.args[4].bytes()).toString("utf8");
+    expect(JSON.parse(decoded).algorithm).toBe(SEALED_PAYLOAD.algorithm);
+
     expect(server.sendTransaction).toHaveBeenCalledTimes(1);
     expect(server.getTransaction).toHaveBeenCalledWith(TX_HASH);
+  });
+
+  it("createRequest refuses to submit a plaintext payload", async () => {
+    const server = mockSuccessfulSubmit({
+      returnValue: nativeToScVal(7n, { type: "u64" }),
+    });
+
+    // The old signature took (nickname, contact). Passing those strings now
+    // lands them in the payload slot, where they must not be accepted.
+    await expect(
+      createRequest(REQUESTER, 52.52, 13.405, "fire", "Ana", "@ana", makeWallet()),
+    ).rejects.toThrow(/never sent in plaintext|Encrypted payload/i);
+
+    // ...and nothing was simulated or submitted.
+    expect(server.simulateTransaction).not.toHaveBeenCalled();
+    expect(server.sendTransaction).not.toHaveBeenCalled();
+  });
+
+  it("createRequest rejects a malformed envelope", async () => {
+    const server = mockSuccessfulSubmit({
+      returnValue: nativeToScVal(7n, { type: "u64" }),
+    });
+
+    await expect(
+      createRequest(
+        REQUESTER,
+        52.52,
+        13.405,
+        "fire",
+        { ...SEALED_PAYLOAD, version: 99 },
+        makeWallet(),
+      ),
+    ).rejects.toThrow(/malformed|unknown version/i);
+
+    expect(server.simulateTransaction).not.toHaveBeenCalled();
   });
 
   it("resolveRequest submits and confirms resolution of an emergency", async () => {
@@ -147,8 +234,7 @@ describe("contract.js — transaction submission and resolution", () => {
       52.52,
       13.405,
       "fire",
-      "nick",
-      "contact",
+      SEALED_PAYLOAD,
       makeWallet(),
     ).catch((e) => e);
 

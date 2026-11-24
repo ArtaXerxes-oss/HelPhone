@@ -1,0 +1,94 @@
+name: Disaster Recovery Fire Drills
+
+on:
+  schedule:
+    # Weekly Monday 04:00 UTC
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: 'Fire-drill scenario to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - lag-spike
+          - pool-exhaustion
+          - indexer-backfill
+          - backup-restore
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  fire-drill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Run scheduled fire drills
+        id: drill
+        continue-on-error: true
+        env:
+          CLONE_DATABASE_URL: ${{ secrets.DRILL_CLONE_DATABASE_URL }}
+        run: |
+          SCENARIO="${{ github.event.inputs.scenario || 'all' }}"
+          DRY_FLAG="--dry-run"
+          if [ -n "${CLONE_DATABASE_URL}" ]; then
+            DRY_FLAG="--run --i-understand-this-wipes"
+          fi
+          bash scripts/fire-drill.sh \
+            --scenario "${SCENARIO}" \
+            ${DRY_FLAG} \
+            --report artifacts/fire-drill-report.json \
+            --record-failure-task
+
+      - name: Record graduation evidence
+        if: always()
+        run: |
+          if [ -f artifacts/fire-drill-report.json ]; then
+            node scripts/record-drill-evidence.js \
+              --report artifacts/fire-drill-report.json \
+              --archive \
+              --record-failure-task || true
+          fi
+
+      - name: Upload fire-drill report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fire-drill-report
+          path: |
+            artifacts/fire-drill-report.json
+            docs/evidence/fire-drills/latest.json
+          if-no-files-found: warn
+
+      - name: Open tracked issue on failed drill
+        if: steps.drill.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let detail = 'Fire-drill failed without a report artifact.';
+            if (fs.existsSync('artifacts/fire-drill-report.json')) {
+              const report = JSON.parse(fs.readFileSync('artifacts/fire-drill-report.json', 'utf8'));
+              detail = `Failed drills: ${(report.failedDrills || []).join(', ') || report.scenario}\n\n\`\`\`json\n${JSON.stringify(report, null, 2)}\n\`\`\``;
+            }
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[fire-drill] Scheduled DR drill failure (${new Date().toISOString().slice(0, 10)})`,
+              body: `Automated fire-drill run failed in workflow ${context.runId}.\n\n${detail}`,
+              labels: ['disaster-recovery', 'fire-drill']
+            });
+
+      - name: Fail job if drill failed
+        if: steps.drill.outcome == 'failure'
+        run: exit 1

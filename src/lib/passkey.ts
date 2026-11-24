@@ -1,128 +1,162 @@
+import { startAuthentication, startRegistration } from '@simplewebauthn/browser'
+import crypto from 'crypto'
 import type { PasskeyCredential, WebAuthnVerificationResult } from '../types/index.js'
-import { verifyWebAuthnSignature } from './crypto.js'
+import { signEd25519Message, verifyEd25519Signature, isIdentityRevoked } from './crypto.ts'
+import type { TrustBundle } from './crypto.ts'
+
+type ServerResponse = { options: Record<string, unknown>; error?: string }
+
+async function request(path: string, body: unknown) {
+  const response = await fetch(`/api/auth/passkey/${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(body),
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.error || `Passkey request failed (${response.status})`)
+  return result
+}
 
 export class PasskeyManager {
-  private rpName: string
-  private rpId: string
-
-  constructor(rpName = 'HelPhone Emergency Network', rpId = 'helphone.com') {
-    this.rpName = rpName
-    this.rpId = rpId
-  }
-
   public isWebAuthnSupported(): boolean {
-    return (
-      typeof window !== 'undefined' &&
-      typeof window.PublicKeyCredential !== 'undefined' &&
-      typeof navigator.credentials !== 'undefined'
-    )
+    return typeof window !== 'undefined' && typeof window.PublicKeyCredential !== 'undefined' && typeof navigator.credentials !== 'undefined'
   }
 
-  public generateChallenge(): string {
-    const randomBytes = new Uint8Array(32)
-    if (typeof window !== 'undefined' && window.crypto) {
-      window.crypto.getRandomValues(randomBytes)
-    } else {
-      for (let i = 0; i < 32; i++) randomBytes[i] = Math.floor(Math.random() * 256)
-    }
-    return Buffer.from(randomBytes).toString('base64url')
+  public async registerPasskey(username: string, displayName: string): Promise<PasskeyCredential | null> {
+    if (!this.isWebAuthnSupported()) throw new Error('WebAuthn Passkeys are not supported in this browser')
+    const { options } = await request('register/options', { username, displayName }) as ServerResponse
+    const response = await startRegistration({ optionsJSON: options as never })
+    const result = await request('register/verify', { challenge: options.challenge, response })
+    if (result.sessionToken) sessionStorage.setItem('helphone-passkey-session', result.sessionToken)
+    return { id: response.id, rawId: response.rawId, type: 'public-key', response: response.response, challenge: String(options.challenge) } as unknown as PasskeyCredential
   }
 
-  public async registerPasskey(userName: string, userDisplayName: string): Promise<PasskeyCredential | null> {
-    if (!this.isWebAuthnSupported()) {
-      throw new Error('WebAuthn Passkeys are not supported in this browser environment')
-    }
-
-    const challenge = this.generateChallenge()
-    const userIdBytes = new TextEncoder().encode(userName)
-
-    const publicKeyOptions: PublicKeyCredentialCreationOptions = {
-      challenge: Buffer.from(challenge, 'base64url'),
-      rp: { name: this.rpName, id: window.location.hostname || this.rpId },
-      user: {
-        id: userIdBytes,
-        name: userName,
-        displayName: userDisplayName,
-      },
-      pubKeyCredParams: [
-        { alg: -7, type: 'public-key' }, // ES256 (P-256)
-        { alg: -257, type: 'public-key' }, // RS256
-      ],
-      authenticatorSelection: {
-        authenticatorAttachment: 'platform',
-        userVerification: 'preferred',
-      },
-      timeout: 60000,
-    }
-
-    const credential = (await navigator.credentials.create({
-      publicKey: publicKeyOptions,
-    })) as PublicKeyCredential
-
-    if (!credential) return null
-
-    const response = credential.response as AuthenticatorAttestationResponse
-
-    const authData = (response as any).getAuthenticatorData
-      ? (response as any).getAuthenticatorData()
-      : new Uint8Array()
-
-    return {
-      id: credential.id,
-      rawId: Buffer.from(credential.rawId).toString('hex'),
-      type: 'public-key',
-      response: {
-        clientDataJSON: Buffer.from(response.clientDataJSON).toString('utf-8'),
-        authenticatorData: Buffer.from(authData as any).toString('hex'),
-        signature: 'ATTESTATION_OK',
-      },
-    }
+  public async authenticatePasskey(_clientChallenge?: string, username?: string): Promise<PasskeyCredential | null> {
+    if (!this.isWebAuthnSupported()) throw new Error('WebAuthn Passkeys are not supported in this browser')
+    const { options } = await request('login/options', { username }) as ServerResponse
+    const response = await startAuthentication({ optionsJSON: options as never })
+    return { id: response.id, rawId: response.rawId, type: 'public-key', response: response.response, challenge: String(options.challenge) } as unknown as PasskeyCredential
   }
 
-  public async authenticatePasskey(challenge: string): Promise<PasskeyCredential | null> {
-    if (!this.isWebAuthnSupported()) {
-      throw new Error('WebAuthn Passkeys are not supported in this environment')
-    }
-
-    const publicKeyOptions: PublicKeyCredentialRequestOptions = {
-      challenge: Buffer.from(challenge, 'base64url'),
-      rpId: window.location.hostname || this.rpId,
-      userVerification: 'preferred',
-      timeout: 60000,
-    }
-
-    const assertion = (await navigator.credentials.get({
-      publicKey: publicKeyOptions,
-    })) as PublicKeyCredential
-
-    if (!assertion) return null
-
-    const response = assertion.response as AuthenticatorAssertionResponse
-
-    return {
-      id: assertion.id,
-      rawId: Buffer.from(assertion.rawId).toString('hex'),
-      type: 'public-key',
-      response: {
-        clientDataJSON: Buffer.from(response.clientDataJSON).toString('utf-8'),
-        authenticatorData: Buffer.from(response.authenticatorData).toString('hex'),
-        signature: Buffer.from(response.signature).toString('hex'),
-        userHandle: response.userHandle ? Buffer.from(response.userHandle).toString('hex') : undefined,
-      },
-    }
-  }
-
-  public async verifyAssertion(
-    credential: PasskeyCredential,
-    expectedChallenge: string
-  ): Promise<WebAuthnVerificationResult> {
-    return verifyWebAuthnSignature(
-      credential.response.clientDataJSON,
-      credential.response.authenticatorData,
-      credential.response.signature,
-      expectedChallenge
-    )
+  public async verifyAssertion(credential: PasskeyCredential): Promise<WebAuthnVerificationResult> {
+    const result = await request('login/verify', { challenge: credential.challenge, response: credential })
+    if (result.sessionToken) sessionStorage.setItem('helphone-passkey-session', result.sessionToken)
+    return { verified: result.verified === true, userHandle: result.userHandle }
   }
 }
 
 export const passkeyManager = new PasskeyManager()
+
+// ── Cross-Domain Identity Bridging (ISP-144) ──────────────────────────────
+
+export interface ScopedCredentialPresentation {
+  credentialId: string
+  originInstance: string
+  targetDomain: string
+  presentationNonce: string
+  issuedAt: number
+  expiresAt: number
+  nullifierHash: string
+  attestationSignature: string
+  signingPublicKey: string
+}
+
+export function presentCrossDomainCredential(params: {
+  credentialId: string
+  originInstance: string
+  targetDomain: string
+  nullifier: string
+  secretKey: string
+  publicKey: string
+  ttlMs?: number
+}): ScopedCredentialPresentation {
+  const now = Date.now()
+  const ttl = params.ttlMs ?? 600_000 // 10 minutes
+  const nonce = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2)
+
+  // Domain-separated nullifier hash: prevents double-spending / Sybil linkage across domains
+  const nullifierHash = crypto
+    .createHash('sha256')
+    .update(`${params.nullifier}:${params.targetDomain}`)
+    .digest('hex')
+
+  const presentationData = {
+    credentialId: params.credentialId,
+    originInstance: params.originInstance,
+    targetDomain: params.targetDomain,
+    presentationNonce: nonce,
+    issuedAt: now,
+    expiresAt: now + ttl,
+    nullifierHash,
+  }
+
+  // Ed25519 or HMAC signature of canonical payload
+  const message = JSON.stringify(presentationData)
+  const attestationSignature = signEd25519Message(message, params.secretKey)
+
+  return {
+    ...presentationData,
+    attestationSignature,
+    signingPublicKey: params.publicKey,
+  }
+}
+
+export function verifyCrossDomainPresentation(
+  presentation: ScopedCredentialPresentation,
+  expectedTargetDomain: string,
+  peerTrustBundle: TrustBundle,
+  now = Date.now()
+): { verified: boolean; error?: string } {
+  if (!presentation || typeof presentation !== 'object') {
+    return { verified: false, error: 'Malformed presentation' }
+  }
+
+  if (presentation.targetDomain !== expectedTargetDomain) {
+    return {
+      verified: false,
+      error: `Domain mismatch: presentation is scoped for ${presentation.targetDomain}, expected ${expectedTargetDomain}`,
+    }
+  }
+
+  if (presentation.originInstance !== peerTrustBundle.instanceId) {
+    return {
+      verified: false,
+      error: `Origin instance mismatch: presentation=${presentation.originInstance}, bundle=${peerTrustBundle.instanceId}`,
+    }
+  }
+
+  if (now > presentation.expiresAt) {
+    return { verified: false, error: 'Cross-domain credential presentation has expired' }
+  }
+
+  // Check revocation in peer trust bundle
+  if (isIdentityRevoked(presentation.credentialId, peerTrustBundle) ||
+      isIdentityRevoked(presentation.nullifierHash, peerTrustBundle)) {
+    return { verified: false, error: 'Identity has been revoked by peer instance' }
+  }
+
+  const presentationData = {
+    credentialId: presentation.credentialId,
+    originInstance: presentation.originInstance,
+    targetDomain: presentation.targetDomain,
+    presentationNonce: presentation.presentationNonce,
+    issuedAt: presentation.issuedAt,
+    expiresAt: presentation.expiresAt,
+    nullifierHash: presentation.nullifierHash,
+  }
+
+  const message = JSON.stringify(presentationData)
+  const isSigValid = verifyEd25519Signature(
+    message,
+    presentation.attestationSignature,
+    presentation.signingPublicKey
+  )
+
+  if (!isSigValid) {
+    return { verified: false, error: 'Invalid attestation signature on presentation' }
+  }
+
+  return { verified: true }
+}
+

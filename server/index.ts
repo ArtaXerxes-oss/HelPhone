@@ -3,12 +3,42 @@ import cors from 'cors'
 import { readFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { fileURLToPath } from 'url'
+import {
+  rpc,
+  TransactionBuilder,
+  Operation,
+  Account,
+  Keypair,
+  BASE_FEE,
+  Networks,
+  nativeToScVal,
+  SorobanDataBuilder,
+} from '@stellar/stellar-sdk'
 import { SorobanStateExporter, loadLatestSnapshot } from './indexer/exporter.js'
 import { authMiddleware } from './middleware/auth.js'
+import { requireUvTier } from './middleware/uvTier.js'
+import { createCspMiddleware, createHtmlHandler } from './middleware/csp.js'
+import {
+  createHttp2PushMiddleware,
+  optionsFromEnv as http2PushOptionsFromEnv,
+} from './middleware/http2Push.js'
+import { createPasskeyAuthRouter } from './routes/passkey-auth.js'
+import { createFederationRouter } from './routes/federation.js'
+import { createDispatchRouters } from './routes/dispatch.js'
+import { createDispatchPriorityMiddleware } from './middleware/dispatchPriority.js'
+import { syncRouter } from './routes/sync.js'
+import historyRouter from './routes/history.js'
+import { createDocsRouter } from './routes/docs.js'
+import { apiVersionMiddleware } from './middleware/apiVersion.ts'
 
+/* Cross-Origin-Opener-Policy: same-origin */
+/* Cross-Origin-Embedder-Policy: credentialless */
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const app = express()
 const PORT = process.env.PORT || 3001
+
+// Reuse TCP sockets across sequential requests (see middleware/keepAlive.ts)
+app.use(keepAliveMiddleware())
 
 app.use(
   cors({
@@ -20,7 +50,44 @@ app.use(
     optionsSuccessStatus: 204,
   })
 )
+app.use(createCspMiddleware())
 app.use(express.json({ limit: '1mb' }))
+
+// Behind a proxy (Render), req.ip is the proxy unless TRUST_PROXY is set to the
+// number of hops (e.g. "1"); whitelist matching and rate limiting both use it.
+if (process.env.TRUST_PROXY) {
+  const hops = Number(process.env.TRUST_PROXY)
+  app.set('trust proxy', Number.isNaN(hops) ? process.env.TRUST_PROXY : hops)
+}
+
+// Verified emergency-service subnets / API keys bypass rate limiting. The
+// whitelist must run before the limiter, which honours `req.bypassRateLimit`.
+export const whitelistStore = createWhitelistStore(createDefaultRedisClient())
+const whitelist = createWhitelistMiddleware(whitelistStore)
+app.use(whitelist)
+app.use(
+  '/admin/whitelist',
+  createWhitelistAdminRouter({
+    store: whitelistStore,
+    adminToken: process.env.WHITELIST_ADMIN_TOKEN,
+    onChange: () => whitelist.invalidate(),
+  })
+)
+if (process.env.NODE_ENV !== 'test') app.use(generalLimiter)
+app.use('/api/auth/passkey', createPasskeyAuthRouter())
+app.use(createDispatchPriorityMiddleware())
+const dispatchRouters = createDispatchRouters()
+const federationRouter = createFederationRouter()
+app.use('/api/v1/dispatch', apiVersionMiddleware('v1'), dispatchRouters.api)
+app.use('/api/v1/sync', apiVersionMiddleware('v1'), syncRouter)
+app.use('/api/v1/history', apiVersionMiddleware('v1'), historyRouter)
+app.use('/api/v1/federation', apiVersionMiddleware('v1'), federationRouter)
+app.use('/api/dispatch', apiVersionMiddleware('v0'), dispatchRouters.api)
+app.use('/metrics', dispatchRouters.metrics)
+app.use('/api/sync', apiVersionMiddleware('v0'), syncRouter)
+app.use('/api/history', apiVersionMiddleware('v0'), historyRouter)
+app.use('/api/federation', apiVersionMiddleware('v0'), federationRouter)
+app.use('/docs', createDocsRouter())
 
 const stateExporter = new SorobanStateExporter()
 
@@ -56,9 +123,22 @@ app.get('/api/state/snapshots/latest', (_req: Request, res: Response) => {
 })
 
 // Secure Authenticated Endpoint Example using Cryptographic Auth Middleware
-app.post('/api/protected/action', authMiddleware, (req: Request, res: Response) => {
+// #924 / ADR-026: a sensitive action needs a UV-verified passkey session.
+app.post('/api/protected/action', authMiddleware, requireUvTier, (req: Request, res: Response) => {
   res.json({ success: true, message: 'Authenticated payload verified successfully', user: (req as any).authenticatedUser })
 })
+
+// Built frontend (nonce-injected HTML). Only active when `vite build` output
+// exists, so an API-only deployment keeps behaving exactly as before.
+const DIST_DIR = join(__dirname, '..', 'dist')
+
+// HTTP/2 push / preload hints for the built entry chunks
+// (see middleware/http2Push.ts). Reads dist/.vite/manifest.json at startup and
+// re-reads it whenever a release changes the asset hashes, so the `Link`
+// header always matches the files that were actually deployed.
+app.use(createHttp2PushMiddleware({ ...http2PushOptionsFromEnv(process.env, { distDir: DIST_DIR }) }))
+app.use(express.static(DIST_DIR, { index: false }))
+app.get(/^\/(?!api\/|zk\/|health$|metrics).*/, createHtmlHandler({ htmlPath: join(DIST_DIR, 'index.html') }))
 
 // Automated Daily State Snapshot Cron (Interval fallback)
 const CRON_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -75,10 +155,15 @@ function scheduleStateBackup() {
 }
 
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
+  // Apply schema migrations automatically at boot so the database schema
+  // stays in sync on every deploy (non-fatal; server serves even on failure).
+  void runMigrationsAtStartup()
+
+  const server = app.listen(PORT, () => {
     console.log(`HelPhone Server running on http://localhost:${PORT}`)
+    // Off-peak VACUUM ANALYZE / REINDEX CONCURRENTLY (opt-in: DB_MAINTENANCE_ENABLED=true)
+    if (getMaintenanceConfig().enabled) startMaintenanceScheduler()
     scheduleStateBackup()
   })
+  applyKeepAliveTuning(server)
 }
-
-export { app, stateExporter }

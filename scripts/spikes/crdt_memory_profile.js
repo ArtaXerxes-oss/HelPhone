@@ -40,6 +40,7 @@ import {
   syncPair,
   wireSize,
 } from "../../src/services/crdtSync.js";
+import { decodeUpdate, encodeUpdate } from "../../src/lib/crdtWire.js";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -49,6 +50,8 @@ const MUTATIONS = Number(arg("mutations", 50000));
 const REPLICAS = Number(arg("replicas", 20));
 const OUT = arg("out", null);
 const HEAP_SNAPSHOTS = process.argv.includes("--heap-snapshots");
+// #894: run only the live-pruning mesh, over JSON and over the binary wire.
+const WIRE_ONLY = process.argv.includes("--wire-only");
 const RESPONDERS = 300;
 const INCIDENTS = 150;
 const GOSSIP_EVERY = 250;
@@ -254,7 +257,16 @@ async function runMesh(label, { create, mutate, sync, digest, prune, stats }, wo
   return result;
 }
 
-const crdtEngine = (pruneMode) => ({
+/** syncPair over the #894 binary wire encoding instead of JSON. */
+function syncPairBinary(a, b) {
+  const toB = encodeUpdate(a.encodeUpdate(b.stateVector()));
+  const toA = encodeUpdate(b.encodeUpdate(a.stateVector()));
+  b.applyUpdate(decodeUpdate(toB));
+  a.applyUpdate(decodeUpdate(toA));
+  return toB.byteLength + toA.byteLength;
+}
+
+const crdtEngine = (pruneMode, { binary = false } = {}) => ({
   create: (id) => new StateVectorDoc(id),
   mutate(doc, kind, key, value) {
     if (kind === "del") doc.delete(key);
@@ -263,7 +275,7 @@ const crdtEngine = (pruneMode) => ({
       if (cur) doc.set(key, { ...cur, ...value }); // CRDT has no patch: read-modify-write
     } else doc.set(key, value);
   },
-  sync: syncPair,
+  sync: binary ? syncPairBinary : syncPair,
   digest: (doc) => stateDigest(doc.toMap()),
   stats: (doc) => doc.stats(),
   prune:
@@ -528,6 +540,16 @@ async function main() {
   }
 
   results.mesh = [];
+  if (WIRE_ONLY) {
+    results.mesh.push(await runMesh("crdt-prune-live", crdtEngine("live"), workload));
+    results.mesh.push(await runMesh("crdt-prune-live-binary", crdtEngine("live", { binary: true }), workload));
+    if (OUT) {
+      mkdirSync(dirname(OUT), { recursive: true });
+      writeFileSync(OUT, JSON.stringify(results, null, 2) + "\n");
+      log(`wrote ${OUT}`);
+    }
+    return;
+  }
   results.mesh.push(await runMesh("crdt-nogc", crdtEngine("none"), workload));
   results.mesh.push(await runMesh("crdt-prune-all", crdtEngine("all"), workload));
   results.mesh.push(await runMesh("crdt-prune-live", crdtEngine("live"), workload));

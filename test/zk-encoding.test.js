@@ -67,7 +67,7 @@ import {
   buildLocationProofZone,
   shortProofId,
   generateLocationProof,
-} from "../src/lib/zk.js";
+} from "../src/lib/zk";
 
 const RECIPIENT = "GB6Q7N7EHW5H6HZKAIIO4R2VTB7JEBX5XN4FOXXT6YTDA36Z7ALA656J";
 

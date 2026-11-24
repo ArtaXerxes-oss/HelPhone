@@ -3,15 +3,23 @@ import { Link } from "react-router-dom";
 import { StellarWalletsKit } from "@creit-tech/stellar-wallets-kit/sdk";
 import { KitEventType } from "@creit-tech/stellar-wallets-kit/types";
 import useDocumentTitle from "../lib/useDocumentTitle";
+import { TreasuryPanel, OracleQuoteForm } from "../components/TreasuryPanel";
 import {
   getAegisCampaignBalance,
   getAegisPayoutAmount,
   getAegisIsClaimed,
   claimAid,
   fundZone,
+  getZonePrivacyPolicy,
+  getTreasurySnapshot,
+  getOracleQuote,
   sanitizeWalletAddress,
   buildLocationProofZone,
+  getSustainabilityStats,
+  getZonePrivacyPolicy,
+  validateAegisZone,
 } from "../lib/contract";
+import { buildCampaignZone } from "../lib/privacy";
 import {
   generateLocationProof,
   buildHumanityPublicInputsBytes,
@@ -22,6 +30,89 @@ function sanitizeAddress(raw) {
   const addr = raw.trim();
   if (!/^G[A-Z2-7]{55}$/.test(addr)) return "";
   return addr;
+}
+
+const STROOPS = 10_000_000;
+
+function formatTokens(stroops) {
+  return stroops != null ? (stroops / STROOPS).toFixed(2) : "—";
+}
+
+/** #587 — open source dependency funding from the DAO sustainability reserve. */
+export function SustainabilityPanel({ stats }) {
+  const label = {
+    fontSize: "9px",
+    letterSpacing: "1px",
+    color: "rgba(242,236,220,0.72)",
+    marginBottom: "4px",
+  };
+  const tile = {
+    padding: "12px",
+    borderRadius: "10px",
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.06)",
+  };
+  const tiles = stats
+    ? [
+        ["RESERVE BALANCE", formatTokens(stats.reserve), "#3F8487"],
+        ["TOTAL COLLECTED", formatTokens(stats.totalCollected), "#F4ECDC"],
+        ["GRANTED TO MAINTAINERS", formatTokens(stats.totalDisbursed), "#FF7A6B"],
+        ["MAINTAINERS FUNDED", String(stats.maintainersFunded), "#7357FF"],
+        [
+          "GRANTS PAID / VOTED",
+          `${stats.grantsDisbursed} / ${stats.grantsProposed}`,
+          "#F4ECDC",
+        ],
+        ["PROTOCOL FEE SHARE", `${(stats.feeBps / 100).toFixed(2)}%`, "#a2a586"],
+      ]
+    : [];
+
+  return (
+    <section aria-labelledby="sustainability-heading">
+      <div
+        id="sustainability-heading"
+        style={{
+          fontSize: "10px",
+          letterSpacing: "1.5px",
+          color: "#7fb8ba",
+          fontWeight: 900,
+          marginBottom: "12px",
+        }}
+      >
+        OPEN SOURCE SUSTAINABILITY
+      </div>
+      {stats ? (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+            gap: "10px",
+          }}
+        >
+          {tiles.map(([name, value, color]) => (
+            <div key={name} style={tile}>
+              <div style={label}>{name}</div>
+              <div style={{ fontSize: "15px", color, fontWeight: 700 }}>
+                {value}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p
+          style={{
+            color: "rgba(242,236,220,0.4)",
+            fontSize: "12px",
+            lineHeight: 1.6,
+            margin: 0,
+          }}
+        >
+          Sustainability reserve not deployed. Set
+          VITE_HELPHONE_DAO_CONTRACT_ID to show dependency funding stats.
+        </p>
+      )}
+    </section>
+  );
 }
 
 function CampaignCard({
@@ -265,6 +356,30 @@ export default function VaultDashboard() {
   const [contributing, setContributing] = useState(false);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("info");
+  const [sustainability, setSustainability] = useState(null);
+  const [treasury, setTreasury] = useState([]);
+  const [treasuryLoading, setTreasuryLoading] = useState(true);
+  const [zonePrivacy, setZonePrivacy] = useState(null);
+
+  // Real-time multi-asset treasury reserves (#541): refresh every 15s.
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh() {
+      try {
+        const rows = await getTreasurySnapshot();
+        if (!cancelled) setTreasury(rows);
+      } catch {
+      } finally {
+        if (!cancelled) setTreasuryLoading(false);
+      }
+    }
+    refresh();
+    const timer = setInterval(refresh, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -298,8 +413,26 @@ export default function VaultDashboard() {
 
   useEffect(() => {
     loadPayout();
+    getZonePrivacyPolicy().then(setZonePrivacy).catch(() => setZonePrivacy(null));
     setLoading(false);
   }, [loadPayout]);
+
+  // Real-time reserve stats: refresh every 15s while the page is open.
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSustainability() {
+      try {
+        const stats = await getSustainabilityStats();
+        if (!cancelled) setSustainability(stats);
+      } catch {}
+    }
+    loadSustainability();
+    const timer = setInterval(loadSustainability, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
 
   async function handleConnectWallet() {
     try {
@@ -347,8 +480,41 @@ export default function VaultDashboard() {
         campaignIdBytes[i] = parseInt(idHex.slice(i * 2, i * 2 + 2), 16);
       }
 
-      // Use zero zone bounds (will be validated on-chain against stored zone)
+      // Preflight zone against differential-privacy policy (#529)
+      const policy = await getZonePrivacyPolicy().catch(() => null);
+      let zoneResult = null;
+      if (policy && policy.enabled) {
+        zoneResult = buildCampaignZone({
+          lat: 48.8566,
+          lng: 2.3522,
+          radiusMeters: 3000,
+          campaignId,
+          privacy: policy,
+        });
+
+        if (!zoneResult.ok) {
+          setMessage(`Zone rejected: ${zoneResult.reason}`);
+          setMessageType("error");
+          setContributing(false);
+          return;
+        }
+      }
+
+      // Format: box_x_min(32) | box_x_max(32) | box_y_min(32) | box_y_max(32) | campaign_id(32) = 160 bytes
       const prefix = new Uint8Array(160);
+      if (zoneResult && zoneResult.ok) {
+        const writeU64 = (offset, valStr) => {
+          let v = BigInt(valStr);
+          for (let i = 31; i >= 0; i--) {
+            prefix[offset + i] = Number(v & 0xffn);
+            v >>= 8n;
+          }
+        };
+        writeU64(0, zoneResult.box.boxXMin);
+        writeU64(32, zoneResult.box.boxXMax);
+        writeU64(64, zoneResult.box.boxYMin);
+        writeU64(96, zoneResult.box.boxYMax);
+      }
       prefix.set(campaignIdBytes, 128);
 
       const stroops = BigInt(Math.round(amountUSDC * 10_000_000));
@@ -586,6 +752,11 @@ export default function VaultDashboard() {
           </div>
         </div>
 
+        {/* Open source sustainability reserve (#587) */}
+        <div style={cardStyle}>
+          <SustainabilityPanel stats={sustainability} />
+        </div>
+
         {/* Campaign Lookup */}
         <div style={cardStyle}>
           <div
@@ -710,6 +881,8 @@ export default function VaultDashboard() {
             </p>
           </div>
         )}
+        <TreasuryPanel rows={treasury} loading={treasuryLoading} />
+        <OracleQuoteForm getQuote={getOracleQuote} />
       </div>
     </div>
   );

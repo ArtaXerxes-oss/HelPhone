@@ -1,4 +1,5 @@
 node_modules/
+.vendor-cache/
 .env
 .env.local
 dist/
@@ -16,6 +17,10 @@ yarn-error.log*
 # State Export Snapshots
 snapshots/
 test-snapshots/
+
+# Playwright run artifacts (layout baselines ARE committed)
+test-results/
+playwright-report/
 
 # Rust/Soroban build output
 contract/**/target/
@@ -37,3 +42,12 @@ tests/integration/.local-deployment.json
 
 # WASM spike reader build output (ADR-014)
 src/wasm/**/target/
+
+# Python tooling cache
+__pycache__/
+*.py[cod]
+/target/
+# CVE patch bot scratch output (#599)
+.cve-patch-pr.md
+# maintainer key cache (#619)
+.cache/

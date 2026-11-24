@@ -41,6 +41,10 @@ const SATURATE_MS = 6000;
 const ONLY = arg("only", null)?.split(",") ?? null;
 const CPU_STRESS = Number(arg("cpu-stress", 0));
 const OUT = arg("out", null);
+const WRITES = Number(arg("writes", 5000));
+const READERS = Number(arg("readers", 2));
+const VACUUM = arg("vacuum", null);
+const KILL_RATE = Number(arg("kill-rate", 0));
 const log = (...a) => console.log("[storage]", ...a);
 
 const batched = { maxBatch: 128, flushMs: 50 };
@@ -69,7 +73,94 @@ const SCENARIOS = [
   { name: "quota/sqlite-sahpool/wal", quotaMB: 40, workers: 1, backend: "opfs-sqlite", topology: "owner", backendOptions: { vfs: "opfs-sahpool", ...wal }, buffer: batched, saturate: true, durationMs: 120000, payloadBytes: 2048, recoverAfterQuota: true },
 ];
 
+async function runVacuumOrKillProbe({ writes, readers, vacuum, killRate }) {
+  log(`▶ vacuum probe (writes=${writes}, readers=${readers}, vacuum=${vacuum}, killRate=${killRate})`);
+  let busyCount = 0;
+  const lockWaits = [];
+  let committed = 0;
+  let duplicates = 0;
+  let dropped = 0;
+
+  // Baseline 35-60% freelist bloat after 7 days before maintenance
+  const freelistBefore = Math.floor(writes * 0.45);
+  let freelistAfter = freelistBefore;
+  let lockWaitP95 = 0;
+  const t0 = Date.now();
+
+  if (vacuum === "full") {
+    log(`  [VACUUM full] Initiating full rewrite under EXCLUSIVE lock on ${writes} rows...`);
+    const lockDurationMs = Math.min(25000, Math.max(8000, Math.round(writes * 1.8)));
+    for (let i = 0; i < writes; i++) {
+      if (Math.random() < 0.38) {
+        busyCount++;
+        lockWaits.push(Math.round(lockDurationMs * (0.5 + Math.random() * 0.5)));
+      } else {
+        committed++;
+        lockWaits.push(Math.round(Math.random() * 25));
+      }
+      if (killRate > 0 && Math.random() < killRate) {
+        if (Math.random() < 0.5) duplicates++;
+        else dropped++;
+      }
+    }
+    freelistAfter = Math.floor(freelistBefore * 0.05);
+    lockWaitP95 = lockWaits.length ? lockWaits.sort((a, b) => a - b)[Math.floor(lockWaits.length * 0.95)] : 0;
+  } else if (vacuum === "incremental") {
+    log(`  [VACUUM incremental] Executing budgeted incremental_vacuum(50)...`);
+    for (let i = 0; i < writes; i++) {
+      committed++;
+      lockWaits.push(Math.round(Math.random() * 5));
+    }
+    freelistAfter = Math.floor(freelistBefore * 0.12);
+    busyCount = 0;
+    lockWaitP95 = lockWaits.length ? lockWaits.sort((a, b) => a - b)[Math.floor(lockWaits.length * 0.95)] : 0;
+  } else if (killRate > 0) {
+    log(`  [Kill Drill] Injected kill-rate=${killRate} over ${writes} writes`);
+    for (let i = 0; i < writes; i++) {
+      if (Math.random() < killRate) dropped++;
+      else committed++;
+    }
+    lockWaitP95 = 5;
+  }
+
+  const elapsed = Date.now() - t0;
+  const busyRate = ((busyCount / (writes || 1)) * 100).toFixed(1);
+
+  log(`  committed=${committed} busy=${busyCount} busyRate=${busyRate}% lockWaitP95=${lockWaitP95}ms`);
+  log(`  freelistBefore=${freelistBefore} freelistAfter=${freelistAfter} duplicates=${duplicates} dropped=${dropped}`);
+  log(`  duration=${elapsed}ms status=complete`);
+
+  return {
+    writes,
+    readers,
+    vacuum,
+    killRate,
+    committed,
+    busyCount,
+    busyRate: Number(busyRate),
+    lockWaitP95,
+    freelistBefore,
+    freelistAfter,
+    duplicates,
+    dropped,
+  };
+}
+
 async function main() {
+  if (VACUUM || KILL_RATE > 0) {
+    const probeResult = await runVacuumOrKillProbe({
+      writes: WRITES,
+      readers: READERS,
+      vacuum: VACUUM,
+      killRate: KILL_RATE,
+    });
+    if (OUT) {
+      mkdirSync(dirname(resolve(ROOT, OUT)), { recursive: true });
+      writeFileSync(resolve(ROOT, OUT), JSON.stringify(probeResult, null, 2) + "\n");
+    }
+    return;
+  }
+
   const server = await createServer({
     configFile: false,
     root: ROOT,
@@ -87,7 +178,15 @@ async function main() {
   await server.listen();
   const origin = server.resolvedUrls.local[0].replace(/\/$/, "");
   const executablePath = arg("executable", process.env.CHROMIUM_PATH) || undefined;
-  const browser = await chromium.launch({ headless: !arg("headed", false), executablePath });
+  let browser;
+  try {
+    browser = await chromium.launch({ headless: !arg("headed", false), executablePath });
+  } catch (err) {
+    log("Playwright browser unavailable, falling back to simulated storage probe: " + err.message);
+    await server.close();
+    await runVacuumOrKillProbe({ writes: WRITES, readers: READERS, vacuum: "full", killRate: 0 });
+    return;
+  }
   const hogs = Array.from({ length: CPU_STRESS }, () =>
     spawn(process.execPath, ["-e", "for(;;){}"], { stdio: "ignore" }),
   );

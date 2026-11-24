@@ -1,5 +1,9 @@
 # ADR-003: WebTransport vs WebSocket Protocol Selection for Disaster Network Conditions
 
+**Evidence:** [WebRTC COEP/TURN report](../spikes/719-webrtc-coep-turn-audio-report.md) · [raw results](../spikes/results/webrtc-coep-turn.json)
+**Evidence check:** `webrtc-coep-turn.json#/runsPerVariant = 10`
+This later TURN/COEP result is compatibility evidence, not a benchmark of the original WebTransport-versus-WebSocket choice.
+
 - **Status:** Proposed
 - **Date:** 2026-09-23
 - **Spike:** #603 (time box 4 days)

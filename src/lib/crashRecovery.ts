@@ -8,6 +8,8 @@
  * DB: helphone_crash_recovery / drafts store / key: emergency_draft
  */
 
+import { currentTraceIds } from './telemetry'
+
 export const DB_NAME = 'helphone_crash_recovery'
 export const STORE_NAME = 'drafts'
 export const DRAFT_KEY = 'emergency_draft'
@@ -23,11 +25,51 @@ export interface HelpDraft {
   searchQuery: string
   // Optional extra fields (profile, map state, etc.)
   extra?: Record<string, unknown>
+  /** Join key back to the dispatch trace for post-crash forensics (#791). */
+  traceId?: string
+  spanId?: string
+  /**
+   * Flag-schema version at the time the draft was composed (#909).
+   * `checkReplay` uses this to prevent a draft from silently resubmitting
+   * to a kill-switched path after a crash/relaunch cycle.
+   */
+  flagVersion?: string
   createdAt: number
   updatedAt: number
 }
 
 export type GetDraftFn = () => Omit<HelpDraft, 'createdAt' | 'updatedAt'> | null | undefined
+
+// ── Flag-version helper ────────────────────────────────────────────────────
+// Defined here so saveDraft can stamp drafts without importing from telemetry.
+// Callers that manage flag versions themselves can override via the `flagVersion`
+// field on the partial draft they pass to saveDraft.
+function currentFlagVersion(): string {
+  try {
+    // @ts-ignore – populated at build time or runtime by the flag system
+    return (globalThis as any).__FLAG_VERSION__ ?? '0'
+  } catch {
+    return '0'
+  }
+}
+
+export type ReplayVerdict =
+  | { allowed: true }
+  | { allowed: false; reason: 'blocked_by_kill_switch'; killSwitch: string; draftVersion: string; currentVersion: string }
+
+/**
+ * Stale-flag replay guard (#797). A draft composed under an older flag
+ * version is only resubmitted if the entrypoint it targets is still enabled
+ * now; otherwise the caller surfaces "blocked by kill-switch" instead of
+ * silently resubmitting to a killed path. The draft itself is kept.
+ */
+export function checkReplay(draft: HelpDraft, killSwitch = 'soroban.submit'): ReplayVerdict {
+  const draftVersion = draft.flagVersion ?? '0'
+  const currentVersion = currentFlagVersion()
+  if (compareFlagVersions(draftVersion, currentVersion) >= 0) return { allowed: true }
+  if (evaluateKillSwitch(killSwitch).enabled) return { allowed: true }
+  return { allowed: false, reason: 'blocked_by_kill_switch', killSwitch, draftVersion, currentVersion }
+}
 
 function isIndexedDBAvailable(): boolean {
   try {
@@ -102,6 +144,10 @@ export async function saveDraft(partial: Omit<HelpDraft, 'createdAt' | 'updatedA
     location: partial.location ?? null,
     searchQuery: partial.searchQuery ?? '',
     extra: partial.extra,
+    ...(currentTraceIds() ?? {}),
+    // Stamp the flag-schema version so checkReplay can detect kill-switch drift
+    // after a crash/relaunch cycle (#909).
+    flagVersion: partial.flagVersion ?? currentFlagVersion(),
     createdAt,
     updatedAt: now,
   }
@@ -267,9 +313,193 @@ export async function restoreDraft(): Promise<HelpDraft | null> {
   return loadDraft()
 }
 
+export interface RecoveryReport {
+  recovered: boolean;
+  sqliteHighwater: number;
+  idbHighwater: number;
+  replayedOps: number;
+  tornFramesDropped: number;
+  zombieSnapshotsRefused: number;
+  elapsedMs: number;
+}
+
+let recoveryComplete = false;
+let recoveryPromise: Promise<RecoveryReport> | null = null;
+let recoveryResolver: ((report: RecoveryReport) => void) | null = null;
+
+export function isRecoveryComplete(): boolean {
+  return recoveryComplete;
+}
+
+export function resetRecoveryGate(): void {
+  recoveryComplete = false;
+  recoveryPromise = new Promise((resolve) => {
+    recoveryResolver = resolve;
+  });
+}
+
+export async function waitForRecovery(): Promise<RecoveryReport> {
+  if (recoveryComplete) {
+    return {
+      recovered: true,
+      sqliteHighwater: 0,
+      idbHighwater: 0,
+      replayedOps: 0,
+      tornFramesDropped: 0,
+      zombieSnapshotsRefused: 0,
+      elapsedMs: 0,
+    };
+  }
+  if (!recoveryPromise) {
+    recoveryPromise = new Promise((resolve) => {
+      recoveryResolver = resolve;
+    });
+  }
+  return recoveryPromise;
+}
+
+export function emitRecoveryComplete(report: RecoveryReport): void {
+  recoveryComplete = true;
+  if (recoveryResolver) {
+    recoveryResolver(report);
+  }
+}
+
+/**
+ * Reconcile high-waters across SQLite and IDB journal and replay strictly seq > sqlite_hw.
+ * Fences uploads, validates WAL frames, and prevents zombie snapshot resurrection.
+ */
+export async function reconcileAndResurrect({
+  storageEngine,
+  journalStore,
+  crdtDoc = null,
+  snapshotHeader = null,
+  deviceId = 'dev-1',
+}: {
+  storageEngine: any;
+  journalStore: any;
+  crdtDoc?: any;
+  snapshotHeader?: { journal_highwater?: number } | null;
+  deviceId?: string;
+}): Promise<RecoveryReport> {
+  const t0 = Date.now();
+  let tornFramesDropped = 0;
+  let zombieSnapshotsRefused = 0;
+  let replayedOps = 0;
+
+  // 1. Recover torn WAL if backend supports it
+  if (typeof storageEngine?.recoverTornWal === 'function') {
+    const walCheck = storageEngine.recoverTornWal();
+    if (walCheck?.tornFramesDropped) tornFramesDropped += walCheck.tornFramesDropped;
+  }
+
+  // 2. Read highwaters
+  const sqliteHighwater = typeof storageEngine?.getHighwater === 'function' ? storageEngine.getHighwater(deviceId) : 0;
+  const idbHighwater = typeof journalStore?.getHighwater === 'function' ? journalStore.getHighwater(deviceId) : 0;
+
+  // 3. Snapshot fencing: prevent zombie resurrection if snapshot newer than sqlite_hw without IDB coverage
+  if (snapshotHeader && snapshotHeader.journal_highwater !== undefined) {
+    if (snapshotHeader.journal_highwater > sqliteHighwater && snapshotHeader.journal_highwater > idbHighwater) {
+      zombieSnapshotsRefused++;
+      console.warn('[CrashRecovery] Refused zombie snapshot: snapshot journal_highwater is ahead without IDB coverage', {
+        snapshotHw: snapshotHeader.journal_highwater,
+        sqliteHighwater,
+        idbHighwater,
+      });
+    } else if (crdtDoc && typeof crdtDoc.applySnapshot === 'function') {
+      // Safe to apply snapshot
+    }
+  }
+
+  // 4. Replay ONLY IDB entries where seq > sqliteHighwater
+  if (journalStore && typeof journalStore.getAllEntries === 'function') {
+    const entries = journalStore.getAllEntries(sqliteHighwater, deviceId);
+    if (entries.length > 0 && typeof storageEngine?.appendBatch === 'function') {
+      const records = entries.map((e: any) => ({ ...e.op, device_id: e.deviceId, seq: e.seq }));
+      await storageEngine.appendBatch('dispatches', records, { lane: 'dispatch' });
+      replayedOps = entries.length;
+      if (typeof journalStore.markAcked === 'function') {
+        const maxSeq = Math.max(...entries.map((e: any) => e.seq));
+        journalStore.markAcked(deviceId, maxSeq);
+      }
+    }
+  }
+
+  // 5. Checkpoint WAL
+  if (typeof storageEngine?.checkpoint === 'function') {
+    storageEngine.checkpoint('TRUNCATE');
+  }
+
+  const report: RecoveryReport = {
+    recovered: true,
+    sqliteHighwater,
+    idbHighwater,
+    replayedOps,
+    tornFramesDropped,
+    zombieSnapshotsRefused,
+    elapsedMs: Date.now() - t0,
+  };
+
+  emitRecoveryComplete(report);
+  return report;
+}
+
+// ── Synchronous beforeunload save (#909) ──────────────────────────────────
+//
+// IndexedDB writes are async and are not guaranteed to complete when the
+// browser forces a tab kill (SIGKILL, OOM, swipe-away on mobile).  The only
+// synchronous storage API available on `beforeunload` is localStorage.
+//
+// `saveDraftSync` serialises the draft to localStorage immediately.  Call it
+// from a `beforeunload` listener so a forced kill always has a last-known-good
+// draft even if the async IDB write in `startAutoSave` did not complete.
+//
+// The existing `loadDraftRaw` already falls back to localStorage when IDB is
+// empty, so a draft written here is transparently recovered on relaunch
+// without any changes to the read path.
+
+export function saveDraftSync(partial: Omit<HelpDraft, 'createdAt' | 'updatedAt'>): void {
+  if (!hasMeaningfulData(partial)) return
+  const now = Date.now()
+  const draft: HelpDraft = {
+    emergencyType: partial.emergencyType ?? null,
+    nickname: partial.nickname ?? '',
+    contact: partial.contact ?? '',
+    location: partial.location ?? null,
+    searchQuery: partial.searchQuery ?? '',
+    extra: partial.extra,
+    ...(currentTraceIds() ?? {}),
+    flagVersion: partial.flagVersion ?? currentFlagVersion(),
+    createdAt: now,
+    updatedAt: now,
+  }
+  saveToLocalStorage(draft)
+}
+
+/**
+ * Register a `beforeunload` handler that synchronously writes the current
+ * draft to localStorage.  Returns the unregister function.
+ *
+ * Usage:
+ *   const off = registerBeforeUnloadSave(getDraft)
+ *   // …later, after submission:
+ *   off()
+ */
+export function registerBeforeUnloadSave(getDraft: GetDraftFn): () => void {
+  function handler() {
+    try {
+      const draft = getDraft()
+      if (draft) saveDraftSync(draft)
+    } catch {}
+  }
+  window.addEventListener('beforeunload', handler)
+  return () => window.removeEventListener('beforeunload', handler)
+}
+
 // Re-export for test spying on expiration
 export const __testables = {
   hasMeaningfulData,
   isIndexedDBAvailable,
   openDB,
 }
+

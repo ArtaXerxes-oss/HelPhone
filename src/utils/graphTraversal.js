@@ -46,7 +46,7 @@ export function createLocalProjection(refLat, refLng) {
  * Builds a CSR graph from explicit node coordinates and directed edges.
  * `edges` is a flat array [from, to, weight, from, to, weight, ...].
  */
-export function buildCsrGraph({ lat, lng, x, y }, edges) {
+export function buildCsrGraph({ lat, lng, x, y }, edges, { weighting = "distance", maxSpeedMps = 0 } = {}) {
   const nodeCount = lat.length;
   const edgeCount = edges.length / 3;
   const offsets = new Uint32Array(nodeCount + 1);
@@ -64,6 +64,8 @@ export function buildCsrGraph({ lat, lng, x, y }, edges) {
   return {
     nodeCount,
     edgeCount,
+    weighting,
+    maxSpeedMps,
     lat: Float64Array.from(lat),
     lng: Float64Array.from(lng),
     x: Float64Array.from(x),
@@ -83,15 +85,31 @@ export function buildCsrGraph({ lat, lng, x, y }, edges) {
  * but not nodes, which is how production routers keep node counts small.
  * `properties.oneway` of `true`/`"yes"`/`1` makes a line one-directional.
  */
-export function buildGraphFromGeoJSON(geojson, { precision = 1e6 } = {}) {
+export function buildGraphFromGeoJSON(
+  geojson,
+  { precision = 1e6, weighting = "distance", defaultSpeedsKmh = DEFAULT_SPEEDS_KMH } = {},
+) {
+  if (weighting !== "distance" && weighting !== "time")
+    throw new RangeError(`Unknown weighting "${weighting}"`);
+  const byTime = weighting === "time";
   const lines = [];
+  let maxSpeedMps = 0;
   for (const feature of geojson.features || []) {
     const geom = feature && feature.geometry;
     if (!geom) continue;
-    const oneway = isOneway(feature.properties);
-    if (geom.type === "LineString") lines.push([geom.coordinates, oneway]);
+    const props = feature.properties;
+    // Closed roads are left out of the graph entirely in either weighting.
+    if (isClosed(props)) continue;
+    let speed = 0;
+    if (byTime) {
+      speed = roadSpeedMps(props, defaultSpeedsKmh);
+      if (!(speed > 0)) continue;
+      if (speed > maxSpeedMps) maxSpeedMps = speed;
+    }
+    const oneway = isOneway(props);
+    if (geom.type === "LineString") lines.push([geom.coordinates, oneway, speed]);
     else if (geom.type === "MultiLineString")
-      for (const part of geom.coordinates) lines.push([part, oneway]);
+      for (const part of geom.coordinates) lines.push([part, oneway, speed]);
   }
 
   const keyOf = (c) =>
@@ -138,7 +156,7 @@ export function buildGraphFromGeoJSON(geojson, { precision = 1e6 } = {}) {
     return id;
   };
 
-  for (const [coords, oneway] of lines) {
+  for (const [coords, oneway, speed] of lines) {
     if (coords.length < 2) continue;
     let from = nodeFor(coords[0], keyOf(coords[0]));
     let length = 0;
@@ -152,15 +170,79 @@ export function buildGraphFromGeoJSON(geojson, { precision = 1e6 } = {}) {
       if (i === coords.length - 1 || usage.get(k) > 1) {
         const to = nodeFor(coords[i], k);
         if (to !== from) {
-          edges.push(from, to, length);
-          if (!oneway) edges.push(to, from, length);
+          const weight = byTime ? length / speed : length;
+          edges.push(from, to, weight);
+          if (!oneway) edges.push(to, from, weight);
         }
         from = to;
         length = 0;
       }
     }
   }
-  return buildCsrGraph({ lat, lng, x, y }, edges);
+  return buildCsrGraph({ lat, lng, x, y }, edges, {
+    weighting,
+    maxSpeedMps: byTime ? maxSpeedMps : 0,
+  });
+}
+
+/**
+ * Default travel speeds by OSM `highway` class, in km/h, used when a road has
+ * no usable `maxspeed` tag. They are deliberately conservative: an evacuation
+ * route through a crowded city moves slower than the posted limit.
+ */
+export const DEFAULT_SPEEDS_KMH = Object.freeze({
+  motorway: 90,
+  trunk: 70,
+  primary: 50,
+  secondary: 40,
+  tertiary: 35,
+  unclassified: 30,
+  residential: 25,
+  living_street: 10,
+  service: 15,
+  track: 10,
+  default: 25,
+});
+
+const MPH_TO_KMH = 1.609344;
+
+/**
+ * Travel speed of a road in metres per second, from `maxspeed` ("50",
+ * "30 mph", "50;30" takes the lowest) or else the `highway` class default.
+ * Returns 0 for a road that cannot be driven (`maxspeed=0`).
+ */
+export function roadSpeedMps(props, defaults = DEFAULT_SPEEDS_KMH) {
+  const raw = props && props.maxspeed;
+  let kmh = NaN;
+  if (typeof raw === "number") kmh = raw;
+  else if (typeof raw === "string") {
+    for (const part of raw.split(";")) {
+      const m = /^\s*(\d+(?:\.\d+)?)\s*(mph|km\/h|kmh)?\s*$/i.exec(part);
+      if (!m) continue;
+      const v = Number(m[1]) * (m[2] && m[2].toLowerCase() === "mph" ? MPH_TO_KMH : 1);
+      if (!(v >= kmh)) kmh = v;
+    }
+  }
+  if (!Number.isFinite(kmh)) {
+    const cls = props && typeof props.highway === "string" ? props.highway : "default";
+    kmh = defaults[cls] ?? defaults.default ?? DEFAULT_SPEEDS_KMH.default;
+  }
+  return kmh > 0 ? kmh / 3.6 : 0;
+}
+
+/**
+ * A road that is closed to traffic: `closed=yes` (HelPhone incident
+ * closures), `access=no|private`, or `highway=construction`.
+ */
+export function isClosed(props) {
+  if (!props) return false;
+  const yes = (v) => v === true || v === 1 || v === "yes" || v === "true" || v === "1";
+  return (
+    yes(props.closed) ||
+    props.access === "no" ||
+    props.access === "private" ||
+    props.highway === "construction"
+  );
 }
 
 function isOneway(props) {
@@ -223,23 +305,73 @@ function viewFields(buffer, fields) {
   return out;
 }
 
+// Header words 4..7 were reserved (zero) in the first HPGR buffers, so they
+// carry the edge weighting without a format bump: word 4 is the weighting
+// code (0 = metres, 1 = seconds) and words 6..7 hold the graph's maximum
+// speed in m/s as a float64, which scales the A* heuristic for time weights.
+const WEIGHTING_CODES = { distance: 0, time: 1 };
+const MAX_SPEED_BYTE_OFFSET = 24;
+
 /** Serialises a CSR graph into one (Shared)ArrayBuffer. */
 export function packGraph(graph, { shared = false } = {}) {
   const { nodeCount: n, edgeCount: m } = graph;
-  return packFields(
-    [GRAPH_MAGIC, FORMAT_VERSION, n, m, 0, 0, 0, 0],
+  const weighting = graph.weighting || "distance";
+  const code = WEIGHTING_CODES[weighting];
+  if (code === undefined) throw new RangeError(`Unknown weighting "${weighting}"`);
+  if (weighting === "time" && !(graph.maxSpeedMps > 0))
+    throw new RangeError("A time-weighted graph needs maxSpeedMps > 0");
+  const buffer = packFields(
+    [GRAPH_MAGIC, FORMAT_VERSION, n, m, code, 0, 0, 0],
     GRAPH_FIELDS(n, m),
     graph,
     shared,
   );
+  new DataView(buffer).setFloat64(MAX_SPEED_BYTE_OFFSET, graph.maxSpeedMps || 0, true);
+  return buffer;
 }
 
 /** Zero-copy view over a buffer produced by packGraph. */
 export function unpackGraph(buffer) {
-  const [magic, version, n, m] = new Uint32Array(buffer, 0, HEADER_WORDS);
+  if (buffer.byteLength < HEADER_WORDS * 4) throw new Error("Not a HelPhone routing graph buffer");
+  const [magic, version, n, m, code] = new Uint32Array(buffer, 0, HEADER_WORDS);
   if (magic !== GRAPH_MAGIC || version !== FORMAT_VERSION)
     throw new Error("Not a HelPhone routing graph buffer");
-  return { nodeCount: n, edgeCount: m, ...viewFields(buffer, GRAPH_FIELDS(n, m)) };
+  const weighting = code === WEIGHTING_CODES.time ? "time" : code === 0 ? "distance" : null;
+  if (!weighting) throw new Error(`Unknown HPGR weighting code ${code}`);
+  if (buffer.byteLength < layout(GRAPH_FIELDS(n, m)).byteLength)
+    throw new Error("Truncated HelPhone routing graph buffer");
+  const maxSpeedMps = new DataView(buffer).getFloat64(MAX_SPEED_BYTE_OFFSET, true);
+  if (weighting === "time" && !(maxSpeedMps > 0))
+    throw new Error("Time-weighted HPGR buffer has no max speed");
+  return {
+    nodeCount: n,
+    edgeCount: m,
+    weighting,
+    maxSpeedMps: weighting === "time" ? maxSpeedMps : 0,
+    ...viewFields(buffer, GRAPH_FIELDS(n, m)),
+  };
+}
+
+/**
+ * Index of the graph node closest to (lat, lng), or -1 for an empty graph.
+ * A linear scan over the packed coordinates: about 0.3 ms per 100k nodes,
+ * far below a route query, so no spatial index is kept in the buffer.
+ */
+export function nearestNode(graph, lat, lng) {
+  let best = -1;
+  let bestD = Infinity;
+  const kx = Math.cos(lat * DEG);
+  const { lat: la, lng: ln, nodeCount } = graph;
+  for (let v = 0; v < nodeCount; v++) {
+    const dy = la[v] - lat;
+    const dx = (ln[v] - lng) * kx;
+    const d = dx * dx + dy * dy;
+    if (d < bestD) {
+      bestD = d;
+      best = v;
+    }
+  }
+  return best;
 }
 
 export function packContractionHierarchy(ch, { shared = false } = {}) {
@@ -420,11 +552,25 @@ export function shortestPath(graph, source, target, options = {}) {
   const ctx = options.context || createSearchContext(graph.nodeCount);
   const useHeuristic = (options.heuristic || "none") === "euclidean";
   const { offsets, targets, weights, x, y } = graph;
+  // For time weights the straight-line distance is divided by the fastest
+  // speed anywhere in the graph, so it never overestimates the remaining
+  // travel time and A* stays exact.
+  const scale = graph.weighting === "time" ? 1 / graph.maxSpeedMps : 1;
+  if (useHeuristic && !Number.isFinite(scale))
+    throw new Error("Time-weighted graph has no max speed for the A* heuristic");
   const { dist, prev, stamp, settled, heap } = ctx;
   const gen = nextGeneration(ctx);
   const tx = x[target];
   const ty = y[target];
-  const h = (v) => (useHeuristic ? Math.hypot(x[v] - tx, y[v] - ty) : 0);
+  // sqrt rather than Math.hypot: hypot guards against overflow that local
+  // metre coordinates cannot reach, and is several times slower in V8.
+  const h = useHeuristic
+    ? (v) => {
+        const dx = x[v] - tx;
+        const dy = y[v] - ty;
+        return Math.sqrt(dx * dx + dy * dy) * scale;
+      }
+    : () => 0;
 
   dist[source] = 0;
   prev[source] = -1;
