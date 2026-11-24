@@ -41,6 +41,11 @@ jobs:
           key: maintainer-keys-${{ github.run_id }}
           restore-keys: maintainer-keys-
 
+      - name: Key-custody ceremony & CODEOWNERS refresh gate (#953)
+        run: |
+          node scripts/security/verify_maintainer_keys.js --ceremony --offline
+          node scripts/security/codeowners_refresh.js --check
+
       - name: Pull request commits
         if: github.event_name == 'pull_request'
         run: node scripts/security/verify_maintainer_keys.js --pinned --range "origin/${{ github.base_ref }}..HEAD"

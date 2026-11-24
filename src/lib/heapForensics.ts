@@ -116,10 +116,19 @@ export function instrumentWasmMemory(memory: WebAssembly.Memory): WebAssembly.Me
 // ── Census store ─────────────────────────────────────────────────────────────
 
 const census = new Float64Array(CENSUS_SIZE * WIDTH).fill(NaN)
+const preallocatedRowPool: Array<Array<number | null>> = Array.from(
+  { length: CENSUS_SIZE },
+  () => new Array<number | null>(WIDTH).fill(null),
+)
 let head = 0
 let filled = 0
 let storageCache = { usage: NaN, quota: NaN }
+let uaSpecificBytes = NaN
 let subsystems: ForensicSubsystems = {}
+let lastEnvelope: ForensicEnvelope | null = null
+
+/** Default memory-pressure threshold (512 MB) when jsHeapSizeLimit is unavailable. */
+export const DEFAULT_UA_MEMORY_PRESSURE_BYTES = 512 * 1024 * 1024
 
 /** Bytes this module itself retains (reported so the census counts its own cost). */
 export const SELF_BYTES = census.byteLength
@@ -137,35 +146,93 @@ function safe(fn: () => number | undefined): number {
 }
 
 function mapboxTileCount(): number {
-  const caches = subsystems.map?.style?.sourceCaches
-  if (!caches) return NaN
-  let n = 0
-  for (const id in caches) n += Object.keys(caches[id]?._tiles ?? {}).length
-  return n
+  return safe(() => {
+    const caches = subsystems.map?.style?.sourceCaches
+    if (!caches) return NaN
+    let n = 0
+    for (const id in caches) n += Object.keys(caches[id]?._tiles ?? {}).length
+    return n
+  })
+}
+
+export function isUaSpecificMemorySupported(
+  perf: unknown = typeof performance !== 'undefined' ? performance : undefined,
+): boolean {
+  try {
+    return typeof (perf as { measureUserAgentSpecificMemory?: unknown } | undefined)?.measureUserAgentSpecificMemory === 'function'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Probes `performance.measureUserAgentSpecificMemory()` when supported (COOP/COEP
+ * cross-origin isolated contexts). Missing or throwing APIs yield NaN and never throw.
+ */
+export async function probeUaSpecificMemory(
+  perf: unknown = typeof performance !== 'undefined' ? performance : undefined,
+): Promise<number> {
+  if (!isUaSpecificMemorySupported(perf)) {
+    uaSpecificBytes = NaN
+    return NaN
+  }
+  try {
+    const fn = (
+      perf as {
+        measureUserAgentSpecificMemory: () => Promise<{ bytes?: number }>
+      }
+    ).measureUserAgentSpecificMemory
+    const result = await fn.call(perf)
+    uaSpecificBytes = num(result?.bytes)
+    if (!Number.isNaN(uaSpecificBytes) && filled > 0) {
+      const latestRow = ((head - 1 + CENSUS_SIZE) % CENSUS_SIZE) * WIDTH
+      if (Number.isNaN(census[latestRow + COL.jsHeapUsed])) {
+        census[latestRow + COL.jsHeapUsed] = uaSpecificBytes
+      }
+      const latestIdx = (head - 1 + CENSUS_SIZE) % CENSUS_SIZE
+      const reason = detectPressure(latestIdx)
+      if (reason) emitEnvelope(buildEnvelope(reason))
+    }
+    return uaSpecificBytes
+  } catch {
+    uaSpecificBytes = NaN
+    return NaN
+  }
 }
 
 /** Synchronous sample written straight into the preallocated census row. */
 export function sample(now = Date.now()): number {
   const row = head * WIDTH
-  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } }).memory
-  census[row + COL.ts] = now
-  census[row + COL.jsHeapUsed] = num(mem?.usedJSHeapSize)
-  census[row + COL.jsHeapLimit] = num(mem?.jsHeapSizeLimit)
-  census[row + COL.workerQueueDepth] = counters.workerQueueDepth
-  census[row + COL.workerPendingBytes] = counters.workerPendingBytes
-  census[row + COL.workerHeartbeatAgeMs] = counters.lastHeartbeat ? now - counters.lastHeartbeat : NaN
+  const heapUsed = safe(() => {
+    const mem = (typeof performance !== 'undefined'
+      ? (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory
+      : undefined)
+    return mem?.usedJSHeapSize
+  })
+  const heapLimit = safe(() => {
+    const mem = (typeof performance !== 'undefined'
+      ? (performance as unknown as { memory?: { jsHeapSizeLimit?: number } }).memory
+      : undefined)
+    return mem?.jsHeapSizeLimit
+  })
+  census[row + COL.ts] = num(now)
+  census[row + COL.jsHeapUsed] = Number.isNaN(heapUsed) ? uaSpecificBytes : heapUsed
+  census[row + COL.jsHeapLimit] = heapLimit
+  census[row + COL.workerQueueDepth] = num(counters.workerQueueDepth)
+  census[row + COL.workerPendingBytes] = num(counters.workerPendingBytes)
+  census[row + COL.workerHeartbeatAgeMs] = counters.lastHeartbeat ? num(now - counters.lastHeartbeat) : NaN
   census[row + COL.yjsBytes] = safe(() => subsystems.yjsDoc?.encodeState().byteLength)
   census[row + COL.mapboxTiles] = mapboxTileCount()
   census[row + COL.mapboxStyleBytes] = safe(() => {
     const style = subsystems.map?.getStyle?.()
     return style ? JSON.stringify(style).length : undefined
   })
-  census[row + COL.ringBytes] = counters.ringBytes + SELF_BYTES
+  census[row + COL.ringBytes] = num(counters.ringBytes + SELF_BYTES)
   census[row + COL.wasmBytes] = safe(() => subsystems.wasmMemory?.()?.buffer.byteLength)
-  census[row + COL.wasmGrowEvents] = counters.wasmGrowEvents
-  census[row + COL.parserAllocBytes] = counters.parserAllocBytes
-  census[row + COL.storageUsage] = storageCache.usage
-  census[row + COL.storageQuota] = storageCache.quota
+  census[row + COL.wasmGrowEvents] = num(counters.wasmGrowEvents)
+  census[row + COL.parserAllocBytes] = num(counters.parserAllocBytes)
+  census[row + COL.storageUsage] = num(storageCache.usage)
+  census[row + COL.storageQuota] = num(storageCache.quota)
   const written = head
   head = (head + 1) % CENSUS_SIZE
   filled = Math.min(filled + 1, CENSUS_SIZE)
@@ -174,9 +241,29 @@ export function sample(now = Date.now()): number {
 
 async function refreshStorage(): Promise<void> {
   try {
-    const est = await navigator.storage?.estimate?.()
+    const est = await (typeof navigator !== 'undefined' ? navigator.storage?.estimate?.() : undefined)
     storageCache = { usage: num(est?.usage), quota: num(est?.quota) }
-  } catch {}
+  } catch {
+    storageCache = { usage: NaN, quota: NaN }
+  }
+}
+
+/**
+ * Reads census rows oldest → newest into the preallocated row pool (NaN → null)
+ * without allocating per-sample objects.
+ */
+export function readCensusMatrix(): Array<Array<number | null>> {
+  const rows: Array<Array<number | null>> = new Array(filled)
+  for (let i = 0; i < filled; i++) {
+    const r = ((head - filled + i + CENSUS_SIZE) % CENSUS_SIZE) * WIDTH
+    const row = preallocatedRowPool[i]
+    for (let c = 0; c < WIDTH; c++) {
+      const v = census[r + c]
+      row[c] = Number.isNaN(v) ? null : v
+    }
+    rows[i] = row
+  }
+  return rows
 }
 
 /** Reads census rows oldest → newest as plain objects (allocates; not for OOM path). */
@@ -202,7 +289,10 @@ const STORAGE_PRESSURE = 0.9
 export function detectPressure(rowIndex: number): PressureReason | null {
   const r = rowIndex * WIDTH
   if (census[r + COL.workerHeartbeatAgeMs] > HEARTBEAT_STALL_MS) return 'heartbeat_stall'
-  if (census[r + COL.jsHeapUsed] / census[r + COL.jsHeapLimit] > HEAP_PRESSURE) return 'heap_near_limit'
+  const heapUsed = census[r + COL.jsHeapUsed]
+  const heapLimit = census[r + COL.jsHeapLimit]
+  if (heapUsed / heapLimit > HEAP_PRESSURE) return 'heap_near_limit'
+  if (Number.isNaN(heapLimit) && heapUsed > DEFAULT_UA_MEMORY_PRESSURE_BYTES) return 'heap_near_limit'
   if (census[r + COL.storageUsage] / census[r + COL.storageQuota] > STORAGE_PRESSURE) return 'storage_near_quota'
   return null
 }
@@ -229,6 +319,7 @@ function uaFamily(): ForensicEnvelope['ua'] {
 
 /** Latest-row subsystem breakdown in bytes (only byte-valued signals). */
 export function breakdown(): Record<string, number> {
+  if (filled === 0) return {}
   const r = ((head - 1 + CENSUS_SIZE) % CENSUS_SIZE) * WIDTH
   const out: Record<string, number> = {}
   for (const s of ['jsHeapUsed', 'workerPendingBytes', 'yjsBytes', 'mapboxStyleBytes', 'ringBytes', 'wasmBytes'] as const) {
@@ -252,15 +343,37 @@ export function buildEnvelope(reason: PressureReason, { withHints = true } = {})
         .slice(0, 5)
     } catch {}
   }
-  return {
+  const envelope: ForensicEnvelope = {
     schema: 'helphone.forensics/1',
     reason,
     ts: Date.now(),
     ua: uaFamily(),
     signals: SIGNALS,
-    census: readCensus().map((row) => SIGNALS.map((s) => row[s])),
+    census: readCensusMatrix(),
     breakdown: breakdown(),
     hints,
+  }
+  lastEnvelope = envelope
+  return envelope
+}
+
+export function getLatestForensicEnvelope(): ForensicEnvelope | null {
+  return lastEnvelope
+}
+
+/**
+ * Attaches the fixed 50-entry forensic census envelope to an incident bundle's
+ * `extraFiles` map under `client/heap-forensics.json`.
+ */
+export function attachForensicsToIncidentBundle(
+  extraFiles: Record<string, string> = {},
+  reason: PressureReason = 'manual',
+): Record<string, string> {
+  if (filled === 0) sample()
+  const env = lastEnvelope && lastEnvelope.reason === reason ? lastEnvelope : buildEnvelope(reason)
+  return {
+    ...extraFiles,
+    'client/heap-forensics.json': JSON.stringify(env, null, 2),
   }
 }
 
@@ -277,6 +390,7 @@ export function emitEnvelope(envelope: ForensicEnvelope, { force = false } = {})
   const now = Date.now()
   if (!force && now - lastEmit < MIN_EMIT_GAP_MS) return false
   lastEmit = now
+  lastEnvelope = envelope
   try {
     if (priorityLane) {
       priorityLane(envelope)
@@ -286,8 +400,11 @@ export function emitEnvelope(envelope: ForensicEnvelope, { force = false } = {})
     if (typeof navigator !== 'undefined' && navigator.sendBeacon?.(ENDPOINT, new Blob([body], { type: 'application/json' }))) {
       return true
     }
-    void fetch(ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {})
-    return true
+    if (typeof fetch === 'function') {
+      void fetch(ENDPOINT, { method: 'POST', headers: { 'content-type': 'application/json' }, body, keepalive: true }).catch(() => {})
+      return true
+    }
+    return false
   } catch {
     return false
   }
@@ -306,10 +423,26 @@ export function setPriorityLane(fn: ((e: ForensicEnvelope) => void) | null): voi
  */
 export function emergencyEmit(): boolean {
   try {
+    if (filled === 0) sample()
     return emitEnvelope(buildEnvelope('crash', { withHints: false }), { force: true })
   } catch {
     return false
   }
+}
+
+/**
+ * Samples the fixed 50-entry census and emits a memory-pressure forensic
+ * envelope without allocating per-sample objects.
+ */
+export function emitMemoryPressureEnvelope(
+  reason: PressureReason = 'heap_near_limit',
+  opts: { force?: boolean; withHints?: boolean } = {},
+): ForensicEnvelope {
+  const row = sample()
+  const detected = detectPressure(row) ?? reason
+  const env = buildEnvelope(detected, { withHints: opts.withHints ?? true })
+  emitEnvelope(env, { force: opts.force ?? false })
+  return env
 }
 
 let timer: ReturnType<typeof setInterval> | undefined
@@ -324,6 +457,7 @@ export function startHeapForensics(
     // Off the critical path: idle callback where supported, else a timeout.
     const run = () => {
       void refreshStorage()
+      void probeUaSpecificMemory()
       const row = sample()
       const reason = detectPressure(row)
       if (reason) emitEnvelope(buildEnvelope(reason))
@@ -352,4 +486,26 @@ export function setForensicSubsystems(next: ForensicSubsystems): void {
 export function stopHeapForensics(): void {
   if (timer) clearInterval(timer)
   timer = undefined
+}
+
+export function resetHeapForensics(): void {
+  stopHeapForensics()
+  census.fill(NaN)
+  for (let i = 0; i < CENSUS_SIZE; i++) {
+    preallocatedRowPool[i].fill(null)
+  }
+  head = 0
+  filled = 0
+  storageCache = { usage: NaN, quota: NaN }
+  uaSpecificBytes = NaN
+  subsystems = {}
+  lastEnvelope = null
+  lastEmit = 0
+  priorityLane = null
+  counters.workerQueueDepth = 0
+  counters.workerPendingBytes = 0
+  counters.lastHeartbeat = 0
+  counters.wasmGrowEvents = 0
+  counters.parserAllocBytes = 0
+  counters.ringBytes = 0
 }

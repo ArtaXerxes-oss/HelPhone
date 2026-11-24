@@ -10,6 +10,7 @@ import { fieldConfirm } from "../lib/field/audioAlert";
 import { isFlagEnabled } from "../lib/field/flags";
 import { enqueue, PRIO } from "../lib/field/offlineQueue";
 import { postSwMessage } from "../lib/field/swChannel";
+import { encodeStagingPayload, flushStagingQueue } from "../lib/field/stagingDrain";
 import {
   NDEF_MIME,
   NDEF_TEXT_PREFIX,
@@ -34,6 +35,8 @@ export function useNfcCheckIn({
   const [lastResult, setLastResult] = useState(null);
   const [roster, setRoster] = useState(() => loadRoster());
   const [rateLimited, setRateLimited] = useState(false);
+  // Server conflicts (revoked, forged, stale) from draining signed check-ins (#940).
+  const [conflicts, setConflicts] = useState([]);
   const abortRef = useRef(null);
   const registryRef = useRef(stagingRegistry || createStagingRegistry());
   const storeRef = useRef(null);
@@ -72,8 +75,18 @@ export function useNfcCheckIn({
     [onAccepted],
   );
 
+  /** Send queued signed check-ins to the server; conflicts are kept visible to the operator. */
+  const drainStaging = useCallback(async () => {
+    const outcome = await flushStagingQueue();
+    if (outcome.conflicts.length > 0) {
+      setConflicts((prev) => [...outcome.conflicts, ...prev].slice(0, 50));
+      setLastResult({ status: "rejected", reason: outcome.conflicts[0].outcome });
+    }
+    return outcome;
+  }, []);
+
   const processIntent = useCallback(
-    async ({ stagingId, nonce = null, source }) => {
+    async ({ stagingId, nonce = null, source, payload = null }) => {
       const result = storeRef.current.checkInOut({
         responderId,
         stagingId,
@@ -85,21 +98,24 @@ export function useNfcCheckIn({
         source,
         responderId,
         stagingId,
+        // Only a signed payload is verified by the server. Unsigned short codes stay local.
+        verified: Boolean(payload),
         queued: false,
       };
-      if (result.status === "accepted") {
+      if (result.status === "accepted" && payload) {
         const { entry, duplicate } = enqueue({
           kind: "staging",
           prio: PRIO.ROSTER,
           idempotencyKey: `${responderId}:${stagingId}:IN:${nonce || enriched.entry.at}`,
-          data: { ...enriched.entry, source },
+          data: { payloadBytes: encodeStagingPayload(payload), stagingId, source },
         });
         enriched.queued = !duplicate;
         enriched.queueId = entry.id;
+        void drainStaging();
       }
       return applyResult(enriched);
     },
-    [applyResult, responderId],
+    [applyResult, drainStaging, responderId],
   );
 
   const startScan = useCallback(async () => {
@@ -141,6 +157,7 @@ export function useNfcCheckIn({
             stagingId: verification.record.stagingId,
             nonce: verification.record.nonce,
             source: "nfc",
+            payload: json,
           });
         } catch (err) {
           setLastResult({
@@ -194,6 +211,37 @@ export function useNfcCheckIn({
     [processIntent],
   );
 
+  /** QR fallback for a signed staging payload. Same verification path as NFC (#940). */
+  const submitSignedPayload = useCallback(
+    async (text) => {
+      const json = String(text || "");
+      const verification = await verifyStagingPayload(json, secretHex);
+      if (!verification.valid) {
+        const rejected = { status: "rejected", reason: verification.reason || "tamper", source: "qr" };
+        setLastResult(rejected);
+        fieldConfirm({ haptic: true, tone: false });
+        return rejected;
+      }
+      return processIntent({
+        stagingId: verification.record.stagingId,
+        nonce: verification.record.nonce,
+        source: "qr",
+        payload: json,
+      });
+    },
+    [processIntent, secretHex],
+  );
+
+  // Retry the queue whenever the device regains connectivity (#940).
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const onOnline = () => {
+      void drainStaging();
+    };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, [drainStaging]);
+
   const unmatched = useMemo(() => storeRef.current.unmatchedIns(), [roster]);
 
   return {
@@ -203,6 +251,9 @@ export function useNfcCheckIn({
     startScan,
     stopScan,
     submitFallbackCode,
+    submitSignedPayload,
+    drainStaging,
+    conflicts,
     roster,
     lastResult,
     rateLimited,

@@ -27,6 +27,8 @@ pub const DEFAULT_DAILY_LIMIT_STROOP: i128 = 10 * DEFAULT_PAYOUT_STROOP;
 pub const CAMPAIGN_INPUTS_LEN: usize = 160;
 /// 7 × 32-byte big-endian public inputs (…, recipient, nullifier).
 pub const PUBLIC_INPUTS_LEN: usize = 224;
+/// Reject verifier payloads larger than 1 MiB before invoking the verifier.
+pub const MAX_PROOF_BYTES: usize = 1024 * 1024;
 
 #[contracterror]
 #[repr(u32)]
@@ -51,6 +53,7 @@ pub enum VaultError {
     BoxTooSmall = 16,
     ZoneOverlapTooSmall = 17,
     ReentrantCall = 18,
+    ProofTooLarge = 19,
 }
 
 #[derive(Clone)]
@@ -334,6 +337,9 @@ impl AegisVault {
             recipient.require_auth();
             if public_inputs.len() as usize != PUBLIC_INPUTS_LEN {
                 return Err(VaultError::InvalidPublicInputs);
+            }
+            if proof_bytes.len() as usize > MAX_PROOF_BYTES {
+                return Err(VaultError::ProofTooLarge);
             }
             let nullifier: BytesN<32> = public_inputs.slice(192..224).try_into().unwrap();
             let campaign_id: BytesN<32> = public_inputs.slice(128..160).try_into().unwrap();

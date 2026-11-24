@@ -10,14 +10,76 @@
  *   finalized — depth >= k (k-deep; aid release / chained submissions gate here)
  *   orphaned  — a later sighting of the same ledger at a different ledger hash
  *
+ * Issue #919: When RPC health degrades the finality depth k is raised so that
+ * the prover waits for more confirmations before treating a checkpoint as final.
+ * This prevents a split-brain during RPC instability from releasing aid against
+ * a ledger that the network later orphans.
+ *
  * The indexer keeps orphaned siblings (marked, never deleted) and rewinds its
  * watermark; the full reorg-aware projection design is specced in
  * `docs/spikes/727-checkpoint-finality-report.md`.
  */
 
+import type { NetworkQuality } from '../../src/types/index.js'
+
 export type FinalityTier = 'pending' | 'closed' | 'finalized' | 'orphaned';
 
 export const DEFAULT_FINALITY_DEPTH = 2;
+
+/** k values per RPC quality tier (issue #919 — adaptive finality depth). */
+export const FINALITY_DEPTH_BY_QUALITY: Record<NetworkQuality, number> = {
+  good:     2,  // nominal — standard 2-ledger confirmation
+  degraded: 4,  // double confirmation while RPC is unreliable
+  offline:  8,  // maximum caution; indexer should pause new submissions
+  unknown:  4,  // conservative default until a probe result arrives
+};
+
+/**
+ * Return the adaptive finality depth k for the current RPC health quality.
+ * Call-sites that already accept `FinalityOptions.finalityDepth` need no
+ * changes — they receive the computed k and remain oblivious to RPC state.
+ */
+export function adaptiveFinalityDepth(quality: NetworkQuality): number {
+  return FINALITY_DEPTH_BY_QUALITY[quality] ?? DEFAULT_FINALITY_DEPTH;
+}
+
+// ── Finalized-root registry ────────────────────────────────────────────────────
+
+export interface FinalizedRoot {
+  /** Stellar ledger sequence number of the last k-confirmed ledger. */
+  ledger: number;
+  /** Ledger hash of that ledger (the value circuits commit to). */
+  ledgerHash: string;
+  /** ISO-8601 timestamp when this root was recorded. */
+  recordedAt: string;
+  /** The k value that was active when this root was confirmed. */
+  finalityDepth: number;
+}
+
+let _finalizedRoot: FinalizedRoot | null = null;
+
+/**
+ * Return the most recently recorded finalized root, or null if none has been
+ * confirmed yet (e.g. indexer has not yet reached depth k from genesis).
+ */
+export function getFinalizedRoot(): FinalizedRoot | null {
+  return _finalizedRoot;
+}
+
+/**
+ * Record a new finalized root.  Called by the indexer once a sighting reaches
+ * depth k.  The prover reads this via `GET /api/zk/finalized-root` to rebase
+ * its circuit inputs onto the latest confirmed checkpoint.
+ */
+export function updateFinalizedRoot(root: Omit<FinalizedRoot, 'recordedAt'>): FinalizedRoot {
+  _finalizedRoot = { ...root, recordedAt: new Date().toISOString() };
+  return _finalizedRoot;
+}
+
+/** Test hook: reset the finalized root to null. */
+export function __resetFinalizedRoot(): void {
+  _finalizedRoot = null;
+}
 
 export interface FinalityOptions {
   /** Depth k at which a sighting becomes finalized. Defaults to 2. */

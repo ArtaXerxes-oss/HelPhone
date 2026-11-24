@@ -56,6 +56,8 @@ This ADR records the in-repo part of the response: a pure estimator that makes d
 
 **Unvalidated parameters** (in `src/lib/etaEstimate.ts`): fatigue starts at 5 consecutive runs, adds 10% per run, capped at 1.5x; traffic-aware uncertainty is +/-15%; fallback speed band is 15-40 km/h. None were fitted to HelPhone data. They are placeholders for the experiments in #775.
 
+**Evidence status:** Unmeasured. No raw spike result tests ETA accuracy, fatigue weighting, Mapbox quota, or requester trust. These values remain assumptions until a measured report is attached.
+
 ---
 
 ## Consequences

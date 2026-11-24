@@ -49,11 +49,23 @@ export interface CspOptions {
   reportUri?: string
   /** Add `upgrade-insecure-requests` (leave off for plain-http local dev). */
   upgradeInsecure?: boolean
+  dev?: boolean
+  nonceBytes?: number
+  nonce?: string
+  extraConnectSrc?: string[]
+  extraScriptSrc?: string[]
+  extraImgSrc?: string[]
 }
 
-export function generateNonce(): string {
-  return randomBytes(NONCE_BYTES).toString('base64')
+export interface CspMiddlewareOptions extends CspOptions {
+  headerName?: string
 }
+
+export function generateNonce(bytes = NONCE_BYTES): string {
+  return randomBytes(bytes).toString('base64')
+}
+
+export const createNonce = generateNonce
 
 // scheme://host[:port], an optional leading `*.` wildcard label, nothing else.
 // This is what keeps a value from smuggling `;` or `,` (a new directive or a
@@ -83,22 +95,27 @@ export function parseSourceList(
   return out
 }
 
+function isValidReportUri(uri: string): boolean {
+  return /^(?:https?:\/\/[A-Za-z0-9.:-]+)?\/[A-Za-z0-9\-._~/%]*$/.test(uri)
+}
+
 /** Build the policy string for one response's nonce. */
 export function buildCspHeader(nonce: string, opts: CspOptions = {}): string {
   const n = `'nonce-${nonce}'`
-  const connect = [...new Set(["'self'", ...DEFAULT_CONNECT_SRC, ...(opts.connectSrc ?? [])])]
+  const extra = [...(opts.connectSrc ?? []), ...(opts.extraConnectSrc ?? [])]
+  const connect = [...new Set(["'self'", ...DEFAULT_CONNECT_SRC, ...extra])]
 
   const directives: string[][] = [
     ['default-src', "'none'"],
     // 'wasm-unsafe-eval' lets the Noir/Barretenberg WASM compile; it does not
     // permit eval() or inline script.
-    ['script-src', "'self'", n, "'wasm-unsafe-eval'"],
+    ['script-src', "'self'", n, "'wasm-unsafe-eval'", ...(opts.extraScriptSrc ?? [])],
     ['style-src', "'self'", n, 'https://fonts.googleapis.com'],
     // Nonces cannot be applied to style="" attributes, and React/Mapbox set
     // them at runtime. Scope the relaxation to attributes only.
     ['style-src-attr', "'unsafe-inline'"],
     ['font-src', "'self'", 'https://fonts.gstatic.com', 'data:'],
-    ['img-src', "'self'", 'data:', 'blob:', 'https://api.mapbox.com', 'https://*.tiles.mapbox.com'],
+    ['img-src', "'self'", 'data:', 'blob:', 'https://api.mapbox.com', 'https://*.tiles.mapbox.com', ...(opts.extraImgSrc ?? [])],
     ['media-src', "'self'"],
     ['connect-src', ...connect],
     ['worker-src', "'self'", 'blob:'],
@@ -115,8 +132,9 @@ export function buildCspHeader(nonce: string, opts: CspOptions = {}): string {
   return directives.map((d) => d.join(' ')).join('; ')
 }
 
-function isValidReportUri(uri: string): boolean {
-  return /^(?:https?:\/\/[A-Za-z0-9.:-]+)?\/[A-Za-z0-9\-._~/%]*$/.test(uri)
+export function buildCsp(options: CspOptions = {}): string {
+  const nonce = options.nonce ?? generateNonce(options.nonceBytes)
+  return buildCspHeader(nonce, options)
 }
 
 /**
@@ -147,13 +165,52 @@ export function optionsFromEnv(env: NodeJS.ProcessEnv = process.env): CspOptions
  * sets the policy header for that response.
  */
 export function createCspMiddleware(opts: CspOptions = optionsFromEnv()): RequestHandler {
-  const header = opts.reportOnly ? CSP_REPORT_ONLY_HEADER : CSP_HEADER
   return function cspMiddleware(_req: Request, res: Response, next: NextFunction) {
-    const nonce = generateNonce()
+    const nonce = generateNonce(opts.nonceBytes)
+    const header = opts.reportOnly ? CSP_REPORT_ONLY_HEADER : CSP_HEADER
     res.locals.cspNonce = nonce
     res.setHeader(header, buildCspHeader(nonce, opts))
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+    res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless')
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
     next()
   }
+}
+
+export function cspMiddleware(options: CspMiddlewareOptions = {}) {
+  return function csp(req: Request, res: Response, next: NextFunction) {
+    const header = options.headerName ?? (options.reportOnly ? CSP_REPORT_ONLY_HEADER : CSP_HEADER)
+    const nonce = generateNonce(options.nonceBytes)
+    res.locals.cspNonce = nonce
+    res.setHeader(header, buildCspHeader(nonce, options))
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
+    res.setHeader('Cross-Origin-Embedder-Policy', 'credentialless')
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
+    next()
+  }
+}
+
+export function securityHeaders() {
+  return function securityHeadersMiddleware(_req: Request, res: Response, next: NextFunction) {
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('X-Frame-Options', 'DENY')
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(self)')
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none')
+    res.setHeader('X-DNS-Prefetch-Control', 'off')
+    if (!res.hasHeader('Strict-Transport-Security') && process.env.NODE_ENV === 'production') {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    }
+    next()
+  }
+}
+
+export function cspReportHandler(req: Request, res: Response) {
+  const report = req.body?.['csp-report'] ?? req.body ?? {}
+  const blocked = String(report['blocked-uri'] ?? report.blockedURI ?? 'unknown').slice(0, 256)
+  const directive = String(report['violated-directive'] ?? report.directive ?? 'unknown').slice(0, 64)
+  console.warn('[csp]', JSON.stringify({ blocked, directive, ua: req.get('user-agent')?.slice(0, 120) }))
+  res.status(204).end()
 }
 
 export interface HtmlHandlerOptions {
@@ -185,3 +242,5 @@ export function createHtmlHandler({ htmlPath, cache = true }: HtmlHandlerOptions
     res.send(injectNonce(template, nonce))
   }
 }
+
+export default cspMiddleware

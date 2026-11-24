@@ -247,6 +247,7 @@ export function createRadioBridge({
 
   function configure(patch = {}) {
     Object.assign(config, patch);
+    if (patch.sessionKeyHex !== undefined) sessionKeyHex = patch.sessionKeyHex;
     if (patch.callsign) setState({ callsign: patch.callsign });
     if (patch.band) {
       setState({ band: patch.band });

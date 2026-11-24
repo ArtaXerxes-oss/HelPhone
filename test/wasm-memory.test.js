@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createWasmMemoryPool, MAX_MEMORY_BYTES, WASM_PAGE_SIZE, getWasmMemoryPool, resetWasmMemoryPool } from '../src/lib/wasmMemory.js';
+import { createWasmMemoryPool, MAX_MEMORY_BYTES, WASM_PAGE_SIZE, getWasmMemoryPool, resetWasmMemoryPool } from '../src/lib/wasmMemory';
 
 describe('WASM Linear Memory Pooling & Buffer Recycling', () => {
   let pool;

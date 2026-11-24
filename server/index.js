@@ -42,6 +42,7 @@ import { createDispatchRouters } from "./routes/dispatch.js";
 import { syncRouter } from "./routes/sync.js";
 import historyRouter from "./routes/history.js";
 import { createHealthRouter } from "./routes/health.js";
+import { createDocsRouter } from "./routes/docs.js";
 import { attachWebSocketRelay } from "./routes/wsCluster.js";
 import { closeEventBus, connectEventBus, publishContractEvent } from "./lib/redisPubSub.js";
 import { getRedis, isRedisConfigured } from "./lib/redis.js";
@@ -267,6 +268,7 @@ app.use("/metrics", dispatchRouters.metrics);
 app.use("/api/sync", syncRouter);
 app.use("/api/history", historyRouter);
 app.use("/api/federation", createFederationRouter());
+app.use("/docs", createDocsRouter());
 
 // ── Contract event bridge ────────────────────────────────────────
 // Issue #177: the frontend used to poll the contract directly on a timer

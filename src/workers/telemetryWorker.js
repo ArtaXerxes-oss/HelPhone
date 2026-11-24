@@ -26,6 +26,7 @@ import {
   isQuotaError,
   summarize,
 } from "../services/storageEngine.js";
+import { createTelemetryWorkerProtocol } from "../lib/telemetryWorkerProtocol.js";
 import { installWorkerHooks, isKilled, setQueueStats, workerFlagVersion, handleFlagMessage } from "./workerSupervision.js";
 
 /**
@@ -260,12 +261,25 @@ export function attachOwnerPort(engine, port) {
 if (typeof self !== "undefined" && typeof self.postMessage === "function" && typeof window === "undefined") {
   let ownerEngine = null;
   const ports = [];
+  let telemetryProtocol = null;
   installWorkerHooks(self, "telemetryWorker");
   const fail = (err) => self.postMessage({ type: "error", message: String((err && err.message) || err), name: err && err.name });
 
   self.onmessage = async (event) => {
     const msg = event.data || {};
     if (handleFlagMessage(msg)) return;
+
+    // Telemetry binary-parsing lane (flow-controlled; independent of the
+    // storage-contention benchmark lane below).
+    if (typeof msg.type === "string" && msg.type.startsWith("telemetry:")) {
+      if (!telemetryProtocol) {
+        telemetryProtocol = createTelemetryWorkerProtocol({
+          postMessage: (message) => self.postMessage(message),
+        });
+      }
+      telemetryProtocol.handle(msg);
+      return;
+    }
     try {
       if (msg.type === "port") {
         if (ownerEngine) attachOwnerPort(ownerEngine, msg.port);

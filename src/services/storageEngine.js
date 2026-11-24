@@ -19,6 +19,9 @@
 
 export const STORES = ["telemetry", "messages", "frames", "dispatches"];
 
+/** Stores written through the lossless, zero-delay-flush lane (#895). */
+export const LOSSLESS_STORES = new Set(["messages", "dispatches"]);
+
 export class SqliteBusyError extends Error {
   constructor(message = "SQLITE_BUSY: database lock contention", { code = 5, lane = "telemetry", details = null } = {}) {
     super(message);
@@ -805,8 +808,12 @@ export class MemoryBackend {
  *   a backend name or an already-constructed backend instance.
  * @param {false|object} [options.buffer] WriteAheadBuffer options, or
  *   `false` to commit every write in its own transaction (the naive path).
+ *   Applies to the lossy lane (telemetry, frames).
+ * @param {object} [options.losslessBuffer] options for the lossless lane
+ *   (messages, dispatches). Defaults to a zero-delay flush that rejects on
+ *   overflow instead of shedding: ADR-007 decision 4, #895.
  */
-export async function createStorageEngine({ backend = "indexeddb", backendOptions = {}, buffer = {} } = {}) {
+export async function createStorageEngine({ backend = "indexeddb", backendOptions = {}, buffer = {}, losslessBuffer = {} } = {}) {
   let targetBackend = backend;
   if (backend === "opfs-sqlite") {
     const isBrowserMain = typeof window !== "undefined" && typeof document !== "undefined";
@@ -837,14 +844,30 @@ export async function createStorageEngine({ backend = "indexeddb", backendOption
     txn.commitMs.push(r.commitMs);
     return r;
   };
+  // Two lanes. Telemetry and render frames are batched and shed their oldest
+  // entries under backpressure; messages and dispatches are flushed with no
+  // delay and are never shed, so one shared buffer can no longer drop a
+  // broadcast to make room for GPS fixes.
   const wab = buffer === false ? null : new WriteAheadBuffer(sink, buffer);
+  const lossless =
+    buffer === false
+      ? null
+      : new WriteAheadBuffer(sink, {
+          ...buffer,
+          flushMs: 0,
+          maxBuffered: (buffer && buffer.maxBuffered) || 20000,
+          ...losslessBuffer,
+          overflow: "reject",
+        });
+  const laneFor = (store) => (LOSSLESS_STORES.has(store) ? lossless : wab);
   const direct = { committed: 0, failed: 0, latencyMs: [] };
 
   return {
     backend: impl,
     /** Queue (buffered) or write (unbuffered) one record; resolves on commit. */
     async append(store, record, options = {}) {
-      if (wab) return wab.enqueue(store, record);
+      const lane = laneFor(store);
+      if (lane) return lane.enqueue(store, record);
       const t0 = now();
       try {
         const res = await sink(store, [record], options);
@@ -857,7 +880,7 @@ export async function createStorageEngine({ backend = "indexeddb", backendOption
         throw err;
       }
     },
-    flush: () => (wab ? wab.flush() : Promise.resolve()),
+    flush: () => Promise.all([wab ? wab.flush() : null, lossless ? lossless.flush() : null]).then(() => undefined),
     readLatest: (store, limit) => impl.readLatest(store, limit),
     count: (store) => impl.count(store),
     deleteOldest: (store, n) => impl.deleteOldest(store, n),
@@ -876,11 +899,13 @@ export async function createStorageEngine({ backend = "indexeddb", backendOption
         txnLockWaitMs: summarize(txn.lockWaitMs),
         txnCommitMs: summarize(txn.commitMs),
         buffer: wab ? wab.stats() : null,
+        losslessBuffer: lossless ? lossless.stats() : null,
         direct: wab ? null : { committed: direct.committed, failed: direct.failed, latencyMs: summarize(direct.latencyMs) },
       };
     },
     async close() {
       if (wab) await wab.close();
+      if (lossless) await lossless.close();
       impl.close();
     },
   };

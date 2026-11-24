@@ -19,10 +19,10 @@ export default function SosSheet({ open, onCancel, onConfirm }) {
 
   useFocusTrap(open, dialogRef);
   useEscapeKey(
-    open,
     useCallback(() => {
       if (onCancel) onCancel();
     }, [onCancel]),
+    { enabled: open, restoreFocus: true },
   );
 
   const stopHold = useCallback(() => {

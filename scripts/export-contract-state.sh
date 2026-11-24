@@ -8,8 +8,15 @@
 set -euo pipefail
 
 # Configuration with defaults
-CONTRACT_ID="${CONTRACT_ID:-CC325F37QW7N2F5M3QGHL4A4O7J2K9L0M1N2O3P4Q5R6S7T8U9V0}"
-SOROBAN_RPC_URL="${SOROBAN_RPC_URL:-https://soroban-testnet.stellar.org}"
+CONTRACT_ID="${CONTRACT_ID:?CONTRACT_ID must be set}"
+SOROBAN_RPC_URL="${SOROBAN_RPC_URL:?SOROBAN_RPC_URL must be set}"
+STELLAR_NETWORK="${STELLAR_NETWORK:?STELLAR_NETWORK must be set}"
+
+case "${STELLAR_NETWORK}" in
+  testnet) [[ "${SOROBAN_RPC_URL}" == *testnet* ]] || { echo "STELLAR_NETWORK=testnet but SOROBAN_RPC_URL is not a testnet endpoint" >&2; exit 1; } ;;
+  mainnet) [[ "${SOROBAN_RPC_URL}" != *testnet* ]] || { echo "STELLAR_NETWORK=mainnet cannot use a testnet endpoint" >&2; exit 1; } ;;
+  *) echo "STELLAR_NETWORK must be testnet or mainnet" >&2; exit 1 ;;
+esac
 NETWORK_PASSPHRASE="${NETWORK_PASSPHRASE:-Test SDF Network ; September 2015}"
 OUTPUT_DIR="${OUTPUT_DIR:-./snapshots}"
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

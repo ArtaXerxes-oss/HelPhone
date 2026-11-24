@@ -4,6 +4,7 @@ import { hydratePaged } from '../src/services/crdtSync.js';
 import { LwwElementSet } from '../src/lib/crdt.js';
 import { handleRoutingMessage, createRoutingState } from '../src/workers/routingWorker.js';
 import { createJoinReceipt, verifyJoinCompleteness } from '../server/indexer/auditStreamer.js';
+import { sha256Hex } from '../src/lib/syncIntegrity.js';
 
 class MockStorage {
   constructor() {
@@ -45,11 +46,15 @@ describe('CRDT Paged Dehydration & Actionable-First Protocol (ISP-066)', () => {
       if (url.includes('/sync/snapshot')) {
         return {
           ok: true,
-          json: async () => ({
-            snapshot_id: 'snap-1',
-            vector: { peerA: 10 },
-            operations: [{ key: 'k1', value: 'v1', actor: 'peerA', counter: 10, deleted: false, timestamp: 100 }],
-          }),
+          json: async () => {
+            const operations = [{ key: 'k1', value: 'v1', actor: 'peerA', counter: 10, deleted: false, timestamp: 100 }];
+            return {
+              snapshot_id: 'snap-1',
+              vector: { peerA: 10 },
+              operations,
+              checksum: await sha256Hex(JSON.stringify(operations)),
+            };
+          },
         };
       }
       if (url.includes('/sync/deltas')) {
@@ -59,7 +64,7 @@ describe('CRDT Paged Dehydration & Actionable-First Protocol (ISP-066)', () => {
             deltas: [],
             next_vector: { peerA: 10 },
             has_more: false,
-            checksum: 'abc',
+            checksum: await sha256Hex('[]'),
           }),
         };
       }
@@ -105,7 +110,7 @@ describe('CRDT Paged Dehydration & Actionable-First Protocol (ISP-066)', () => {
               deltas: ops,
               next_vector: { peerA: 500 },
               has_more: true,
-              checksum: 'page-1-hash',
+              checksum: await sha256Hex(JSON.stringify(ops)),
             }),
           };
         }
@@ -124,7 +129,7 @@ describe('CRDT Paged Dehydration & Actionable-First Protocol (ISP-066)', () => {
               deltas: ops,
               next_vector: { peerA: 800 },
               has_more: false,
-              checksum: 'page-2-hash',
+              checksum: await sha256Hex(JSON.stringify(ops)),
             }),
           };
         }
@@ -165,14 +170,17 @@ describe('CRDT Paged Dehydration & Actionable-First Protocol (ISP-066)', () => {
 
         return {
           ok: true,
-          json: async () => ({
-            deltas: [
+          json: async () => {
+            const ops = [
               { key: 'key-501', value: 'val-501', actor: 'peerA', counter: 501, deleted: false, timestamp: 3000 },
-            ],
-            next_vector: { peerA: 501 },
-            has_more: false,
-            checksum: 'resumed-hash',
-          }),
+            ];
+            return {
+              deltas: ops,
+              next_vector: { peerA: 501 },
+              has_more: false,
+              checksum: await sha256Hex(JSON.stringify(ops)),
+            };
+          },
         };
       }
       return { ok: false, status: 404 };
@@ -261,3 +269,6 @@ describe('CRDT Paged Dehydration & Actionable-First Protocol (ISP-066)', () => {
     expect(receipt.verified).toBe(true);
   });
 });
+
+// Paging, checksum and checkpoint behaviour for the hydration path is covered in
+// test/crdt-hydration-integrity.test.js and test/crdt-sync-paging.test.js.

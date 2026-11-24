@@ -359,3 +359,103 @@ export function startFlagSync({
     }
   }
 }
+
+// ── Unified Remote + Field Flag Provenance (#943) ───────────────────────────
+// Precedence order (highest to lowest):
+//   1. env_override  (VITE_FLAG_*)
+//   2. remote_config (public/config.json via defaultEvaluator)
+//   3. field_local   (localStorage hp_feature_flags single-flag override)
+//   4. default       (field flag defaultOn, or false)
+
+export const FLAG_PRECEDENCE = Object.freeze([
+  'env_override',
+  'remote_config',
+  'field_local',
+  'default',
+] as const)
+
+export type FlagResolutionSource = (typeof FLAG_PRECEDENCE)[number]
+
+export interface FieldLayerInput {
+  override?: boolean | null
+  defaultOn?: boolean
+  version?: number | null
+}
+
+export interface UnifiedFlagResolution {
+  flagName: string
+  enabled: boolean
+  source: FlagResolutionSource
+  precedence: readonly FlagResolutionSource[]
+  provenance: {
+    remote: {
+      present: boolean
+      enabled: boolean
+      reason: string
+      version: string
+    }
+    field: {
+      present: boolean
+      enabled: boolean | null
+      defaultOn: boolean | null
+      version: number | null
+    }
+  }
+}
+
+/**
+ * Single unified resolver combining remote config.json (defaultEvaluator)
+ * and field localStorage flags with explicit, deterministic precedence.
+ */
+export function resolveUnifiedFlag(
+  flagName: string,
+  fieldLayer: FieldLayerInput = {},
+  userContext?: UserContext,
+  evaluator: FeatureFlagEvaluator = defaultEvaluator,
+): UnifiedFlagResolution {
+  const remoteEval = evaluator.evaluateFlag(flagName, userContext)
+  const remoteVersion = evaluator.getConfig()?.version ?? currentFlagVersion()
+  const remotePresent = remoteEval.reason !== 'default'
+
+  const fieldOverride = typeof fieldLayer.override === 'boolean' ? fieldLayer.override : null
+  const fieldDefault = typeof fieldLayer.defaultOn === 'boolean' ? fieldLayer.defaultOn : null
+  const fieldVersion = typeof fieldLayer.version === 'number' ? fieldLayer.version : null
+
+  let enabled = false
+  let source: FlagResolutionSource = 'default'
+
+  if (remoteEval.reason === 'env_override') {
+    enabled = remoteEval.enabled
+    source = 'env_override'
+  } else if (remotePresent) {
+    enabled = remoteEval.enabled
+    source = 'remote_config'
+  } else if (fieldOverride !== null) {
+    enabled = fieldOverride
+    source = 'field_local'
+  } else if (fieldDefault !== null) {
+    enabled = fieldDefault
+    source = 'default'
+  }
+
+  return {
+    flagName,
+    enabled,
+    source,
+    precedence: FLAG_PRECEDENCE,
+    provenance: {
+      remote: {
+        present: remotePresent,
+        enabled: remoteEval.enabled,
+        reason: remoteEval.reason,
+        version: remoteVersion,
+      },
+      field: {
+        present: fieldOverride !== null,
+        enabled: fieldOverride,
+        defaultOn: fieldDefault,
+        version: fieldVersion,
+      },
+    },
+  }
+}

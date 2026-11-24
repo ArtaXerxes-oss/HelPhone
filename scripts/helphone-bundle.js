@@ -246,6 +246,13 @@ function logSlice({ logFile, sinceMs }) {
   return kept.join("\n");
 }
 
+function artifactOrEmpty(file, kind) {
+  if (!file) return JSON.stringify({ status: "empty", reason: `no ${kind} artifact supplied` }, null, 2);
+  const abs = path.isAbsolute(file) ? file : path.join(ROOT, file);
+  if (!fs.existsSync(abs)) return JSON.stringify({ status: "empty", reason: `${kind} artifact not found` }, null, 2);
+  return fs.readFileSync(abs);
+}
+
 // ── collect ─────────────────────────────────────────────────────────────────
 
 export function collectBundle({
@@ -254,6 +261,9 @@ export function collectBundle({
   out = "helphone-bundle.tgz",
   breakGlass = false,
   logFile = null,
+  ledgerFile = null,
+  metricsFile = null,
+  clientSlice = null,
   dispatch = false,
   extraFiles = {},
 } = {}) {
@@ -322,31 +332,9 @@ export function collectBundle({
   // build SBOM
   push("build/sbom.json", JSON.stringify(buildSbom(), null, 2), "build");
 
-  // ledger + metrics + client placeholders (collected when artifacts exist)
-  const contractScript = path.join(ROOT, "scripts/export-contract-state.sh");
-  push(
-    "ledger/contract-state.txt",
-    fs.existsSync(contractScript)
-      ? "# run scripts/export-contract-state.sh --window to populate\n"
-      : "# contract export not available in this checkout\n",
-    "scripts/export-contract-state.sh",
-  );
-  push(
-    "metrics/load-baseline.txt",
-    fs.existsSync(path.join(ROOT, "server/tests/load.js"))
-      ? fs
-          .readFileSync(path.join(ROOT, "server/tests/load.js"), "utf8")
-          .split("\n")
-          .slice(0, 40)
-          .join("\n")
-      : "# load baseline not available\n",
-    "server/tests/load.js",
-  );
-  push(
-    "client/README.txt",
-    "# Client ring/crash slices: export from the device via TelemetryLab-equivalent\n# (ringBuffer/crashRecovery) and re-run with --client-slice <file>.\n",
-    "src/lib",
-  );
+  push("ledger/state.json", artifactOrEmpty(ledgerFile, "ledger"), ledgerFile ?? "empty");
+  push("metrics/snapshot.txt", artifactOrEmpty(metricsFile, "metrics"), metricsFile ?? "empty");
+  push("client/slice.json", artifactOrEmpty(clientSlice, "client"), clientSlice ?? "empty");
 
   // operator-supplied extras
   for (const [name, content] of Object.entries(extraFiles)) {
@@ -473,6 +461,9 @@ function cliMain(argv) {
       out: flags.out || "helphone-bundle.tgz",
       breakGlass: !!flags.breakGlass,
       logFile: flags["log-file"] || null,
+      ledgerFile: flags["ledger-file"] || null,
+      metricsFile: flags["metrics-file"] || null,
+      clientSlice: flags["client-slice"] || null,
       dispatch: !!flags.dispatch,
     });
     console.log(

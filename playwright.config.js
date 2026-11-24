@@ -124,5 +124,33 @@ export default defineConfig({
       viewport: { width: 2560, height: 1440 },
       deviceScaleFactor: 1,
     }),
+
+    // ── WebRTC NAT matrix (tests/e2e/webrtc-nat.spec.ts) — issue #907 ──────
+    // Five topology legs: full-cone, restricted-cone, port-restricted,
+    // symmetric (no relay, must fall back to WS), symmetric-with-relay.
+    // Run the full matrix: npm run test:e2e:webrtc-nat
+    // Run one leg:        npx playwright test --project=webrtc-nat-full-cone
+    ...[
+      { topology: 'full-cone',            requireRelay: false },
+      { topology: 'restricted-cone',      requireRelay: false },
+      { topology: 'port-restricted',      requireRelay: false },
+      { topology: 'symmetric',            requireRelay: true  },
+      { topology: 'symmetric-with-relay', requireRelay: true  },
+    ].map(({ topology, requireRelay }) => ({
+      name: `webrtc-nat-${topology}`,
+      testMatch: /webrtc-nat\.spec\.ts/,
+      metadata: { topology, requireRelay },
+      use: { browserName: 'chromium' },
+    })),
+
+    // ── Background-kill drills (tests/e2e/background-kill.spec.ts) ─────────
+    // Simulates OS killing the app on a locked phone; asserts the dispatch
+    // subscription resumes within the SLA after relaunch.
+    {
+      name: 'background-kill',
+      testMatch: /background-kill\.spec\.ts/,
+      timeout: 60_000,
+      use: { browserName: 'chromium' },
+    },
   ],
 })

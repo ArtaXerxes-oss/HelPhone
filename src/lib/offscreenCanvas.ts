@@ -51,6 +51,124 @@ export interface RenderSize {
   dpr: number;
 }
 
+export interface ViewportTransform {
+  /** Zoom scale factor relative to the base viewport (default 1). */
+  scale: number;
+  /** Pan X offset in logical map units (default 0). */
+  offsetX: number;
+  /** Pan Y offset in logical map units (default 0). */
+  offsetY: number;
+  /** Current map zoom level for HP-037 cluster coordination. */
+  zoom?: number;
+  /** Geographic viewport bounds [west, south, east, north]. */
+  bounds?: [number, number, number, number];
+}
+
+export const DEFAULT_VIEWPORT_TRANSFORM: ViewportTransform = Object.freeze({
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  zoom: 2,
+  bounds: [-180, -85, 180, 85] as [number, number, number, number],
+});
+
+/**
+ * Applies the shared viewport transform (pan/zoom) to logical coordinates.
+ * Identity transforms return the input coordinates without floating-point drift.
+ */
+export function applyViewportTransform(
+  x: number,
+  y: number,
+  transform?: Partial<ViewportTransform> | null,
+): { x: number; y: number } {
+  if (!transform) return { x, y };
+  const scale = typeof transform.scale === 'number' && Number.isFinite(transform.scale) ? transform.scale : 1;
+  const offsetX = typeof transform.offsetX === 'number' && Number.isFinite(transform.offsetX) ? transform.offsetX : 0;
+  const offsetY = typeof transform.offsetY === 'number' && Number.isFinite(transform.offsetY) ? transform.offsetY : 0;
+  if (scale === 1 && offsetX === 0 && offsetY === 0) return { x, y };
+  return {
+    x: x * scale + offsetX,
+    y: y * scale + offsetY,
+  };
+}
+
+/**
+ * Projects geographic (lng, lat) coordinates into logical viewport coordinates
+ * using the same ViewportTransform shared with the HP-037 cluster layer.
+ */
+export function projectLngLatToViewport(
+  lng: number,
+  lat: number,
+  size: Pick<RenderSize, 'width' | 'height'>,
+  transform?: Partial<ViewportTransform> | null,
+): { x: number; y: number } {
+  const bounds = transform?.bounds && transform.bounds.length === 4 ? transform.bounds : DEFAULT_VIEWPORT_TRANSFORM.bounds!;
+  const [west, south, east, north] = bounds;
+  const spanLng = east - west || 360;
+  const spanLat = north - south || 170;
+  const baseX = ((lng - west) / spanLng) * size.width;
+  const baseY = ((north - lat) / spanLat) * size.height;
+  return applyViewportTransform(baseX, baseY, transform);
+}
+
+/**
+ * Coordinates HP-037 cluster features and active markers into a single
+ * MapOverlay[] list projected through the shared ViewportTransform.
+ */
+export function buildViewportOverlays({
+  points = [],
+  clusters = [],
+  size,
+  transform,
+}: {
+  points?: ReadonlyArray<{ id: string; lat?: number; lng?: number; x?: number; y?: number; kind?: OverlayKind }>;
+  clusters?: ReadonlyArray<{
+    id?: string | number;
+    properties?: Record<string, unknown>;
+    geometry?: { coordinates?: [number, number] };
+  }>;
+  size: Pick<RenderSize, 'width' | 'height'>;
+  transform?: Partial<ViewportTransform> | null;
+}): MapOverlay[] {
+  const out: MapOverlay[] = [];
+  const seenIds = new Set<string>();
+
+  for (let i = 0; i < clusters.length; i++) {
+    const feature = clusters[i];
+    const coords = feature?.geometry?.coordinates;
+    if (!coords || !Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) continue;
+    const { x, y } = projectLngLatToViewport(coords[0], coords[1], size, transform);
+    const props = feature.properties ?? {};
+    const id = String(feature.id ?? props.pointId ?? `cluster-${i}`);
+    const rawKind = props.kind as OverlayKind | undefined;
+    const kind: OverlayKind =
+      rawKind && rawKind in OVERLAY_COLORS
+        ? rawKind
+        : props.cluster
+          ? 'pending'
+          : 'responder';
+    seenIds.add(id);
+    out.push({ id, x, y, kind });
+  }
+
+  for (let i = 0; i < points.length; i++) {
+    const pt = points[i];
+    if (!pt || seenIds.has(pt.id)) continue;
+    let coords: { x: number; y: number } | null = null;
+    if (typeof pt.x === 'number' && typeof pt.y === 'number') {
+      coords = applyViewportTransform(pt.x, pt.y, transform);
+    } else if (typeof pt.lng === 'number' && typeof pt.lat === 'number') {
+      coords = projectLngLatToViewport(pt.lng, pt.lat, size, transform);
+    }
+    if (!coords) continue;
+    const kind: OverlayKind = pt.kind && pt.kind in OVERLAY_COLORS ? pt.kind : 'pending';
+    seenIds.add(pt.id);
+    out.push({ id: pt.id, x: coords.x, y: coords.y, kind });
+  }
+
+  return out;
+}
+
 /** Pulse progress 0..1 for a marker at time `t`, staggered per overlay so they don't all beat together. */
 export function pulsePhase(t: number, index: number): number {
   return ((t + index * 250) % PULSE_PERIOD_MS) / PULSE_PERIOD_MS;
@@ -62,10 +180,12 @@ export function drawOverlayFrame(
   overlays: readonly MapOverlay[],
   size: RenderSize,
   t: number,
+  transform?: Partial<ViewportTransform> | null,
 ): void {
   ctx.setTransform(size.dpr, 0, 0, size.dpr, 0, 0);
   ctx.clearRect(0, 0, size.width, size.height);
   overlays.forEach((o, i) => {
+    const pos = transform ? applyViewportTransform(o.x, o.y, transform) : o;
     const color = OVERLAY_COLORS[o.kind] ?? OVERLAY_COLORS.pending;
     const phase = pulsePhase(t, i);
 
@@ -74,7 +194,7 @@ export function drawOverlayFrame(
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.arc(o.x, o.y, CORE_RADIUS + phase * (MAX_PULSE_RADIUS - CORE_RADIUS), 0, Math.PI * 2);
+    ctx.arc(pos.x, pos.y, CORE_RADIUS + phase * (MAX_PULSE_RADIUS - CORE_RADIUS), 0, Math.PI * 2);
     ctx.stroke();
     ctx.restore();
 
@@ -82,7 +202,7 @@ export function drawOverlayFrame(
     ctx.globalAlpha = 1;
     ctx.fillStyle = color;
     ctx.beginPath();
-    ctx.arc(o.x, o.y, CORE_RADIUS, 0, Math.PI * 2);
+    ctx.arc(pos.x, pos.y, CORE_RADIUS, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   });
@@ -132,6 +252,7 @@ export function isOffscreenCanvasSupported(
 export interface OverlayRenderer {
   readonly mode: 'worker' | 'main-thread';
   setOverlays(overlays: MapOverlay[]): void;
+  setViewport?(transform: Partial<ViewportTransform>): void;
   resize(size: RenderSize): void;
   destroy(): void;
 }
@@ -152,9 +273,19 @@ function defaultWorker(): Worker {
   return new Worker(new URL('../workers/canvas-worker.js', import.meta.url), { type: 'module' });
 }
 
-function applyBackingStore(canvas: HTMLCanvasElement, size: RenderSize) {
-  canvas.width = Math.round(size.width * size.dpr);
-  canvas.height = Math.round(size.height * size.dpr);
+function applyBackingStore(canvas: HTMLCanvasElement, size: RenderSize): boolean {
+  const targetW = Math.round(size.width * size.dpr);
+  const targetH = Math.round(size.height * size.dpr);
+  let changed = false;
+  if (canvas.width !== targetW) {
+    canvas.width = targetW;
+    changed = true;
+  }
+  if (canvas.height !== targetH) {
+    canvas.height = targetH;
+    changed = true;
+  }
+  return changed;
 }
 
 /**
@@ -192,6 +323,11 @@ function createWorkerRenderer(canvas: CanvasLike, opts: OverlayRendererOptions):
   return {
     mode: 'worker',
     setOverlays: (overlays) => worker.postMessage({ type: 'overlays', overlays }),
+    setViewport: (transform) =>
+      worker.postMessage({
+        type: 'viewport',
+        transform: { ...DEFAULT_VIEWPORT_TRANSFORM, ...transform },
+      }),
     resize: (size) => worker.postMessage({ type: 'resize', ...size }),
     destroy: () => {
       worker.postMessage({ type: 'stop' });
@@ -203,6 +339,7 @@ function createWorkerRenderer(canvas: CanvasLike, opts: OverlayRendererOptions):
 function createMainThreadRenderer(canvas: HTMLCanvasElement, opts: OverlayRendererOptions): OverlayRenderer {
   let size: RenderSize = { width: opts.width, height: opts.height, dpr: opts.dpr };
   let overlays: MapOverlay[] = [];
+  let viewport: Partial<ViewportTransform> | null = null;
   let rafId: number | null = null;
   let stopped = false;
   const meter = new FpsMeter();
@@ -211,7 +348,7 @@ function createMainThreadRenderer(canvas: HTMLCanvasElement, opts: OverlayRender
 
   const frame = (now: number) => {
     if (stopped) return;
-    if (ctx) drawOverlayFrame(ctx, overlays, size, now);
+    if (ctx) drawOverlayFrame(ctx, overlays, size, now, viewport);
     const stats = meter.tick(now);
     if (stats) opts.onStats?.(stats);
     rafId = requestAnimationFrame(frame);
@@ -223,13 +360,133 @@ function createMainThreadRenderer(canvas: HTMLCanvasElement, opts: OverlayRender
     setOverlays: (next) => {
       overlays = next;
     },
+    setViewport: (next) => {
+      viewport = { ...DEFAULT_VIEWPORT_TRANSFORM, ...next };
+    },
     resize: (next) => {
       size = next;
       applyBackingStore(canvas, size);
     },
     destroy: () => {
       stopped = true;
+      overlays = [];
+      viewport = null;
       if (rafId !== null) cancelAnimationFrame(rafId);
     },
+  };
+}
+
+export interface OverlayBenchmarkResult {
+  fps: number;
+  frames: number;
+  jankFrames: number;
+  maxFrameDeltaMs: number;
+  backingStoreAllocations: number;
+  meetsTarget: boolean;
+}
+
+/**
+ * Benchmark harness verifying that pan/zoom viewport transforms + HP-037
+ * cluster layer overlay updates meet TARGET_FPS without jank or canvas
+ * backing-store memory growth (#958).
+ */
+export function runOverlayBenchmark({
+  overlayCount = 64,
+  frameCount = 120,
+  frameStepMs = 1000 / TARGET_FPS,
+  size = { width: 1140, height: 540, dpr: 2 },
+}: {
+  overlayCount?: number;
+  frameCount?: number;
+  frameStepMs?: number;
+  size?: RenderSize;
+} = {}): OverlayBenchmarkResult {
+  let widthWrites = 0;
+  let heightWrites = 0;
+  let backingW = 0;
+  let backingH = 0;
+  const noop = () => {};
+  const ctx: DrawContext = {
+    setTransform: noop,
+    clearRect: noop,
+    beginPath: noop,
+    arc: noop,
+    fill: noop,
+    stroke: noop,
+    save: noop,
+    restore: noop,
+    globalAlpha: 1,
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 0,
+  };
+  const fakeCanvas = {
+    get width() {
+      return backingW;
+    },
+    set width(v: number) {
+      widthWrites++;
+      backingW = v;
+    },
+    get height() {
+      return backingH;
+    },
+    set height(v: number) {
+      heightWrites++;
+      backingH = v;
+    },
+    getContext: () => ctx,
+  } as unknown as HTMLCanvasElement;
+
+  applyBackingStore(fakeCanvas, size);
+
+  const kinds: OverlayKind[] = ['pending', 'enroute', 'resolved', 'responder'];
+  const clusters = Array.from({ length: overlayCount }, (_, i) => ({
+    id: `c-${i}`,
+    properties: { cluster: i % 4 === 0, kind: kinds[i % kinds.length] },
+    geometry: {
+      coordinates: [-120 + (i * 3.5) % 240, -50 + (i * 2.1) % 100] as [number, number],
+    },
+  }));
+
+  const meter = new FpsMeter(STATS_INTERVAL_MS);
+  let lastStats: OverlayRenderStats | null = null;
+  let jankFrames = 0;
+  let maxFrameDeltaMs = 0;
+  let prevNow = 0;
+
+  for (let f = 0; f <= frameCount; f++) {
+    const now = f * frameStepMs;
+    if (f > 0) {
+      const delta = now - prevNow;
+      if (delta > maxFrameDeltaMs) maxFrameDeltaMs = delta;
+      if (delta > (1000 / TARGET_FPS) * 2) jankFrames++;
+    }
+    prevNow = now;
+
+    // Simulate continuous pan/zoom on the shared viewport transform + redundant resize check
+    const transform: ViewportTransform = {
+      scale: 1 + (f % 30) * 0.02,
+      offsetX: Math.sin(f * 0.1) * 24,
+      offsetY: Math.cos(f * 0.1) * 16,
+      zoom: 4 + (f % 10) * 0.25,
+      bounds: [-180, -85, 180, 85],
+    };
+    applyBackingStore(fakeCanvas, size);
+    const overlays = buildViewportOverlays({ clusters, size, transform });
+    drawOverlayFrame(ctx, overlays, size, now, transform);
+    const stats = meter.tick(now);
+    if (stats) lastStats = stats;
+  }
+
+  const fps = lastStats?.fps ?? meter.fps;
+  const backingStoreAllocations = Math.max(widthWrites, heightWrites);
+  return {
+    fps,
+    frames: frameCount,
+    jankFrames,
+    maxFrameDeltaMs,
+    backingStoreAllocations,
+    meetsTarget: fps >= TARGET_FPS * 0.9 && jankFrames === 0 && backingStoreAllocations === 1,
   };
 }

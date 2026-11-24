@@ -10,12 +10,16 @@ import {
   getAegisIsClaimed,
   claimAid,
   fundZone,
+  getZonePrivacyPolicy,
   getTreasurySnapshot,
   getOracleQuote,
   sanitizeWalletAddress,
   buildLocationProofZone,
   getSustainabilityStats,
+  getZonePrivacyPolicy,
+  validateAegisZone,
 } from "../lib/contract";
+import { buildCampaignZone } from "../lib/privacy";
 import {
   generateLocationProof,
   buildHumanityPublicInputsBytes,
@@ -355,6 +359,7 @@ export default function VaultDashboard() {
   const [sustainability, setSustainability] = useState(null);
   const [treasury, setTreasury] = useState([]);
   const [treasuryLoading, setTreasuryLoading] = useState(true);
+  const [zonePrivacy, setZonePrivacy] = useState(null);
 
   // Real-time multi-asset treasury reserves (#541): refresh every 15s.
   useEffect(() => {
@@ -408,6 +413,7 @@ export default function VaultDashboard() {
 
   useEffect(() => {
     loadPayout();
+    getZonePrivacyPolicy().then(setZonePrivacy).catch(() => setZonePrivacy(null));
     setLoading(false);
   }, [loadPayout]);
 
@@ -474,8 +480,41 @@ export default function VaultDashboard() {
         campaignIdBytes[i] = parseInt(idHex.slice(i * 2, i * 2 + 2), 16);
       }
 
-      // Use zero zone bounds (will be validated on-chain against stored zone)
+      // Preflight zone against differential-privacy policy (#529)
+      const policy = await getZonePrivacyPolicy().catch(() => null);
+      let zoneResult = null;
+      if (policy && policy.enabled) {
+        zoneResult = buildCampaignZone({
+          lat: 48.8566,
+          lng: 2.3522,
+          radiusMeters: 3000,
+          campaignId,
+          privacy: policy,
+        });
+
+        if (!zoneResult.ok) {
+          setMessage(`Zone rejected: ${zoneResult.reason}`);
+          setMessageType("error");
+          setContributing(false);
+          return;
+        }
+      }
+
+      // Format: box_x_min(32) | box_x_max(32) | box_y_min(32) | box_y_max(32) | campaign_id(32) = 160 bytes
       const prefix = new Uint8Array(160);
+      if (zoneResult && zoneResult.ok) {
+        const writeU64 = (offset, valStr) => {
+          let v = BigInt(valStr);
+          for (let i = 31; i >= 0; i--) {
+            prefix[offset + i] = Number(v & 0xffn);
+            v >>= 8n;
+          }
+        };
+        writeU64(0, zoneResult.box.boxXMin);
+        writeU64(32, zoneResult.box.boxXMax);
+        writeU64(64, zoneResult.box.boxYMin);
+        writeU64(96, zoneResult.box.boxYMax);
+      }
       prefix.set(campaignIdBytes, 128);
 
       const stroops = BigInt(Math.round(amountUSDC * 10_000_000));

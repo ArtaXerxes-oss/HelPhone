@@ -1,9 +1,11 @@
 /**
  * Inspects `pg_stat_user_indexes` to find unused and duplicate indexes,
  * and verifies that critical search queries use the composite indexes
- * added in migrations/20260506000000_indexes.sql (via EXPLAIN ANALYZE).
+ * added in migrations/20260506000000_indexes.sql (via EXPLAIN).
  */
 import { query } from './connection.js';
+
+type QueryFn = (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
 
 export interface IndexUsageStat {
   schemaName: string;
@@ -20,8 +22,8 @@ export interface DuplicateIndexGroup {
 }
 
 /** Indexes with zero scans since the last stats reset — candidates for removal. */
-export async function findUnusedIndexes(minAgeDays = 7): Promise<IndexUsageStat[]> {
-  const result = await query(
+export async function findUnusedIndexes(minAgeDays = 7, runQuery: QueryFn = query): Promise<IndexUsageStat[]> {
+  const result = await runQuery(
     `
     SELECT
       schemaname AS "schemaName",
@@ -32,16 +34,18 @@ export async function findUnusedIndexes(minAgeDays = 7): Promise<IndexUsageStat[
     FROM pg_stat_user_indexes
     WHERE idx_scan = 0
       AND indexrelname NOT LIKE '%_pkey'
+      AND COALESCE((SELECT stats_reset FROM pg_stat_database WHERE datname = current_database()), pg_postmaster_start_time())
+          <= now() - ($1::integer * interval '1 day')
     ORDER BY pg_relation_size(indexrelid) DESC
     `,
-    [],
+    [minAgeDays],
   );
   return result.rows as IndexUsageStat[];
 }
 
 /** Groups indexes on the same table + column set — duplicates that waste write throughput. */
-export async function findDuplicateIndexes(): Promise<DuplicateIndexGroup[]> {
-  const result = await query(
+export async function findDuplicateIndexes(runQuery: QueryFn = query): Promise<DuplicateIndexGroup[]> {
+  const result = await runQuery(
     `
     SELECT
       tablename AS "tableName",
@@ -71,13 +75,14 @@ export async function findDuplicateIndexes(): Promise<DuplicateIndexGroup[]> {
   return Array.from(bySignature.values()).filter((g) => g.indexNames.length > 1);
 }
 
-/** Runs EXPLAIN ANALYZE on `sql` and checks the plan mentions one of `expectedIndexes`. */
+/** Runs read-only EXPLAIN on `sql` and checks the plan mentions one of `expectedIndexes`. */
 export async function verifyIndexUsage(
   sql: string,
   params: unknown[],
   expectedIndexes: string[],
+  runQuery: QueryFn = query,
 ): Promise<{ usesExpectedIndex: boolean; plan: string }> {
-  const result = await query(`EXPLAIN ANALYZE ${sql}`, params);
+  const result = await runQuery(`EXPLAIN ${sql}`, params);
   const plan = result.rows.map((r: any) => r['QUERY PLAN']).join('\n');
   const usesExpectedIndex = expectedIndexes.some((idx) => plan.includes(idx));
   return { usesExpectedIndex, plan };

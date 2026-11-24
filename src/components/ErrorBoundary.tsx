@@ -1,5 +1,6 @@
 import React, { Component, ReactNode } from 'react'
 import { recordError, linkError } from '../lib/telemetry'
+import { emergencyEmit } from '../lib/heapForensics'
 
 interface Props {
   children: ReactNode
@@ -55,6 +56,9 @@ export class ErrorBoundary extends Component<Props, State> {
     if (traceId) {
       linkError(error, traceId)
     }
+
+    // Emit OOM-safe forensic census snapshot on crash path (#793 / #960)
+    emergencyEmit()
 
     // Update error count and check for cascade failures
     this.setState((prev) => {

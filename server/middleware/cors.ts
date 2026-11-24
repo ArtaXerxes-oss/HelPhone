@@ -7,7 +7,7 @@
  * - Validates ALLOWED_ORIGINS at startup (regex compile)
  */
 
-import type { Request, Response, NextFunction } from 'express'
+import type { Request, Response, NextFunction, RequestHandler } from 'express'
 import {
   CORS_MAX_AGE,
   getAllowedOriginRegexes,
@@ -22,6 +22,13 @@ export const DEFAULT_ALLOWED_ORIGINS = [
   'https://staging.helphone.com',
 ]
 
+const DEFAULT_DEV_ORIGINS = [
+  'http://localhost:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:3000',
+  'http://127.0.0.1:5173',
+]
+
 export const ALLOWED_METHODS = ['GET', 'POST', 'OPTIONS'] as const
 export const ALLOWED_HEADERS = [
   'Content-Type',
@@ -31,25 +38,72 @@ export const ALLOWED_HEADERS = [
 ] as const
 
 /**
- * Test whether a given Origin header value matches any allowed regex.
+ * Test whether a given Origin header value matches any allowed regex or string rule.
  * - No Origin header -> false (same-origin / curl; not CORS)
  * - Empty/null -> false
  */
-export function isOriginAllowed(origin: string | undefined | null, regexes: RegExp[]): boolean {
+export function isOriginAllowed(
+  origin: string | undefined | null,
+  allowed: (RegExp | string)[]
+): boolean {
   if (!origin || typeof origin !== 'string') return false
   const trimmed = origin.trim()
   if (!trimmed) return false
-  return regexes.some((re) => re.test(trimmed))
+
+  return allowed.some((rule) => {
+    if (rule instanceof RegExp) {
+      return rule.test(trimmed)
+    }
+    if (rule === '*' || rule === trimmed) return true
+    if (typeof rule === 'string' && rule.startsWith('*.')) {
+      const suffix = rule.slice(1)
+      return trimmed.endsWith(suffix) && trimmed.length > suffix.length
+    }
+    return false
+  })
 }
 
-/**
- * Build an array of RegExps from a raw comma-separated env string or array.
- * Public helper for tests and server/env integration.
- */
 export function buildOriginRegexes(input: string | string[]): RegExp[] {
   const patterns: string[] =
     typeof input === 'string' ? parseAllowedOrigins(input) : input
   return patterns.map(compileOriginPattern).filter(Boolean) as RegExp[]
+}
+
+export interface CorsOptions {
+  allowedOrigins?: string | string[]
+  allowedPatterns?: string[]
+  maxAge?: number
+  maxAgeSeconds?: number
+  allowedMethods?: string[]
+  methods?: string[]
+  allowedHeaders?: string[]
+  exposedHeaders?: string[]
+  credentials?: boolean
+  dev?: boolean
+  rejectUnknown?: boolean
+}
+
+export function resolveAllowedOrigins(options: CorsOptions = {}): string[] {
+  const fromEnv = process.env.ALLOWED_ORIGINS
+    ? parseAllowedOrigins(process.env.ALLOWED_ORIGINS)
+    : []
+  const dev = options.dev ?? process.env.NODE_ENV !== 'production'
+  const explicit = Array.isArray(options.allowedOrigins)
+    ? options.allowedOrigins
+    : typeof options.allowedOrigins === 'string'
+      ? parseAllowedOrigins(options.allowedOrigins)
+      : []
+  return [...DEFAULT_ALLOWED_ORIGINS, ...(dev ? DEFAULT_DEV_ORIGINS : []), ...explicit, ...fromEnv]
+}
+
+export function corsPreflightFallback(): RequestHandler {
+  return (req, res, next) => {
+    if (req.method === 'OPTIONS') {
+      res.status(204).end()
+      return
+    }
+    next()
+  }
 }
 
 /**
@@ -57,24 +111,18 @@ export function buildOriginRegexes(input: string | string[]): RegExp[] {
  * - Caches regexes at construction so per-request work is O(#patterns) re.test
  * - Sets Vary: Origin so caches correctly partition by origin
  */
-export interface CorsOptions {
-  allowedOrigins?: string // raw env string or comma-separated list
-  allowedPatterns?: string[] // explicit pattern list (overrides allowedOrigins)
-  maxAge?: number
-  allowedMethods?: string[]
-  allowedHeaders?: string[]
-}
-
 export function createCorsMiddleware(opts: CorsOptions = {}) {
   const patterns = opts.allowedPatterns
     ? opts.allowedPatterns
     : opts.allowedOrigins
-      ? parseAllowedOrigins(opts.allowedOrigins)
+      ? Array.isArray(opts.allowedOrigins)
+        ? opts.allowedOrigins
+        : parseAllowedOrigins(opts.allowedOrigins)
       : getAllowedOriginPatterns()
 
   const regexes = patterns.map(compileOriginPattern).filter(Boolean) as RegExp[]
-  const maxAge = opts.maxAge ?? MAX_AGE
-  const methods = opts.allowedMethods ?? [...ALLOWED_METHODS]
+  const maxAge = opts.maxAge ?? opts.maxAgeSeconds ?? MAX_AGE
+  const methods = opts.allowedMethods ?? opts.methods ?? [...ALLOWED_METHODS]
   const headers = opts.allowedHeaders ?? [...ALLOWED_HEADERS]
 
   // Validate at construction – fail fast if env mis-configured
@@ -90,11 +138,7 @@ export function createCorsMiddleware(opts: CorsOptions = {}) {
 
     // If no Origin header, this is not a CORS request – pass through
     if (!origin) {
-      // For OPTIONS without Origin (non-CORS preflight), just continue to allow 204 handling?
-      // We still want to handle OPTIONS preflight explicitly if it's CORS; without Origin we treat as normal.
       if (req.method === 'OPTIONS') {
-        // Provide generic CORS headers for non-origin OPTIONS to avoid hanging
-        // but do not echo Origin
         res.setHeader('Access-Control-Allow-Methods', methods.join(', '))
         res.setHeader('Access-Control-Allow-Headers', headers.join(', '))
         res.setHeader('Access-Control-Max-Age', String(maxAge))
@@ -106,40 +150,31 @@ export function createCorsMiddleware(opts: CorsOptions = {}) {
     const allowed = isOriginAllowed(origin, regexes)
 
     if (!allowed) {
-      // Unauthorized origin: do not set ACAO.
-      // For preflight OPTIONS, explicitly reject so browser cannot cache a permissive response.
       if (req.method === 'OPTIONS') {
-        // Do NOT set ACAO; tell caches not to store this denial via Max-Age omission
-        // Return 403 with JSON to make automated security tests deterministic
-        // (spec says "unauthorized origins are rejected")
         res.setHeader('Access-Control-Allow-Methods', methods.join(', '))
-        // Intentionally omit Access-Control-Allow-Origin and Access-Control-Max-Age
         return res.status(403).json({
           success: false,
           error: 'Origin not allowed by CORS policy',
         })
       }
-      // For simple CORS requests, proceed without CORS headers – browser will block response
+      if (opts.rejectUnknown) {
+        return res.status(403).json({ error: 'cors_origin_denied', origin })
+      }
       return next()
     }
 
-    // Allowed origin – set CORS headers
     res.setHeader('Access-Control-Allow-Origin', origin)
-    // #753: Allow credentials for Stellar wallet popups with postMessage
-    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Access-Control-Allow-Credentials', opts.credentials !== false ? 'true' : 'false')
     res.setHeader('Access-Control-Allow-Methods', methods.join(', '))
     res.setHeader('Access-Control-Allow-Headers', headers.join(', '))
-    // Only set Max-Age on preflight responses (per spec, but also harmless on simple requests)
-    // We set it always when allowed to aid caching; spec says preflight caching
+    if (opts.exposedHeaders?.length) {
+      res.setHeader('Access-Control-Expose-Headers', opts.exposedHeaders.join(', '))
+    }
     if (req.method === 'OPTIONS') {
       res.setHeader('Access-Control-Max-Age', String(maxAge))
-      // Successful preflight -> 204 No Content (fetch spec)
       return res.status(204).end()
     }
 
-    // For non-OPTIONS allowed requests, still set Max-Age is not needed but we set ACAO
-    // Set Max-Age only on OPTIONS per spec; but some browsers cache via header on preflight only
-    // Keep it simple: do not set Max-Age on simple requests
     return next()
   }
 

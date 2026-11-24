@@ -1,0 +1,45 @@
+{
+  "issue": "#893",
+  "generatedAt": "2026-11-23T18:11:23.719Z",
+  "environment": {
+    "node": "v22.19.0",
+    "cpu": "Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz",
+    "cores": 8
+  },
+  "network": {
+    "rows": 317,
+    "cols": 317,
+    "features": 184326,
+    "nodeCount": 100473,
+    "edgeCount": 343074
+  },
+  "tile": {
+    "weighting": "time",
+    "maxSpeedKmh": 60,
+    "bytes": 7733952,
+    "mib": 7.38,
+    "buildMs": 3168,
+    "rebuildShuffledMs": 3783,
+    "sha256": "74b82f51d38001d60cf016051349833444638391ecf237f335a4262e9f7f1a8a",
+    "reproducible": true
+  },
+  "queries": {
+    "count": 200,
+    "reachable": 200,
+    "meanExpanded": 27590,
+    "workerQueryMs": {
+      "n": 200,
+      "mean": 9.716,
+      "p50": 7.931,
+      "p95": 25.106,
+      "max": 30.547
+    },
+    "roundTripMs": {
+      "n": 200,
+      "mean": 10.598,
+      "p50": 9.024,
+      "p95": 25.954,
+      "max": 31.376
+    }
+  }
+}

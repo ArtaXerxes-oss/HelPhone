@@ -25,15 +25,17 @@ import {
   MAX_X,
   MAX_Y,
   alignZone,
+  buildCampaignZone,
   buildPrivateLocationProofZone,
   checkOverlap,
+  computeOverlap,
   laplaceScale,
   minBoxDimension,
   validateParams,
   validateZone,
   violationFromVaultError,
 } from "../src/lib/privacy.js";
-import { buildLocationProofZone } from "../src/lib/zk.js";
+import { buildLocationProofZone } from "../src/lib/zk";
 
 const ON = { ...DEFAULT_ZONE_PRIVACY, enabled: true };
 const MIN = 300_000n; // default: b = 100_000, t = 3
@@ -329,5 +331,61 @@ describe("getZonePrivacyPolicy (contract.js)", () => {
     });
     // The JS mirror agrees with the contract's own answer.
     expect(minBoxDimension({ ...ON, epsilonMilli: 500 })).toBe(600_000n);
+  });
+});
+
+describe("computeOverlap & buildCampaignZone", () => {
+  it("computeOverlap computes exact geometry and cells matching privacy.rs", () => {
+    const a = square(100_000n, 100_000n, 400_000n);
+    const b = square(200_000n, 200_000n, 400_000n);
+    const res = computeOverlap(a, b, ON);
+    expect(res.disjoint).toBe(false);
+    expect(res.width).toBe(300_000n);
+    expect(res.height).toBe(300_000n);
+    expect(res.cells).toBe(900n); // (300_000/10_000)^2 = 30 * 30 = 900
+    expect(res.ok).toBe(true);
+
+    const sliver = computeOverlap(a, square(450_000n, 100_000n, 400_000n), ON);
+    expect(sliver.ok).toBe(false);
+    expect(sliver.error).toBe("overlap_too_small");
+    expect(sliver.width).toBe(50_000n); // < MIN (300_000)
+  });
+
+  it("buildCampaignZone snaps edges outward and preflights compliance", () => {
+    // Starting with a 10_000 x 10_000 box (too small for Laplace floor of 300_000)
+    const small = square(105_000n, 105_000n, 10_000n);
+    const res = buildCampaignZone({
+      bounds: small,
+      campaignId: "42",
+      privacy: ON,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.aligned).toBe(true);
+    // Snapped outward to grid (multiples of 10_000) and widened to at least 300_000
+    const w = BigInt(res.box.boxXMax) - BigInt(res.box.boxXMin);
+    const h = BigInt(res.box.boxYMax) - BigInt(res.box.boxYMin);
+    expect(w).toBeGreaterThanOrEqual(MIN);
+    expect(h).toBeGreaterThanOrEqual(MIN);
+    expect(BigInt(res.box.boxXMin) % 10_000n).toBe(0n);
+    expect(BigInt(res.box.boxYMin) % 10_000n).toBe(0n);
+
+    // The aligned box never makes the region finer than policy floor
+    expect(w).toBe(300_000n);
+    expect(h).toBe(300_000n);
+  });
+
+  it("buildCampaignZone rejects overlap with existing zones that violates k-anonymity", () => {
+    const existing = square(100_000n, 100_000n, 400_000n);
+    // Proposed zone overlaps existing by only 50_000 units on X
+    const proposed = square(450_000n, 100_000n, 400_000n);
+    const res = buildCampaignZone({
+      bounds: proposed,
+      campaignId: "99",
+      privacy: ON,
+      existingZones: [existing],
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toBe("overlap_too_small");
+    expect(res.reason).toContain("k-anonymity");
   });
 });

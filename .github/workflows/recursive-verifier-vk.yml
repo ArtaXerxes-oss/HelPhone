@@ -1,0 +1,66 @@
+name: Recursive verifier VK pin
+
+# #938 / ISP-051: the recursive verifier pins the inner responder_credential
+# verification key. This job recompiles the circuit, fails if the recompile is
+# not byte-identical to the tracked artifact, then fails if the recomputed VK
+# hash drifts from circuits/recursive_verifier/inner-vk.json.
+on:
+  pull_request:
+    paths:
+      - 'circuits/**'
+      - 'scripts/check-recursive-verifier-vk.mjs'
+      - 'src/utils/zkProver.js'
+      - 'crypto-pins.json'
+      - 'package-lock.json'
+      - '.github/workflows/recursive-verifier-vk.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'circuits/**'
+      - 'scripts/check-recursive-verifier-vk.mjs'
+      - 'src/utils/zkProver.js'
+      - 'crypto-pins.json'
+      - 'package-lock.json'
+      - '.github/workflows/recursive-verifier-vk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inner-vk-pin:
+    name: Inner VK pin matches the reproducible circuit build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      # Pinned to the toolchain in crypto-pins.json and the recursive_verifier
+      # header: nargo 1.0.0-beta.9. Other versions break the verifier.
+      - name: Install nargo 1.0.0-beta.9
+        run: |
+          curl -L https://raw.githubusercontent.com/noir-lang/noirup/main/install | bash
+          "$HOME/.nargo/bin/noirup" -v 1.0.0-beta.9
+          echo "$HOME/.nargo/bin" >> "$GITHUB_PATH"
+
+      - name: Install dependencies (no lifecycle scripts)
+        run: npm ci --ignore-scripts
+
+      - name: Recompile the circuits from source
+        run: bash circuits/recursive_verifier/build.sh
+
+      - name: "Reproducibility: the recompile must match the tracked artifact"
+        run: |
+          if ! git diff --exit-code -- circuits/responder_credential/target/responder_credential.json; then
+            echo "✗ responder_credential recompile is not reproducible: the rebuilt artifact differs from the tracked one."
+            echo "  Rebuild on the pinned toolchain and commit the artifact in the same PR."
+            exit 1
+          fi
+          echo "✓ responder_credential artifact is reproducible"
+
+      - name: Inner VK hash matches the committed pin
+        run: node scripts/check-recursive-verifier-vk.mjs

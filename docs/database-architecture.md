@@ -137,6 +137,10 @@ vacuums and re-indexes bloated tables during a low-traffic window.
 | `DB_MAINTENANCE_INTERVAL_MS` | `900000` | Tick interval |
 | `DB_REINDEX_COOLDOWN_MS` | `604800000` | Min gap between re-indexes of a table |
 | `DB_MAINTENANCE_MIN_TUPLES` | `1000` | Skip tiny tables |
+| `DB_PARTITION_EVICTION_ENABLED` | `false` | Enable hold-aware partition eviction |
+| `DB_PARTITION_EVICTION_DRY_RUN` | `false` | Report candidates without detaching |
+| `DB_PARTITION_RETENTION_DAYS` | `90` | Minimum partition age |
+| `DB_PARTITION_REVERSAL_DAYS` | `7` | Detach reversal window |
 
 Invalid values fall back to the default. `pg_stat_user_tables` counters are
 estimates, so the percentage is approximate. Per-table autovacuum tuning is
@@ -184,11 +188,16 @@ During disaster spikes, bulk rejoin operations and telemetry heartbeats can driv
 Every response from `/api/history` contains:
 - `X-Replica-Lag-Ms`: Replay lag in milliseconds (sampled with 1s cache).
 - `X-As-Of-LSN`: Log Sequence Number of the current replica replay position.
-- `X-Next-Cursor`: Keyset cursor for the subsequent page.
+- `X-Next-Cursor`: Keyset cursor for the subsequent page. The header is always present. An empty value means this is the last page.
+
+A 209 response (lag over budget with the primary reserve exhausted) carries
+`Retry-After: 5` and a JSON body with `tier` (`lagging` or `severe`). The
+`severe` tier (over 30s) is the point where the client shows the `⚠️ Stale ~Xs`
+badge and asks for dispatch confirmation (`src/lib/replicaLag.js`).
 
 ## 2. Monotonic History: Keyset Cursor Pagination
 
-`LIMIT / OFFSET` pagination across moving replication boundaries produces phantom holes and duplicate rows. HelPhone enforces keyset cursor pagination:
+`LIMIT / OFFSET` pagination across moving replication boundaries produces phantom holes and duplicate rows. HelPhone enforces keyset cursor pagination. Every history list, including `/api/history/events`, orders by `(server_seq, id)`. The `page` offset parameter is no longer honoured, and a malformed `cursor` returns 400.
 
 ```sql
 SELECT id, server_seq, op_id, status, details, created_at
@@ -226,6 +235,9 @@ To prevent replay duplicates or dropped batches across daemon restarts and failo
    COMMIT;
    ```
 3. **Parser Gap Detector (`server/indexer/parser.ts`):** Validates monotonic per-client clock sequences. Any non-contiguous clock step records an event in `indexer_gap_log` and triggers an out-of-band backfill request rather than silently dropping batches.
+   - `server/indexer/backfill.ts` does the recording and the request. `ingestDispatchOps` records each gap once (even on replay) and still projects the whole batch. `runBackfillPass` fetches the missing clocks through an injected fetcher, marks a gap resolved only when its full range is present, and never moves `indexer_checkpoint`. `startBackfillScheduler` runs the pass on an interval.
+   - On startup, seed the detector with `seedClockHighWaterMarks(await loadClockHighWaterMarks(db))`. Without that seed, the first op after a restart looks like a gap back to clock 1.
+   - The source of missing ops is a deployment decision and is injected. No production caller of `projectDispatchBatch` exists in this repo yet.
 
 ## 4. Runbook: Replication Slot Bloat Break-Glass
 

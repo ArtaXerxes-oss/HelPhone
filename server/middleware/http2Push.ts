@@ -476,15 +476,28 @@ function sendPushedAsset(pushStream: PushStreamLike, filePath: string, asset: Pu
     return
   }
 
-  const file = createReadStream(filePath)
-  file.on('error', () => {
+  if (typeof (pushStream as any).write === 'function') {
+    const file = createReadStream(filePath)
+    file.on('error', () => {
+      try {
+        pushStream.end()
+      } catch {
+        /* stream already closed */
+      }
+    })
+    file.pipe(pushStream as unknown as NodeJS.WritableStream)
+  } else {
     try {
-      pushStream.end()
+      const data = readFileSync(filePath)
+      pushStream.end(data)
     } catch {
-      /* stream already closed */
+      try {
+        pushStream.end()
+      } catch {
+        /* stream already closed */
+      }
     }
-  })
-  file.pipe(pushStream as unknown as NodeJS.WritableStream)
+  }
 }
 
 /**
@@ -581,3 +594,108 @@ export function createHttp2PushMiddleware(options: Http2PushOptions = {}): Reque
 }
 
 export default createHttp2PushMiddleware
+
+// HEAD compatibility exports
+export interface PushOptions {
+  maxAssets?: number;
+  assets?: string[] | ((req: Request) => string[]);
+  enablePush?: boolean;
+  publicOrigin?: string;
+}
+
+const PUSHABLE_RE = /\.(?:css|js|mjs|woff2?|ttf|png|jpe?g|webp|avif|svg|ico)(?:\?.*)?$/i;
+
+export function isSameOrigin(url: string, origin = 'https://helphone.com'): boolean {
+  try {
+    return new URL(url, origin).origin === new URL(origin).origin;
+  } catch {
+    return false;
+  }
+}
+
+export function isPushableAsset(url: string, origin?: string): boolean {
+  if (!url || typeof url !== 'string') return false;
+  if (url.startsWith('//') || /^[a-z][a-z0-9+.-]*:/i.test(url)) return false;
+  if (url.startsWith('/api/') || url.startsWith('/graphql') || url.startsWith('/metrics')) return false;
+  if (!PUSHABLE_RE.test(url.split('?')[0])) return false;
+  return isSameOrigin(url, origin);
+}
+
+export function selectPushAssets(
+  candidates: string[],
+  options: { maxAssets?: number; origin?: string } = {},
+): string[] {
+  const max = Math.max(0, Math.min(20, options.maxAssets ?? 5));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const candidate of candidates) {
+    if (!isPushableAsset(candidate, options.origin)) continue;
+    const key = candidate.split('?')[0];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+export function canPushRequest(req: Request): boolean {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  if (req.headers.cookie || req.headers.authorization) return false;
+  if (String(req.headers['cache-control'] || '').includes('no-cache')) return false;
+  if (req.headers['service-worker']) return false;
+  return true;
+}
+
+export function sanitizePushHeaders(headers: Record<string, unknown> = {}): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    if (lower === 'cookie' || lower === 'authorization' || lower === 'proxy-authorization') continue;
+    if (value === undefined || value === null) continue;
+    out[key] = String(value);
+  }
+  return out;
+}
+
+export function http2Push(options: PushOptions = {}) {
+  const maxAssets = options.maxAssets ?? 5;
+  return function pushAssetsMiddleware(req: Request, res: Response, next: NextFunction) {
+    if (!canPushRequest(req)) {
+      next();
+      return;
+    }
+    const acceptsHtml = String(req.headers.accept || '').includes('text/html');
+    if (!acceptsHtml) {
+      next();
+      return;
+    }
+
+    const configured = typeof options.assets === 'function' ? options.assets(req) : options.assets ?? [];
+    const fromLocals = Array.isArray(res.locals.pushAssets) ? res.locals.pushAssets : [];
+    const assets = selectPushAssets([...configured, ...fromLocals], {
+      maxAssets,
+      origin: options.publicOrigin,
+    });
+
+    if (assets.length > 0) {
+      res.setHeader(
+        'Link',
+        assets.map((asset) => `<${asset}>; rel=preload; as=${asset.endsWith('.css') ? 'style' : asset.endsWith('.woff2') ? 'font' : 'script'}`).join(', '),
+      );
+    }
+
+    const push = (res as unknown as { push?: (path: string, opts: unknown) => unknown }).push;
+    const enabled = options.enablePush ?? process.env.HTTP2_PUSH === '1';
+    if (enabled && typeof push === 'function') {
+      for (const asset of assets) {
+        try {
+          push.call(res, asset, { request: { headers: sanitizePushHeaders(req.headers as Record<string, unknown>) } });
+        } catch {
+          break;
+        }
+      }
+    }
+    next();
+  };
+}

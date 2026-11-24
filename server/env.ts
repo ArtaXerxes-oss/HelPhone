@@ -6,7 +6,7 @@
  */
 import { z } from 'zod';
 
-const serverEnvSchema = z.object({
+export const serverEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   PORT: z.coerce.number().int().positive().default(3001),
   DATABASE_URL: z.string().url(),
@@ -15,6 +15,22 @@ const serverEnvSchema = z.object({
   SUPABASE_URL: z.string().url().optional(),
   SUPABASE_SERVICE_KEY: z.string().min(1).optional(),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
+  SESSION_SECRET: z.string().min(32).optional(),
+  METRICS_BEARER_TOKEN: z.string().min(16).optional(),
+  WHITELIST_ADMIN_TOKEN: z.string().min(16).optional(),
+  REDIS_URL: z.string().url().optional(),
+  TURN_URLS: z.string().optional(),
+  TURN_USERNAME: z.string().optional(),
+  TURN_CREDENTIAL: z.string().optional(),
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  STELLAR_RPC_URL: z.string().url().optional(),
+  STELLAR_RPC_FALLBACK_URLS: z.string().optional(),
+}).superRefine((env, ctx) => {
+  if (env.NODE_ENV !== 'production') return;
+  for (const key of ['SESSION_SECRET', 'METRICS_BEARER_TOKEN', 'WHITELIST_ADMIN_TOKEN'] as const) {
+    if (!env[key]) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [key], message: 'required in production' });
+  }
 });
 
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
@@ -63,6 +79,10 @@ export interface MaintenanceConfig {
   intervalMs: number;
   reindexCooldownMs: number;
   minTableTuples: number;
+    partitionEvictionEnabled?: boolean;
+    partitionRetentionDays?: number;
+    partitionReversalDays?: number;
+    partitionEvictionDryRun?: boolean;
 }
 
 function envNumber(raw: string | undefined, fallback: number, bounds: { min: number; max: number }): number {
@@ -80,5 +100,9 @@ export function getMaintenanceConfig(env: NodeJS.ProcessEnv = process.env): Main
     intervalMs: envNumber(env.DB_MAINTENANCE_INTERVAL_MS, 15 * 60_000, { min: 1_000, max: 24 * 3_600_000 }),
     reindexCooldownMs: envNumber(env.DB_REINDEX_COOLDOWN_MS, 7 * 24 * 3_600_000, { min: 0, max: 365 * 24 * 3_600_000 }),
     minTableTuples: envNumber(env.DB_MAINTENANCE_MIN_TUPLES, 1_000, { min: 0, max: Number.MAX_SAFE_INTEGER }),
+      partitionEvictionEnabled: env.DB_PARTITION_EVICTION_ENABLED === 'true',
+      partitionRetentionDays: envNumber(env.DB_PARTITION_RETENTION_DAYS, 90, { min: 1, max: 3650 }),
+      partitionReversalDays: envNumber(env.DB_PARTITION_REVERSAL_DAYS, 7, { min: 1, max: 90 }),
+      partitionEvictionDryRun: env.DB_PARTITION_EVICTION_DRY_RUN === 'true',
   };
 }

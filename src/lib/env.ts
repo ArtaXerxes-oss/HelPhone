@@ -6,12 +6,14 @@
  */
 import { z } from 'zod';
 
-const clientEnvSchema = z.object({
+export const clientEnvSchema = z.object({
   VITE_STELLAR_NETWORK: z.enum(['testnet', 'mainnet']).default('testnet'),
   VITE_SUPABASE_URL: z.string().url().optional(),
   VITE_SUPABASE_ANON_KEY: z.string().min(1).optional(),
   VITE_MAPBOX_TOKEN: z.string().min(1).optional(),
   VITE_API_BASE_URL: z.string().url().optional(),
+  VITE_SERVER_URL: z.string().url().optional(),
+  VITE_EVENTS_URL: z.string().url().optional(),
 });
 
 export type ClientEnv = z.infer<typeof clientEnvSchema>;

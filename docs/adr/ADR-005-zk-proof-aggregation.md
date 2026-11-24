@@ -3,6 +3,7 @@
 - **Status:** Proposed (spike #605 complete)
 - **Date:** 2026-09-23
 - **Evidence:** [Spike report](../spikes/605-zk-circuit-complexity-benchmark.md) · [raw results](../spikes/results/zk-aggregation.json) · `scripts/spikes/zk_aggregation_benchmark.js`
+**Evidence check:** `zk-aggregation.json#/inner/verifyAllFiveMs = 214`
 - **Prototype:** `circuits/responder_credential/`, `circuits/recursive_verifier/`, `src/utils/zkProver.js`
 
 ## Context

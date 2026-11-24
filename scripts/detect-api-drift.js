@@ -39,7 +39,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
+import * as tsNamespace from "typescript";
+const ts = tsNamespace.default || tsNamespace;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = path.resolve(HERE, "..");

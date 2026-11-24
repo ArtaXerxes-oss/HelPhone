@@ -25,19 +25,12 @@
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
-/** Deterministic, order-independent digest of a Map's visible state. */
-export function stateDigest(map) {
-  const keys = [...map.keys()].sort();
-  let h = 0x811c9dc5;
-  for (const k of keys) {
-    const s = k + "=" + JSON.stringify(map.get(k)) + ";";
-    for (let i = 0; i < s.length; i++) {
-      h ^= s.charCodeAt(i);
-      h = Math.imul(h, 0x01000193);
-    }
-  }
-  return (h >>> 0).toString(16) + ":" + keys.length;
-}
+// stateDigest now lives in src/lib/syncIntegrity.js so the server can compute
+// the same convergence digest (#932). Re-exported here for existing callers.
+import { stateDigest, sha256Hex, isValidVector, sumVector, vectorAdvances, opIdentity } from "../lib/syncIntegrity.js";
+import { createJoinReceipt, verifyJoinCompleteness } from "../lib/joinReceipt.js";
+import { requestPersistentStorage } from "./storagePolicy.js";
+export { stateDigest };
 
 /** UTF-8 byte length of the JSON wire encoding. */
 export function wireSize(payload) {
@@ -262,13 +255,17 @@ export class StateVectorDoc {
    * @param {string[]} [roster] every replica id that may still sync
    * @param {Record<string, number>} [tombstoneSV] full-roster stable vector
    *   (defaults to `stableSV`, correct when it already spans the roster)
+   * @param {string[]} [retired] clients removed from the roster for good
+   *   (#894). They are left out of condition 2: the caller guarantees none of
+   *   their ops will be integrated again, so none can be in flight.
    */
-  prune(stableSV, roster = [], tombstoneSV = stableSV) {
+  prune(stableSV, roster = [], tombstoneSV = stableSV, retired = []) {
     let droppedOps = 0;
     let droppedTombstones = 0;
     let horizon = Infinity;
+    const skip = new Set(retired);
     for (const client of new Set([...this.sv.keys(), ...Object.keys(tombstoneSV), ...roster]))
-      horizon = Math.min(horizon, this.#lamportFloor(client, tombstoneSV[client] || 0));
+      if (!skip.has(client)) horizon = Math.min(horizon, this.#lamportFloor(client, tombstoneSV[client] || 0));
 
     for (const [client, ops] of this.log) {
       const stable = stableSV[client] || 0;
@@ -516,73 +513,246 @@ export class OtClient {
 }
 
 /**
- * Actionable-first, paged, resumable hydration protocol (ISP-066).
+ * Actionable-first, paged, resumable hydration protocol (ISP-066, #930–#932).
  *
- * 1. Fetches actionable slice (today's open dispatches, <1MB) first -> actionable in <20s.
- * 2. Fetches latest snapshot if cold boot.
- * 3. Fetches deltas paged (500 ops per page) with state-vector checkpoints to storage.
- * 4. Yields progress updates and bounds memory (<250MB heap).
+ * 1. Fetches the actionable slice (today's open dispatches, <1MB) first.
+ * 2. Resumes from a valid checkpoint, or cold-starts from the base snapshot.
+ * 3. Pages deltas (500 ops per page). Each page is checksum-verified, deduped
+ *    by operation identity, applied, and committed together with its vector.
+ * 4. On completion, emits a join receipt and verifies it against the server.
+ *
+ * Integrity rules:
+ * - A snapshot or page whose checksum does not match is rejected before any op
+ *   is applied, and the checkpoint is not advanced (HydrationIntegrityError).
+ * - A checkpoint that is not a valid vector, or cannot be read, is discarded
+ *   and the device cold-starts from the snapshot.
+ * - Paging that stops advancing is an error, never an infinite loop.
+ *
+ * Durability: pass `opsLog` (a HydrationStore) to make resume exact. Each page's
+ * ops and its checkpoint vector are committed in one transaction, and a resume
+ * replays the log before fetching the remaining pages. Without `opsLog`, the
+ * checkpoint is written through `storage` alone, and the caller must keep the
+ * applied state durable itself.
  */
+
+const CHECKPOINT_KEY = 'crdt_resume_vector';
+
+export class HydrationIntegrityError extends Error {
+  constructor(reason, detail = {}) {
+    super(`Hydration integrity check failed: ${reason}`);
+    this.name = 'HydrationIntegrityError';
+    this.reason = reason;
+    this.detail = detail;
+  }
+}
+
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+// The server hashes JSON.stringify(ops). Re-stringifying the parsed array yields
+// the same bytes, so the client recomputes exactly what the server hashed.
+async function verifyChecksum(ops, expected, kind) {
+  const actual = await sha256Hex(JSON.stringify(ops));
+  if (typeof expected !== 'string' || actual !== expected) {
+    throw new HydrationIntegrityError(`${kind}_checksum_mismatch`, { expected, actual });
+  }
+}
+
+function assertWellFormed(ops, kind) {
+  for (const op of ops) {
+    if (!op || typeof op.actor !== 'string' || !Number.isSafeInteger(op.counter) || op.counter < 1) {
+      throw new HydrationIntegrityError(`${kind}_malformed_op`);
+    }
+  }
+}
+
+/** Drops operations already seen in this run or replayed from the log. */
+function takeFresh(ops, seen, stats) {
+  const fresh = [];
+  for (const op of ops) {
+    const id = opIdentity(op);
+    if (seen.has(id)) {
+      stats.duplicatesSkipped++;
+      continue;
+    }
+    seen.add(id);
+    fresh.push(op);
+  }
+  return fresh;
+}
+
+function applyOps(doc, ops) {
+  if (!doc || ops.length === 0) return;
+  if (typeof doc.merge === 'function') doc.merge(ops);
+  else if (typeof doc.applyUpdate === 'function') doc.applyUpdate({ type: 'delta', ops });
+}
+
+/**
+ * Lifts the doc's own clock to the server vector so a new local write never
+ * reuses a counter the server already holds. Compacted snapshots omit
+ * superseded ops, so the doc's clock can otherwise lag behind the vector.
+ */
+function raiseLocalClock(doc, vector) {
+  if (!doc || !doc.clock || typeof doc.clock !== 'object') return;
+  for (const [key, counter] of Object.entries(vector)) {
+    doc.clock[key] = Math.max(doc.clock[key] ?? 0, counter);
+  }
+}
+
+async function readCheckpoint(storage) {
+  if (!storage || typeof storage.getItem !== 'function') return { status: 'absent' };
+  let raw;
+  try {
+    raw = await storage.getItem(CHECKPOINT_KEY);
+  } catch {
+    return { status: 'corrupt', reason: 'checkpoint_unreadable' };
+  }
+  if (raw === null || raw === undefined) return { status: 'absent' };
+  try {
+    const parsed = JSON.parse(raw);
+    if (isValidVector(parsed)) return { status: 'valid', vector: parsed };
+  } catch {
+    // Malformed JSON falls through to the corrupt result below.
+  }
+  return { status: 'corrupt', reason: 'checkpoint_malformed' };
+}
+
+async function commitPage({ storage, opsLog, ops, vector }) {
+  const value = JSON.stringify(vector);
+  if (opsLog && typeof opsLog.commitPage === 'function') {
+    await opsLog.commitPage(ops, CHECKPOINT_KEY, value);
+    return;
+  }
+  if (storage && typeof storage.setItem === 'function') {
+    await storage.setItem(CHECKPOINT_KEY, value);
+  }
+}
+
+async function resetCheckpoint(storage, opsLog) {
+  if (opsLog && typeof opsLog.clearOps === 'function') await opsLog.clearOps();
+  if (storage && typeof storage.removeItem === 'function') await storage.removeItem(CHECKPOINT_KEY);
+}
+
+async function verifyReceiptAgainstServer(receipt, { apiBase, fetcher, abortSignal }) {
+  try {
+    const res = await fetcher(`${apiBase}/sync/digest`, { signal: abortSignal });
+    if (!res.ok) return { complete: false, reason: 'digest_unavailable' };
+    const expected = await res.json();
+    if (!Number.isFinite(expected?.highwater) || typeof expected?.hash !== 'string') {
+      return { complete: false, reason: 'digest_malformed' };
+    }
+    return verifyJoinCompleteness(receipt, { highwater: expected.highwater, hash: expected.hash });
+  } catch {
+    return { complete: false, reason: 'digest_unavailable' };
+  }
+}
+
 export async function hydratePaged({
   doc,
   apiBase = '/api',
   fetcher = globalThis.fetch,
   pageSize = 500,
   storage = null,
+  opsLog = null,
   onProgress = () => {},
   abortSignal = null,
+  verifyReceipt = true,
+  requestPersistence = requestPersistentStorage,
+  onPersistence = () => {},
 } = {}) {
-  let actionableItems = [];
-  let currentVector = doc ? (typeof doc.stateVector === 'function' ? doc.stateVector() : doc.clock || {}) : {};
-
-  // Check if storage holds a saved resume vector
-  if (storage && typeof storage.getItem === 'function') {
-    try {
-      const saved = await storage.getItem('crdt_resume_vector');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') currentVector = { ...currentVector, ...parsed };
-      }
-    } catch (_err) {
-      // Fallback if resume vector cannot be read
-    }
+  const startedAt = now();
+  // #895: joining an incident is the moment its offline data starts to
+  // matter, so ask (once per origin) for storage the browser will not evict.
+  // Never awaited on the hot path and never fatal: a denied request still
+  // lets the join proceed on best-effort storage.
+  if (typeof requestPersistence === 'function') {
+    Promise.resolve()
+      .then(() => requestPersistence({ trigger: 'incident-join' }))
+      .then((state) => onPersistence(state))
+      .catch(() => {});
   }
+  const stats = { totalFetched: 0, duplicatesSkipped: 0, discardedOps: 0 };
+  const seen = new Set();
+  let actionableItems = [];
+  let timeToActionableMs = null;
+  let snapshotId = null;
 
-  // Phase 1: Actionable-first slice (<1MB)
+  // Phase 1: actionable slice first. Non-fatal if it fails.
   onProgress({ phase: 'actionable', percent: 10, message: 'Fetching open dispatches' });
   try {
     const actRes = await fetcher(`${apiBase}/dispatch?slice=open-today`, { signal: abortSignal });
     if (actRes.ok) {
       actionableItems = await actRes.json();
-      onProgress({ phase: 'actionable_ready', percent: 25, actionableCount: actionableItems.length });
+      timeToActionableMs = now() - startedAt;
+      onProgress({
+        phase: 'actionable_ready',
+        percent: 25,
+        actionableCount: actionableItems.length,
+        timeToActionableMs,
+      });
     }
-  } catch (_err) {
-    // Non-fatal fallback for actionable slice
+  } catch {
+    // Non-fatal fallback for the actionable slice.
   }
 
-  // Phase 2: Latest snapshot if vector is empty
-  const isCold = !currentVector || Object.keys(currentVector).length === 0;
-  if (isCold) {
+  // Phase 2: decide between resuming and a cold start.
+  let currentVector = {};
+  let resumed = false;
+  const checkpoint = await readCheckpoint(storage);
+  if (checkpoint.status === 'valid') {
+    currentVector = checkpoint.vector;
+    try {
+      if (opsLog && typeof opsLog.replay === 'function') {
+        await opsLog.replay((ops) => applyOps(doc, takeFresh(ops, seen, stats)));
+      }
+      resumed = true;
+    } catch {
+      // The log cannot be replayed, so the checkpoint would claim data we do not
+      // have. Fall through to a cold start.
+    }
+    if (!resumed) {
+      onProgress({ phase: 'checkpoint_reset', reason: 'checkpoint_unusable' });
+      seen.clear();
+      await resetCheckpoint(storage, opsLog);
+      currentVector = {};
+    }
+  } else if (checkpoint.status === 'corrupt') {
+    onProgress({ phase: 'checkpoint_reset', reason: checkpoint.reason });
+    await resetCheckpoint(storage, opsLog);
+  }
+
+  if (resumed) {
+    raiseLocalClock(doc, currentVector);
+    onProgress({ phase: 'resume', percent: 35, vector: currentVector, message: 'Resuming from checkpoint' });
+  } else {
+    // Phase 2b: cold start from the compacted base snapshot.
     onProgress({ phase: 'snapshot', percent: 35, message: 'Downloading base snapshot' });
     try {
       const snapRes = await fetcher(`${apiBase}/sync/snapshot`, { signal: abortSignal });
       if (snapRes.ok) {
         const snap = await snapRes.json();
-        if (doc && snap?.operations) {
-          if (typeof doc.merge === 'function') doc.merge(snap.operations);
-          else if (typeof doc.applyUpdate === 'function') doc.applyUpdate({ type: 'snapshot', sv: snap.vector, entries: snap.operations });
+        const ops = Array.isArray(snap.operations) ? snap.operations : [];
+        await verifyChecksum(ops, snap.checksum, 'snapshot');
+        assertWellFormed(ops, 'snapshot');
+        if (!isValidVector(snap.vector)) throw new HydrationIntegrityError('snapshot_vector_invalid');
+        for (const op of ops) {
+          if (op.counter > (snap.vector[op.actor] ?? 0)) {
+            throw new HydrationIntegrityError('snapshot_exceeds_vector', { actor: op.actor });
+          }
         }
-        if (snap.vector) currentVector = { ...snap.vector };
-        if (storage && typeof storage.setItem === 'function') {
-          await storage.setItem('crdt_resume_vector', JSON.stringify(currentVector));
-        }
+        const fresh = takeFresh(ops, seen, stats);
+        applyOps(doc, fresh);
+        currentVector = { ...snap.vector };
+        raiseLocalClock(doc, currentVector);
+        snapshotId = snap.snapshot_id ?? null;
+        await commitPage({ storage, opsLog, ops: fresh, vector: currentVector });
       }
-    } catch (_err) {
-      // Fallback if base snapshot unavailable
+    } catch (err) {
+      if (err instanceof HydrationIntegrityError) throw err;
+      // Base snapshot unavailable: page the deltas from an empty vector instead.
     }
   }
 
-  // Phase 3: Paged deltas (500 ops per page)
+  // Phase 3: paged deltas, one checkpointed page at a time.
   let hasMore = true;
   let pagesApplied = 0;
   let totalOps = 0;
@@ -595,43 +765,78 @@ export async function hydratePaged({
     if (!res.ok) throw new Error(`Failed to fetch deltas: HTTP ${res.status}`);
 
     const data = await res.json();
-    const ops = data.deltas || [];
+    const pageOps = Array.isArray(data.operations)
+      ? data.operations
+      : Array.isArray(data.deltas)
+        ? data.deltas
+        : [];
+    stats.totalFetched += pageOps.length;
 
-    if (ops.length > 0) {
-      if (doc) {
-        if (typeof doc.merge === 'function') doc.merge(ops);
-        else if (typeof doc.applyUpdate === 'function') doc.applyUpdate({ type: 'delta', ops });
-      }
-      totalOps += ops.length;
-      pagesApplied++;
-      currentVector = { ...data.next_vector };
-
-      // Checkpoint state vector per page in storage for resumability
-      if (storage && typeof storage.setItem === 'function') {
-        await storage.setItem('crdt_resume_vector', JSON.stringify(currentVector));
-      }
+    try {
+      await verifyChecksum(pageOps, data.checksum, 'delta');
+      assertWellFormed(pageOps, 'delta');
+      if (!isValidVector(data.next_vector)) throw new HydrationIntegrityError('delta_vector_invalid');
+    } catch (err) {
+      stats.discardedOps += pageOps.length;
+      throw err;
     }
 
     hasMore = Boolean(data.has_more);
-    const progressPct = Math.min(99, 40 + pagesApplied * 10);
+    if (pageOps.length === 0) {
+      if (hasMore) throw new HydrationIntegrityError('paging_stalled', { vector: currentVector });
+      break;
+    }
+    if (!vectorAdvances(data.next_vector, currentVector)) {
+      throw new HydrationIntegrityError('paging_stalled', { vector: currentVector });
+    }
+
+    const fresh = takeFresh(pageOps, seen, stats);
+    applyOps(doc, fresh);
+    currentVector = { ...data.next_vector };
+    raiseLocalClock(doc, currentVector);
+    await commitPage({ storage, opsLog, ops: fresh, vector: currentVector });
+
+    pagesApplied++;
+    totalOps += fresh.length;
     onProgress({
       phase: 'deltas',
-      percent: progressPct,
+      percent: Math.min(99, 40 + pagesApplied * 10),
       pagesApplied,
       totalOps,
       hasMore,
     });
-
-    if (ops.length === 0) break;
   }
 
-  onProgress({ phase: 'complete', percent: 100, totalOps, pagesApplied });
+  // Phase 4: join receipt, verified against the server's digest.
+  const stateHash = doc && typeof doc.values === 'function' ? stateDigest(new Map(doc.values())) : null;
+  const receipt = createJoinReceipt({
+    snapshotId,
+    highwater: sumVector(currentVector),
+    pageCount: pagesApplied,
+    hash: stateHash,
+    clientVector: currentVector,
+  });
+  const receiptVerification = verifyReceipt
+    ? await verifyReceiptAgainstServer(receipt, { apiBase, fetcher, abortSignal })
+    : null;
+  onProgress({ phase: 'join_receipt', percent: 99, receipt, verification: receiptVerification });
+
+  const reworkOps = stats.duplicatesSkipped + stats.discardedOps;
+  const reworkRatio = stats.totalFetched === 0 ? 0 : reworkOps / stats.totalFetched;
+  const elapsedMs = now() - startedAt;
+  onProgress({ phase: 'complete', percent: 100, totalOps, pagesApplied, reworkRatio, elapsedMs });
 
   return {
     actionable: actionableItems,
     pagesApplied,
     totalOps,
     vector: currentVector,
+    resumed,
+    receipt,
+    receiptVerification,
+    duplicatesSkipped: stats.duplicatesSkipped,
+    reworkRatio,
+    timeToActionableMs,
+    elapsedMs,
   };
 }
-

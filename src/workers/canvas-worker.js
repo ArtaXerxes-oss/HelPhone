@@ -15,6 +15,7 @@ let canvas = null;
 let ctx = null;
 let size = { width: 0, height: 0, dpr: 1 };
 let overlays = [];
+let viewport = null;
 let running = false;
 const meter = new FpsMeter();
 
@@ -27,7 +28,7 @@ const schedule =
 
 function frame(now) {
   if (!running) return;
-  drawOverlayFrame(ctx, overlays, size, now);
+  drawOverlayFrame(ctx, overlays, size, now, viewport);
   const stats = meter.tick(now);
   if (stats) self.postMessage({ type: "stats", stats });
   schedule(frame);
@@ -35,8 +36,10 @@ function frame(now) {
 
 function applySize(next) {
   size = { width: next.width, height: next.height, dpr: next.dpr };
-  canvas.width = Math.round(size.width * size.dpr);
-  canvas.height = Math.round(size.height * size.dpr);
+  const targetW = Math.round(size.width * size.dpr);
+  const targetH = Math.round(size.height * size.dpr);
+  if (canvas.width !== targetW) canvas.width = targetW;
+  if (canvas.height !== targetH) canvas.height = targetH;
 }
 
 // Error/heartbeat parity for null-origin workers (#793).
@@ -54,11 +57,16 @@ self.onmessage = (event) => {
     case "overlays":
       overlays = msg.overlays;
       break;
+    case "viewport":
+      viewport = msg.transform ?? null;
+      break;
     case "resize":
       if (canvas) applySize(msg);
       break;
     case "stop":
       running = false;
+      overlays = [];
+      viewport = null;
       break;
     default:
       break;

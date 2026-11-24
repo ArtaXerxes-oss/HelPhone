@@ -1,0 +1,179 @@
+# Canonical GraphQL contract for the dispatch/events/sync and database domain.
+# This file is versioned and compared against swagger.json + the zod schemas.
+
+scalar JSON
+
+type PoolStats {
+  total: Int!
+  active: Int!
+  idle: Int!
+  waiting: Int!
+  maxConnections: Int!
+}
+
+type Health {
+  status: String!
+  database: Boolean!
+  databaseLatencyMs: Int!
+  pool: PoolStats!
+}
+
+type AuthUser {
+  publicKey: String!
+  algorithm: String!
+}
+
+type Verification {
+  wallet: String!
+  recordedAt: String
+  attributes: JSON!
+}
+
+type HelpRequest {
+  id: ID!
+  status: String
+  createdAt: String
+  attributes: JSON!
+  responders: [Responder!]!
+  responderCount: Int!
+  arrivedCount: Int!
+}
+
+enum IncidentStatus {
+  open
+  assigned
+  acknowledged
+  resolved
+}
+
+enum Priority {
+  low
+  normal
+  high
+  critical
+}
+
+enum ResponderStatus {
+  assigned
+  en_route
+  on_scene
+  offline
+}
+
+type Location {
+  lat: Float!
+  lng: Float!
+}
+
+type Event {
+  id: ID!
+  incidentId: ID!
+  responderId: ID
+  type: String!
+  at: String!
+  cursor: String!
+  payload: JSON
+}
+
+type Responder {
+  id: ID
+  incidentId: ID
+  name: String
+  status: ResponderStatus
+  location: Location
+  lastEvent: Event
+
+  requestId: ID
+  arrived: Boolean
+  attributes: JSON
+}
+
+type Incident {
+  id: ID!
+  status: IncidentStatus!
+  priority: Priority!
+  createdAt: String!
+  version: Int!
+  location: Location!
+  responders: [Responder!]!
+  events: [Event!]!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  endCursor: String
+}
+
+type IncidentEdge {
+  node: Incident!
+  cursor: String!
+}
+
+type IncidentConnection {
+  edges: [IncidentEdge!]!
+  pageInfo: PageInfo!
+}
+
+type EventEdge {
+  node: Event!
+  cursor: String!
+}
+
+type EventConnection {
+  edges: [EventEdge!]!
+  pageInfo: PageInfo!
+}
+
+type SyncSuccess {
+  ok: Boolean!
+  serverVersion: Int!
+  incident: Incident!
+}
+
+type SyncConflict {
+  conflict: Boolean!
+  serverVersion: Int!
+  mergeProposal: JSON!
+}
+
+type ValidationIssue {
+  path: String!
+  message: String!
+}
+
+type ValidationError {
+  error: String!
+  issues: [ValidationIssue!]!
+}
+
+union SyncFlushResult = SyncSuccess | SyncConflict | ValidationError
+union AssignResult = SyncSuccess | SyncConflict | ValidationError
+
+input SyncFlushInput {
+  incidentId: ID!
+  baseVersion: Int!
+  patch: JSON!
+}
+
+input AssignResponderInput {
+  incidentId: ID!
+  responderId: ID!
+  expectedVersion: Int
+}
+
+type Query {
+  health: Health!
+  requests(status: String, limit: Int = 20, offset: Int = 0): [HelpRequest!]!
+  request(id: ID!): HelpRequest
+  verifications(wallet: String!, limit: Int = 10): [Verification!]!
+  me: AuthUser
+
+  incident(id: ID!): Incident
+  incidents(limit: Int = 20, cursor: String): IncidentConnection!
+  events(incidentId: ID!, limit: Int = 20, cursor: String): EventConnection!
+}
+
+type Mutation {
+  assignResponder(input: AssignResponderInput!): AssignResult!
+  syncFlush(input: SyncFlushInput!): SyncFlushResult!
+}

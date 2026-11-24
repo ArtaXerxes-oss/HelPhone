@@ -5,6 +5,10 @@
 - Local: `http://localhost:3001`
 - Production: `https://helphone.onrender.com`
 
+## Schema Contract Drift Guard (#946)
+
+`server/graphql/schema.graphql`, `swagger.json`, and the Zod REST schemas (`server/routes/dispatch.ts`, `server/routes/sync.ts`) are verified in CI via `npm run schema:drift` (`scripts/schema-contract-drift.js`). Breaking changes or three-way mismatches fail CI; additive changes produce a reviewable diff and can be recorded with `npm run schema:drift:update`.
+
 ## Endpoints
 
 ### Health

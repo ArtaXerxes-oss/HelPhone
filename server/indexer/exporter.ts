@@ -171,14 +171,51 @@ export interface QueryRunner {
   query: (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>;
 }
 
+export interface MaintainerPayoutRecord {
+  package_hash: string;
+  maintainer: string;
+  token: string;
+  amount: bigint;
+  tx_hash?: string;
+  ledger_seq?: number;
+}
+
+/**
+ * Project `maintainer_payout` contract events into auditable payout rows.
+ * Event data uses the `data_format = "map"` shape published by MaintainerVault.
+ */
+export function projectMaintainerPayouts(
+  events: Array<{ topics: string[]; data: any; tx_hash?: string; ledger_seq?: number }>
+): MaintainerPayoutRecord[] {
+  const payouts: MaintainerPayoutRecord[] = [];
+  for (const event of events) {
+    if (!event.topics?.some((topic) => topic.toLowerCase().includes('maintainer_payout'))) continue;
+    const data = event.data?.maintainer_payout ?? event.data ?? {};
+    const amount = data.amount ?? data.payout_amount;
+    if (!data.package_hash || !data.maintainer || !data.token || amount === undefined) continue;
+    payouts.push({
+      package_hash: String(data.package_hash),
+      maintainer: String(data.maintainer),
+      token: String(data.token),
+      amount: BigInt(amount),
+      ...(event.tx_hash ? { tx_hash: event.tx_hash } : {}),
+      ...(event.ledger_seq !== undefined ? { ledger_seq: event.ledger_seq } : {}),
+    });
+  }
+  return payouts;
+}
+
 /**
  * Projects a batch of dispatch ops into `dispatch_log` and advances `indexer_checkpoint`
  * within a single atomic transaction protected by an advisory transaction lock.
+ *
+ * Pass `checkpoint: null` to project without moving the checkpoint. Gap backfill
+ * uses this: it replays older clocks, so it must not rewind the live exporter's position.
  */
 export async function projectDispatchBatch(
   client: QueryRunner,
   ops: DispatchLogOp[],
-  checkpoint: { lsn: string; seq: number }
+  checkpoint: { lsn: string; seq: number } | null
 ): Promise<{ projectedCount: number; duplicateCount: number }> {
   await client.query('BEGIN');
   try {
@@ -220,15 +257,17 @@ export async function projectDispatchBatch(
     }
 
     // Record checkpoint in the EXACT SAME transaction
-    await client.query(
-      `INSERT INTO indexer_checkpoint (id, last_lsn, last_seq, updated_at)
-       VALUES (1, $1, $2, NOW())
-       ON CONFLICT (id) DO UPDATE SET
-         last_lsn = EXCLUDED.last_lsn,
-         last_seq = EXCLUDED.last_seq,
-         updated_at = NOW()`,
-      [checkpoint.lsn, checkpoint.seq]
-    );
+    if (checkpoint) {
+      await client.query(
+        `INSERT INTO indexer_checkpoint (id, last_lsn, last_seq, updated_at)
+         VALUES (1, $1, $2, NOW())
+         ON CONFLICT (id) DO UPDATE SET
+           last_lsn = EXCLUDED.last_lsn,
+           last_seq = EXCLUDED.last_seq,
+           updated_at = NOW()`,
+        [checkpoint.lsn, checkpoint.seq]
+      );
+    }
 
     await client.query('COMMIT');
     return { projectedCount, duplicateCount };
@@ -236,6 +275,23 @@ export async function projectDispatchBatch(
     await client.query('ROLLBACK').catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Highest projected clock per doc/client. Used to seed the gap detector on
+ * startup, so a restart does not report a false gap for every client.
+ */
+export async function loadClockHighWaterMarks(
+  client: QueryRunner
+): Promise<Array<{ doc_id: string; client_id: string; max_clock: number }>> {
+  const res = await client.query(
+    'SELECT doc_id, client_id, MAX(clock) AS max_clock FROM dispatch_log GROUP BY doc_id, client_id'
+  );
+  return (res.rows as any[]).map((row) => ({
+    doc_id: String(row.doc_id),
+    client_id: String(row.client_id),
+    max_clock: Number(row.max_clock),
+  }));
 }
 
 export async function getIndexerCheckpoint(client: QueryRunner): Promise<CheckpointInfo | null> {
@@ -251,4 +307,134 @@ export async function getIndexerCheckpoint(client: QueryRunner): Promise<Checkpo
     }
   } catch {}
   return null;
+}
+
+// ── CheckpointCommitted projection (issue #916, spike #727) ──────────────────
+//
+// Schema (create once in a migration):
+//
+//   CREATE TABLE IF NOT EXISTS checkpoint_sightings (
+//     id            BIGSERIAL PRIMARY KEY,
+//     ledger        INTEGER NOT NULL,
+//     ledger_hash   TEXT    NOT NULL,
+//     depth         INTEGER NOT NULL DEFAULT 0,
+//     finality_tier TEXT    NOT NULL DEFAULT 'pending'
+//                     CHECK (finality_tier IN ('pending','closed','finalized','orphaned')),
+//     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+//     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+//     UNIQUE (ledger, ledger_hash)
+//   );
+//   CREATE INDEX IF NOT EXISTS idx_cps_ledger ON checkpoint_sightings (ledger DESC);
+//   CREATE INDEX IF NOT EXISTS idx_cps_tier   ON checkpoint_sightings (finality_tier)
+//     WHERE finality_tier IN ('pending','closed');
+
+import type { ParsedCheckpoint } from './parser.js';
+
+export interface CheckpointSightingRow {
+  ledger: number;
+  ledger_hash: string;
+  depth: number;
+  finality_tier: string;
+  first_seen_at?: string;
+  updated_at?: string;
+}
+
+export interface ProjectCheckpointResult {
+  /** true when a new row was inserted (first sight). */
+  inserted: boolean;
+  /** true when an existing row's tier/depth was updated. */
+  updated: boolean;
+  /** true when the row was classified as orphaned. */
+  orphaned: boolean;
+  /** true when the watermark was rewound. */
+  rewound: boolean;
+  row: CheckpointSightingRow;
+}
+
+/**
+ * Upsert a `ParsedCheckpoint` into `checkpoint_sightings`.
+ *
+ * - First sight: inserts with `finality_tier = 'pending'` (depth 0).
+ * - Subsequent sights of the same (ledger, hash): advances depth + tier.
+ * - Different hash for the same ledger: marks existing row orphaned and
+ *   inserts the new sighting, then rewinds the indexer watermark to
+ *   `ledger - 1` so downstream projections are replayed from before the fork.
+ *
+ * All reads and writes happen inside the caller-supplied `client`; the caller
+ * is responsible for transaction management (BEGIN/COMMIT).
+ */
+export async function projectCheckpointCommitted(
+  client: QueryRunner,
+  checkpoint: ParsedCheckpoint,
+): Promise<ProjectCheckpointResult> {
+  const { ledger, ledgerHash, depth, finalityTier } = checkpoint;
+
+  // 1. Check for an existing sighting of this ledger.
+  const existingRes = await client.query(
+    `SELECT ledger_hash, depth, finality_tier FROM checkpoint_sightings WHERE ledger = $1 ORDER BY first_seen_at LIMIT 1`,
+    [ledger],
+  );
+
+  const existing = existingRes.rows.length > 0 ? (existingRes.rows[0] as CheckpointSightingRow) : null;
+
+  let orphaned = false;
+  let rewound = false;
+
+  if (existing && existing.ledger_hash !== ledgerHash) {
+    // Different hash for the same ledger: reorg / RPC divergence.
+    // Mark the previous sighting orphaned.
+    await client.query(
+      `UPDATE checkpoint_sightings SET finality_tier = 'orphaned', updated_at = NOW()
+       WHERE ledger = $1 AND ledger_hash = $2`,
+      [ledger, existing.ledger_hash],
+    );
+    orphaned = true;
+    // Rewind the indexer watermark to ledger - 1.
+    await rewindCheckpointWatermark(client, ledger - 1);
+    rewound = true;
+  }
+
+  // 2. Upsert the current sighting.
+  const upsertRes = await client.query(
+    `INSERT INTO checkpoint_sightings (ledger, ledger_hash, depth, finality_tier)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (ledger, ledger_hash) DO UPDATE
+       SET depth         = GREATEST(checkpoint_sightings.depth, EXCLUDED.depth),
+           finality_tier = CASE
+             WHEN checkpoint_sightings.finality_tier = 'orphaned' THEN 'orphaned'
+             ELSE EXCLUDED.finality_tier
+           END,
+           updated_at = NOW()
+     RETURNING ledger, ledger_hash, depth, finality_tier, first_seen_at, updated_at`,
+    [ledger, ledgerHash, depth, finalityTier],
+  );
+
+  const row = upsertRes.rows[0] as CheckpointSightingRow;
+  const inserted = !existing || orphaned;
+  const updated = !inserted;
+
+  return { inserted, updated, orphaned, rewound, row };
+}
+
+/**
+ * Rewind the indexer watermark to `targetSeq` so downstream projections
+ * replay from before the fork ledger.
+ *
+ * Writes `targetSeq` into `indexer_checkpoint.last_seq`; the LSN is reset
+ * to '0/0' so the subscriber restarts from the beginning of the WAL stream
+ * for that sequence range.
+ */
+export async function rewindCheckpointWatermark(
+  client: QueryRunner,
+  targetSeq: number,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO indexer_checkpoint (id, last_lsn, last_seq, updated_at)
+     VALUES (1, '0/0', $1, NOW())
+     ON CONFLICT (id) DO UPDATE
+       SET last_lsn   = '0/0',
+           last_seq   = LEAST(indexer_checkpoint.last_seq, EXCLUDED.last_seq),
+           updated_at = NOW()`,
+    [targetSeq],
+  );
 }

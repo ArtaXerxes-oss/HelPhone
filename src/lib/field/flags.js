@@ -1,8 +1,16 @@
 /**
  * Client feature flags with versions — single-flag rollback for field
  * features (radio bridge, NFC check-in, hardware SOS, rugged mode).
- * Snapshots feed the incident-bundle generator (ISP-130 flag provenance).
+ * Routed through the unified remote+field resolver (#943) so incident bundles
+ * record both provenance layers with their versions.
  */
+
+import {
+  FLAG_PRECEDENCE,
+  currentFlagVersion,
+  defaultEvaluator,
+  resolveUnifiedFlag,
+} from "../featureFlags";
 
 const STORAGE_KEY = "hp_feature_flags";
 
@@ -29,13 +37,25 @@ function writeStore(store) {
   }
 }
 
-export function isFlagEnabled(flagName) {
+function resolveFieldFlag(flagName, userContext, evaluator = defaultEvaluator) {
   const flag = FEATURE_FLAGS[flagName];
-  if (!flag) return false;
   const store = readStore();
-  const v = store[flag.key];
-  if (typeof v === "boolean") return v;
-  return flag.defaultOn;
+  const rawOverride = flag ? store[flag.key] : undefined;
+  return resolveUnifiedFlag(
+    flagName,
+    {
+      override: typeof rawOverride === "boolean" ? rawOverride : null,
+      defaultOn: flag ? flag.defaultOn : undefined,
+      version: flag ? flag.version : null,
+    },
+    userContext,
+    evaluator,
+  );
+}
+
+export function isFlagEnabled(flagName, userContext, evaluator = defaultEvaluator) {
+  if (!FEATURE_FLAGS[flagName]) return false;
+  return resolveFieldFlag(flagName, userContext, evaluator).enabled;
 }
 
 export function setFlag(flagName, enabled) {
@@ -47,11 +67,30 @@ export function setFlag(flagName, enabled) {
   return true;
 }
 
-/** name -> { enabled, version } — collected into incident bundles. */
-export function flagSnapshot() {
+/**
+ * name -> { enabled, version, source, provenance: { remote, field } }
+ * Collected into incident bundles with both provenance layers and versions.
+ */
+export function flagSnapshot(userContext, evaluator = defaultEvaluator) {
   const out = {};
   for (const [name, flag] of Object.entries(FEATURE_FLAGS)) {
-    out[name] = { enabled: isFlagEnabled(name), version: flag.version };
+    const resolved = resolveFieldFlag(name, userContext, evaluator);
+    out[name] = {
+      enabled: resolved.enabled,
+      version: flag.version,
+      source: resolved.source,
+      provenance: resolved.provenance,
+    };
   }
   return out;
+}
+
+/** Full incident-bundle provenance envelope for remote + field flag layers. */
+export function flagProvenanceBundle(userContext, evaluator = defaultEvaluator) {
+  return {
+    precedence: FLAG_PRECEDENCE,
+    remoteConfigVersion: evaluator.getConfig()?.version ?? null,
+    killSwitchVersion: currentFlagVersion(),
+    flags: flagSnapshot(userContext, evaluator),
+  };
 }

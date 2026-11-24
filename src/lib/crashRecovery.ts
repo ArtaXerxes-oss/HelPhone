@@ -29,7 +29,11 @@ export interface HelpDraft {
   /** Join key back to the dispatch trace for post-crash forensics (#791). */
   traceId?: string
   spanId?: string
-  /** Flag version the draft was composed under (#797 stale replay guard). */
+  /**
+   * Flag-schema version at the time the draft was composed (#909).
+   * `checkReplay` uses this to prevent a draft from silently resubmitting
+   * to a kill-switched path after a crash/relaunch cycle.
+   */
   flagVersion?: string
   createdAt: number
   updatedAt: number
@@ -129,6 +133,8 @@ export async function saveDraft(partial: Omit<HelpDraft, 'createdAt' | 'updatedA
     location: partial.location ?? null,
     searchQuery: partial.searchQuery ?? '',
     extra: partial.extra,
+    // Stamp the flag-schema version so checkReplay can detect kill-switch drift
+    // after a crash/relaunch cycle (#909).
     flagVersion: partial.flagVersion ?? currentFlagVersion(),
     // An explicitly supplied join key (e.g. restored from a worker hop) wins;
     // otherwise use the active tab trace. Absent ids stay absent — no new
@@ -429,6 +435,58 @@ export async function reconcileAndResurrect({
 
   emitRecoveryComplete(report);
   return report;
+}
+
+// ── Synchronous beforeunload save (#909) ──────────────────────────────────
+//
+// IndexedDB writes are async and are not guaranteed to complete when the
+// browser forces a tab kill (SIGKILL, OOM, swipe-away on mobile).  The only
+// synchronous storage API available on `beforeunload` is localStorage.
+//
+// `saveDraftSync` serialises the draft to localStorage immediately.  Call it
+// from a `beforeunload` listener so a forced kill always has a last-known-good
+// draft even if the async IDB write in `startAutoSave` did not complete.
+//
+// The existing `loadDraftRaw` already falls back to localStorage when IDB is
+// empty, so a draft written here is transparently recovered on relaunch
+// without any changes to the read path.
+
+export function saveDraftSync(partial: Omit<HelpDraft, 'createdAt' | 'updatedAt'>): void {
+  if (!hasMeaningfulData(partial)) return
+  const now = Date.now()
+  const draft: HelpDraft = {
+    emergencyType: partial.emergencyType ?? null,
+    nickname: partial.nickname ?? '',
+    contact: partial.contact ?? '',
+    location: partial.location ?? null,
+    searchQuery: partial.searchQuery ?? '',
+    extra: partial.extra,
+    ...(currentTraceIds() ?? {}),
+    flagVersion: partial.flagVersion ?? currentFlagVersion(),
+    createdAt: now,
+    updatedAt: now,
+  }
+  saveToLocalStorage(draft)
+}
+
+/**
+ * Register a `beforeunload` handler that synchronously writes the current
+ * draft to localStorage.  Returns the unregister function.
+ *
+ * Usage:
+ *   const off = registerBeforeUnloadSave(getDraft)
+ *   // …later, after submission:
+ *   off()
+ */
+export function registerBeforeUnloadSave(getDraft: GetDraftFn): () => void {
+  function handler() {
+    try {
+      const draft = getDraft()
+      if (draft) saveDraftSync(draft)
+    } catch {}
+  }
+  window.addEventListener('beforeunload', handler)
+  return () => window.removeEventListener('beforeunload', handler)
 }
 
 // Re-export for test spying on expiration

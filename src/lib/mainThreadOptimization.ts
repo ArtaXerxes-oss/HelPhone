@@ -1,6 +1,28 @@
+import {
+  trackLongTask,
+  type LongTaskTelemetryEvent,
+  type TelemetryPipeline,
+} from './telemetry';
+
+export const DEFAULT_LONG_TASK_THRESHOLDS: LongTaskThreshold = Object.freeze({
+  warningMs: 50,
+  criticalMs: 100,
+});
+
+export const MAX_BOUNDED_TASK_METRICS = 100;
+export const MAX_BOUNDED_TELEMETRY_EVENTS = 50;
+
 interface LongTaskThreshold {
   warningMs: number;
   criticalMs: number;
+}
+
+interface LongTaskMonitorOptions {
+  maxTasks?: number;
+  maxTelemetryEvents?: number;
+  route?: string;
+  pipeline?: TelemetryPipeline | null;
+  onTelemetry?: (event: LongTaskTelemetryEvent) => void;
 }
 
 interface TaskMetrics {
@@ -192,24 +214,84 @@ class GraphTraversalOptimizer {
 
 class LongTaskMonitor {
   private tasks: TaskMetrics[] = [];
+  private telemetryEvents: LongTaskTelemetryEvent[] = [];
   private thresholds: LongTaskThreshold;
   private observer: PerformanceObserver | null = null;
   private callback: ((metrics: TaskMetrics[]) => void) | null = null;
+  private readonly maxTasks: number;
+  private readonly maxTelemetryEvents: number;
+  private readonly route?: string;
+  private readonly pipeline: TelemetryPipeline | null;
+  private readonly onTelemetry?: (event: LongTaskTelemetryEvent) => void;
 
-  constructor(thresholds: LongTaskThreshold = { warningMs: 50, criticalMs: 100 }) {
-    this.thresholds = thresholds;
+  constructor(
+    thresholds: Partial<LongTaskThreshold> = DEFAULT_LONG_TASK_THRESHOLDS,
+    options: LongTaskMonitorOptions = {},
+  ) {
+    this.thresholds = {
+      warningMs: thresholds.warningMs ?? DEFAULT_LONG_TASK_THRESHOLDS.warningMs,
+      criticalMs: thresholds.criticalMs ?? DEFAULT_LONG_TASK_THRESHOLDS.criticalMs,
+    };
+    this.maxTasks = Math.max(1, options.maxTasks ?? MAX_BOUNDED_TASK_METRICS);
+    this.maxTelemetryEvents = Math.max(1, options.maxTelemetryEvents ?? MAX_BOUNDED_TELEMETRY_EVENTS);
+    this.route = options.route;
+    this.pipeline = options.pipeline ?? null;
+    this.onTelemetry = options.onTelemetry;
   }
 
-  startMonitoring(callback: (metrics: TaskMetrics[]) => void): void {
-    this.callback = callback;
+  setThresholds(next: Partial<LongTaskThreshold>): void {
+    this.thresholds = {
+      warningMs: next.warningMs ?? this.thresholds.warningMs,
+      criticalMs: next.criticalMs ?? this.thresholds.criticalMs,
+    };
+  }
 
-    if ('PerformanceObserver' in window) {
+  getThresholds(): LongTaskThreshold {
+    return { ...this.thresholds };
+  }
+
+  private pushBoundedTask(metric: TaskMetrics): void {
+    this.tasks.push(metric);
+    while (this.tasks.length > this.maxTasks) {
+      this.tasks.shift();
+    }
+    if (metric.severity === 'critical') {
+      const event = trackLongTask(
+        {
+          name: metric.name,
+          durationMs: metric.duration,
+          startTime: metric.startTime,
+          endTime: metric.endTime,
+          severity: 'critical',
+          warningThresholdMs: this.thresholds.warningMs,
+          criticalThresholdMs: this.thresholds.criticalMs,
+          route: this.route,
+        },
+        this.pipeline,
+      );
+      this.telemetryEvents.push(event);
+      while (this.telemetryEvents.length > this.maxTelemetryEvents) {
+        this.telemetryEvents.shift();
+      }
+      this.onTelemetry?.(event);
+    }
+  }
+
+  startMonitoring(callback?: (metrics: TaskMetrics[]) => void): void {
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
+    this.callback = callback ?? null;
+
+    if (typeof PerformanceObserver !== 'undefined') {
       try {
         this.observer = new PerformanceObserver((list) => {
           for (const entry of list.getEntries()) {
             if (entry.duration > this.thresholds.warningMs) {
+              const boundedName = String(entry.name || 'longtask').slice(0, 64);
               const metric: TaskMetrics = {
-                name: entry.name,
+                name: boundedName,
                 duration: entry.duration,
                 startTime: entry.startTime,
                 endTime: entry.startTime + entry.duration,
@@ -217,7 +299,7 @@ class LongTaskMonitor {
                   entry.duration > this.thresholds.criticalMs ? 'critical' : 'warning',
               };
 
-              this.tasks.push(metric);
+              this.pushBoundedTask(metric);
               if (this.callback) {
                 this.callback([metric]);
               }
@@ -233,15 +315,16 @@ class LongTaskMonitor {
   }
 
   recordCustomTask(name: string, duration: number, startTime: number): void {
+    const boundedName = String(name || 'longtask').slice(0, 64);
     const metric: TaskMetrics = {
-      name,
+      name: boundedName,
       duration,
       startTime,
       endTime: startTime + duration,
       severity: duration > this.thresholds.criticalMs ? 'critical' : duration > this.thresholds.warningMs ? 'warning' : 'ok',
     };
 
-    this.tasks.push(metric);
+    this.pushBoundedTask(metric);
     if (this.callback) {
       this.callback([metric]);
     }
@@ -253,6 +336,10 @@ class LongTaskMonitor {
 
   getMetricsAboveThreshold(): TaskMetrics[] {
     return this.tasks.filter((t) => t.severity !== 'ok');
+  }
+
+  getTelemetryEvents(): LongTaskTelemetryEvent[] {
+    return [...this.telemetryEvents];
   }
 
   generateReport(): {
@@ -285,6 +372,7 @@ class LongTaskMonitor {
 
   clear(): void {
     this.tasks = [];
+    this.telemetryEvents = [];
   }
 }
 
@@ -294,5 +382,6 @@ export {
   GraphTraversalOptimizer,
   LongTaskMonitor,
   LongTaskThreshold,
+  LongTaskMonitorOptions,
   TaskMetrics,
 };

@@ -11,6 +11,7 @@ import {
   renderPrometheus,
 } from '../middleware/metrics.ts'
 import type { MetricFamily } from '../middleware/metrics.ts'
+import { sendOperationalAlert, type OperationalAlert } from '../lib/alertWebhook.ts'
 
 /**
  * Supply Chain Security Index & Sustainability API (#600).
@@ -27,6 +28,8 @@ import type { MetricFamily } from '../middleware/metrics.ts'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const DEFAULT_TTL_MS = 60_000
+const DEFAULT_AUDIT_MAX_AGE_SECONDS = 86_400
+const SUPPLY_CHAIN_RUNBOOK = '/docs/runbooks/supply-chain-alerts.md'
 
 export type Severity = 'info' | 'low' | 'moderate' | 'high' | 'critical'
 const SEVERITIES: Severity[] = ['info', 'low', 'moderate', 'high', 'critical']
@@ -317,6 +320,23 @@ export function securityMetricFamilies(r: SupplyChainReport): MetricFamily[] {
   return families
 }
 
+export function supplyChainAlerts(
+  report: SupplyChainReport,
+  options: { auditMaxAgeSeconds?: number; dashboardUrl?: string } = {},
+): OperationalAlert[] {
+  const common = {
+    dashboardUrl: options.dashboardUrl ?? '/api/supply-chain/dashboard',
+    runbookUrl: SUPPLY_CHAIN_RUNBOOK,
+  }
+  const alerts: OperationalAlert[] = []
+  if (report.index.partial) alerts.push({ ...common, rule: 'supply_chain_index_partial', severity: 'page', summary: 'Supply-chain index is partial because the audit snapshot is unavailable.' })
+  if (report.index.grade > 'B') alerts.push({ ...common, rule: 'supply_chain_grade_below_b', severity: 'warning', summary: `Supply-chain security grade dropped to ${report.index.grade}.` })
+  if (report.vulnerabilities.reportAgeSeconds !== null && report.vulnerabilities.reportAgeSeconds > (options.auditMaxAgeSeconds ?? DEFAULT_AUDIT_MAX_AGE_SECONDS)) {
+    alerts.push({ ...common, rule: 'supply_chain_audit_stale', severity: 'warning', summary: 'Supply-chain audit snapshot is stale.' })
+  }
+  return alerts
+}
+
 const escapeHtml = (s: string) =>
   s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!)
 
@@ -342,7 +362,7 @@ main{max-width:960px;margin:0 auto}h1{margin:0 0 4px}.sub{color:var(--muted);mar
 .grade-F,.grade-D{color:var(--bad)}.grade-A,.grade-B{color:var(--ok)}ul{padding-left:20px;word-break:break-all}
 </style></head><body><main>
 <h1>Supply Chain Security</h1>
-<p class="sub">Generated ${escapeHtml(r.generatedAt)}${r.index.partial ? ' · partial: no npm audit report available' : ''}</p>
+<p class="sub">Generated ${escapeHtml(r.generatedAt)}${r.index.partial ? ' · partial: no npm audit report available' : ''} · <a href="${SUPPLY_CHAIN_RUNBOOK}">alert runbook</a></p>
 <div class="grid">
 <div class="tile"><div class="label">Security index</div><div class="value grade-${r.index.grade}">${r.index.score} · ${r.index.grade}</div></div>
 ${tile('Critical / high CVEs', v ? `${v.critical} / ${v.high}` : 'n/a', v ? `${v.total} advisories total` : 'run npm audit --json')}
@@ -367,6 +387,7 @@ export function createSupplyChainRouters(opts: RouterOptions = {}) {
   const ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS
   const auditReportPath = opts.auditReportPath ?? process.env.SUPPLY_CHAIN_AUDIT_REPORT
   let cached: { at: number; report: SupplyChainReport } | null = null
+  let alertedAt = 0
 
   // package-lock.json is ~1k entries and each license lookup may hit disk, so
   // cache per worker; the inputs only change on deploy anyway.
@@ -374,6 +395,12 @@ export function createSupplyChainRouters(opts: RouterOptions = {}) {
     const now = Date.now()
     if (!cached || now - cached.at >= ttlMs) {
       cached = { at: now, report: computeSupplyChainReport({ ...opts, auditReportPath }) }
+      if (process.env.ALERT_WEBHOOK_URL && now - alertedAt >= ttlMs) {
+        alertedAt = now
+        for (const alert of supplyChainAlerts(cached.report)) {
+          void sendOperationalAlert(alert).catch((error) => console.error('[supply-chain-alert]', error))
+        }
+      }
     }
     return cached.report
   }

@@ -73,6 +73,14 @@ Onboarding prioritizes immediate life-safety operations over historical context:
 - **Per-Page Checkpointing:** After each 500-operation chunk, the client checkpoints `next_vector` to IndexedDB (`secureStorage.ts`). If connection drops or the browser closes, onboarding resumes from the last checkpoint with zero re-transmission waste (<15% rework).
 - **Bounded Heap:** Memory remains strictly under **250MB** on 2GB devices throughout the entire 30-day hydration sequence.
 
+**Implementation notes (#930–#933)**
+- **Paging order.** Deltas are served in canonical order (counter, then actor, then instance). A page cut never splits a run of equal counters, so each page is a global prefix and `next_vector` never skips an operation that was not sent (`src/lib/syncPaging.js`).
+- **Checksums.** Every snapshot and page carries SHA-256 over its JSON. The client verifies the checksum before applying anything. A mismatch raises `HydrationIntegrityError` and leaves the checkpoint where it was.
+- **Compacted snapshot.** The base snapshot holds the winning operation per key, tombstones included, with the vector taken at the same instant. It is rebuilt at most hourly. A snapshot that carries an operation newer than its own vector is rejected.
+- **Checkpoint invariant.** Each page's operations and its checkpoint vector are committed in one IndexedDB transaction (`src/lib/hydrationStore.js`). A resume replays the committed pages and fetches only the rest. A checkpoint that is not a valid vector is discarded, and the device cold-starts from the snapshot.
+- **Join receipts.** On completion the client emits a receipt (snapshot id, highwater, page count, state digest) and verifies it against `GET /api/sync/digest`.
+- **Budget gate.** `scripts/spikes/crdt_hydration_budget.js` replays 15,000 operations under a 250 MB heap and a 20 s time-to-actionable budget. It runs in `.github/workflows/crdt-hydration-budget.yml`. It is a Node proxy for a memory-limited browser, not a browser run.
+
 ### 3.4 Routing & UI Gating
 While background hydration is in progress:
 - The UI displays a syncing progress badge: `🔄 Syncing history X%`.

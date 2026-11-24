@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
+import path from "node:path";
 import {
   checkCryptoPins,
   holdCryptoCore,
@@ -9,7 +10,7 @@ import {
 
 // #779 — crypto-core pin gate. Fixture-only except for the repo self-check.
 
-const policy = JSON.parse(fs.readFileSync(new URL("../crypto-pins.json", import.meta.url), "utf8"));
+const policy = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "crypto-pins.json"), "utf8"));
 const now = new Date("2026-10-17");
 
 const lockOf = (versions) => ({
@@ -32,12 +33,12 @@ describe("crypto-pins policy file", () => {
     for (const p of policy.pins) {
       expect(p.rationale, p.name).toBeTruthy();
       expect(p.reviewed, p.name).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-      expect(fs.existsSync(new URL(`../${p.adr}`, import.meta.url)), p.adr).toBe(true);
+      expect(fs.existsSync(path.resolve(process.cwd(), p.adr)), p.adr).toBe(true);
     }
   });
 
   it("matches the repository's real lockfiles", () => {
-    const read = (f) => fs.readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+    const read = (f) => fs.readFileSync(path.resolve(process.cwd(), f), "utf8");
     const result = checkCryptoPins({
       policy,
       pkg: JSON.parse(read("package.json")),

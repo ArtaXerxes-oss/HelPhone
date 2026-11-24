@@ -3,6 +3,8 @@
  * Centralizes all HTTP requests for consistent error handling and retry logic
  */
 
+import { currentOrigin, resolveEndpoint } from '../lib/endpointDefaults';
+
 export interface ApiError extends Error {
   status?: number;
   code?: string;
@@ -53,8 +55,12 @@ class ApiService {
   }
 
   private getDefaultBaseURL(): string {
-    // Use VITE_SERVER_URL from environment or default to localhost:3001
-    return import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
+    // VITE_SERVER_URL wins. Otherwise dev uses localhost:3001 and production
+    // uses the deployed origin, so no loopback address ships in the bundle (#927).
+    return resolveEndpoint(import.meta.env.VITE_SERVER_URL, '', {
+      isProd: import.meta.env.PROD === true,
+      origin: currentOrigin(),
+    });
   }
 
   /**

@@ -1,5 +1,14 @@
 # Security Runbook — Supply Chain
 
+## PII HMAC salt rotation
+
+1. Generate a new random salt and deploy every writer with `PII_HMAC_SALTS=v2:<new>,v1:<old>`, `PII_HMAC_ACTIVE_VERSION=v2`, and `PII_HMAC_REQUIRED_VERSION=v2`. A missing/mismatched active version blocks pseudonym writes.
+2. Keep both versions only for the documented overlap window. Reads that need joins use `pseudonymCandidates`; all new writes use `v2`.
+3. Re-key permitted plaintext exports with `node scripts/rekey-pii-jsonl.mjs input.jsonl output.jsonl`. Existing one-way HMAC values cannot be re-keyed without their plaintext source.
+4. Verify logs, traces, indexer rows, and exports emit `hmac:v2:`; then remove `v1` from every deployment together. Retain neither the old salt nor a mapping table.
+
+Rollback before step 4 by restoring `v1` as active everywhere. After deleting the old salt, rollback requires a new rotation; never reintroduce a retired key.
+
 Covers the typosquatting gate (#588) and the transitive vulnerability scanner (#589).
 
 ## Typosquatting gate (#588)
@@ -292,3 +301,24 @@ build pipeline runs: dependency installation and `npm run build`.
 4. **Attestation & Post-Mortem**:
    - Produce audited egress transcript hash and compare against clean build baseline.
    - File CVE advisory and incident bundle per `docs/disaster-recovery.md`.
+
+## IPv6-only / NAT64 endpoint literal gate (#927)
+
+DNS64 only synthesises IPv6 addresses for hostnames. An endpoint written as an
+IPv4 dotted-quad cannot be translated on an IPv6-only bearer, so it is rejected
+in the env templates.
+
+- **Check:** `npm run security:endpoint-literals` runs
+  `scripts/security/endpoint_literals.js` against `.env.example` and
+  `.env.production`. It exits 1 on any non-loopback IPv4 literal. CI runs it in
+  the `quality-and-security-matrix` job right after `config:check`.
+- **Loopback values** (`localhost`, `127.0.0.1`, `::1`) are reported but do not
+  fail the gate. They are local-dev examples only.
+- **Client defaults:** the browser bundle no longer falls back to `localhost`
+  in production. `src/lib/endpointDefaults.js` resolves `VITE_SERVER_URL` and
+  `VITE_EVENTS_URL` in this order: configured value, then (dev only)
+  `http://localhost:3001`, then (production) the page's own origin. Production
+  builds set both values in `.env.production`.
+- **Not covered here:** a NAT64 lab, an IPv6-only Playwright journey, and an
+  IPv6-only before/after measurement. These remain tracked in #928 and
+  `docs/spikes/786-ipv6-nat64-audit.md`.

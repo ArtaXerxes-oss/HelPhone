@@ -1,10 +1,26 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { SpatialIndexClient } from '../lib/spatial.ts';
+import {
+  DEFAULT_VIEWPORT_TRANSFORM,
+  buildViewportOverlays,
+} from '../lib/offscreenCanvas.ts';
 
 export function useClusterer(points, zoom, bounds, options = {}) {
   const [clusters, setClusters] = useState([]);
   const indexRef = useRef(null);
   const revision = useRef(0);
+
+  const viewportTransform = useMemo(() => {
+    const bbox = bounds?.length === 4 ? bounds : DEFAULT_VIEWPORT_TRANSFORM.bounds;
+    const z = Number.isFinite(zoom) ? zoom : DEFAULT_VIEWPORT_TRANSFORM.zoom;
+    return {
+      scale: typeof options.scale === 'number' && Number.isFinite(options.scale) ? options.scale : 1,
+      offsetX: typeof options.offsetX === 'number' && Number.isFinite(options.offsetX) ? options.offsetX : 0,
+      offsetY: typeof options.offsetY === 'number' && Number.isFinite(options.offsetY) ? options.offsetY : 0,
+      zoom: z,
+      bounds: bbox,
+    };
+  }, [zoom, bounds, options.scale, options.offsetX, options.offsetY]);
 
   useEffect(() => {
     if (typeof Worker === 'undefined') {
@@ -44,5 +60,15 @@ export function useClusterer(points, zoom, bounds, options = {}) {
     return cluster ? Math.min(22, Math.floor(zoom || 0) + 2) : 18;
   }, [clusters, zoom]);
 
-  return { clusters, supercluster: null, getClusterExpansionZoom };
+  const overlays = useMemo(() => {
+    const size = options.size || { width: 1140, height: 540 };
+    return buildViewportOverlays({
+      points: Array.isArray(points) ? points : [],
+      clusters,
+      size,
+      transform: viewportTransform,
+    });
+  }, [points, clusters, options.size, viewportTransform]);
+
+  return { clusters, overlays, viewportTransform, supercluster: null, getClusterExpansionZoom };
 }

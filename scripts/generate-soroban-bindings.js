@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, relative } from 'node:path';
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const ROOT = process.cwd();
 const CONTRACTS_DIR = join(ROOT, 'contracts');
 const OUT_FILE = join(ROOT, 'src', 'generated', 'soroban-bindings.ts');
 

@@ -1,14 +1,14 @@
 /**
- * server/graphql/schema.ts — unified GraphQL schema (#528)
+ * server/graphql/schema.ts — unified GraphQL schema
  *
- * Aggregates the Postgres-backed help-request data behind one endpoint. Only
- * the indexed columns are typed (see migrations/); anything else on a row is
- * passed through in `attributes` so the schema never invents columns.
+ * Combines:
+ * 1. Postgres-backed help-request and verification data (Issue #528)
+ * 2. Domain incidents, events, responders, and syncFlush mutations
  */
+
+import { buildSchema, type GraphQLSchema } from 'graphql'
+
 export const typeDefs = /* GraphQL */ `
-  """
-  Arbitrary JSON (the untyped remainder of a database row).
-  """
   scalar JSON
 
   type PoolStats {
@@ -31,9 +31,9 @@ export const typeDefs = /* GraphQL */ `
     algorithm: String!
   }
 
-  type Responder {
-    requestId: ID!
-    arrived: Boolean!
+  type Verification {
+    wallet: String!
+    recordedAt: String
     attributes: JSON!
   }
 
@@ -42,26 +42,155 @@ export const typeDefs = /* GraphQL */ `
     status: String
     createdAt: String
     attributes: JSON!
-    "Responders on this request. Batched across sibling requests: one query per page, not one per request."
     responders: [Responder!]!
     responderCount: Int!
     arrivedCount: Int!
   }
 
-  type Verification {
-    wallet: String!
-    recordedAt: String
-    attributes: JSON!
+  enum IncidentStatus {
+    open
+    assigned
+    acknowledged
+    resolved
+  }
+
+  enum Priority {
+    low
+    normal
+    high
+    critical
+  }
+
+  enum ResponderStatus {
+    assigned
+    en_route
+    on_scene
+    offline
+  }
+
+  type Location {
+    lat: Float!
+    lng: Float!
+  }
+
+  type Event {
+    id: ID!
+    incidentId: ID!
+    responderId: ID
+    type: String!
+    at: String!
+    cursor: String!
+    payload: JSON
+  }
+
+  type Responder {
+    id: ID
+    incidentId: ID
+    name: String
+    status: ResponderStatus
+    location: Location
+    lastEvent: Event
+
+    requestId: ID
+    arrived: Boolean
+    attributes: JSON
+  }
+
+  type Incident {
+    id: ID!
+    status: IncidentStatus!
+    priority: Priority!
+    createdAt: String!
+    version: Int!
+    location: Location!
+    responders: [Responder!]!
+    events: [Event!]!
+  }
+
+  type PageInfo {
+    hasNextPage: Boolean!
+    endCursor: String
+  }
+
+  type IncidentEdge {
+    node: Incident!
+    cursor: String!
+  }
+
+  type IncidentConnection {
+    edges: [IncidentEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type EventEdge {
+    node: Event!
+    cursor: String!
+  }
+
+  type EventConnection {
+    edges: [EventEdge!]!
+    pageInfo: PageInfo!
+  }
+
+  type SyncSuccess {
+    ok: Boolean!
+    serverVersion: Int!
+    incident: Incident!
+  }
+
+  type SyncConflict {
+    conflict: Boolean!
+    serverVersion: Int!
+    mergeProposal: JSON!
+  }
+
+  type ValidationIssue {
+    path: String!
+    message: String!
+  }
+
+  type ValidationError {
+    error: String!
+    issues: [ValidationIssue!]!
+  }
+
+  union SyncFlushResult = SyncSuccess | SyncConflict | ValidationError
+  union AssignResult = SyncSuccess | SyncConflict | ValidationError
+
+  input SyncFlushInput {
+    incidentId: ID!
+    baseVersion: Int!
+    patch: JSON!
+  }
+
+  input AssignResponderInput {
+    incidentId: ID!
+    responderId: ID!
+    expectedVersion: Int
   }
 
   type Query {
     health: Health!
-    "Newest first. limit is capped at 100."
     requests(status: String, limit: Int = 20, offset: Int = 0): [HelpRequest!]!
     request(id: ID!): HelpRequest
-    "Expert verification history for a wallet, newest first. limit is capped at 100."
     verifications(wallet: String!, limit: Int = 10): [Verification!]!
-    "The caller, when the request carries valid X-Signature auth headers; null otherwise."
     me: AuthUser
+
+    incident(id: ID!): Incident
+    incidents(limit: Int = 20, cursor: String): IncidentConnection!
+    events(incidentId: ID!, limit: Int = 20, cursor: String): EventConnection!
+  }
+
+  type Mutation {
+    assignResponder(input: AssignResponderInput!): AssignResult!
+    syncFlush(input: SyncFlushInput!): SyncFlushResult!
+  }
+
+  type Subscription {
+    event(incidentId: ID!, after: String): Event!
   }
 `
+
+export const schema: GraphQLSchema = buildSchema(typeDefs)
+
+export default schema

@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import express from "express";
+import { server as mockServer } from "../src/mocks/server.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -184,6 +185,14 @@ describe("injectNonce", () => {
 describe("HTTP integration", () => {
   const dirs = [];
   const servers = [];
+
+  beforeAll(() => {
+    mockServer.close();
+  });
+
+  afterAll(() => {
+    mockServer.listen({ onUnhandledRequest: "warn" });
+  });
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((s) => new Promise((r) => s.close(r))));

@@ -1,3 +1,5 @@
+// Canonical module (#901): imported by server/index.js with the `{ readiness }`
+// option it uses; the unused positional-argument `health.ts` twin was removed.
 import { Router } from "express";
 
 export function createHealthRouter({ readiness = () => true } = {}) {

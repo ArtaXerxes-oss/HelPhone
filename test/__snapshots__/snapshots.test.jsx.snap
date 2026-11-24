@@ -638,6 +638,7 @@ exports[`Component Snapshots > Landing Page > should match snapshot 1`] = `
     </div>
   </nav>
   <section
+    data-reveal="0"
     style="padding-top: 6rem; padding-bottom: 4rem; text-align: center;"
   >
     <h1

@@ -1,9 +1,58 @@
 {
-  "$comment": "Maintainer key policy for scripts/security/verify_maintainer_keys.js (#619). See docs/security-runbook.md.",
+  "$comment": "Maintainer key policy for scripts/security/verify_maintainer_keys.js (#619, #953). See docs/security-runbook.md.",
   "keyservers": ["https://keys.openpgp.org", "https://keyserver.ubuntu.com"],
   "cacheDir": ".cache/maintainer-keys",
   "cacheTtlHours": 6,
   "minCertifications": 1,
+  "ceremony": {
+    "threshold": 2,
+    "maxKeyAgeDays": 180,
+    "lastCeremonyAt": "2026-10-16T00:00:00Z",
+    "nextCeremonyDue": "2027-01-16T00:00:00Z",
+    "custodians": [
+      {
+        "handle": "@helphone-security-owner",
+        "fingerprint": "9D4C59193D279D587A6A4CF5155C9E705E2054F4",
+        "role": "primary-security",
+        "attestedAt": "2026-10-16T00:00:00Z",
+        "expiresAt": "2027-04-16T00:00:00Z",
+        "status": "active"
+      },
+      {
+        "handle": "@helphone-contract-owner",
+        "fingerprint": "4C35958AF3760C6127ED3BC892BD9161AE2430C9",
+        "role": "contract-custodian",
+        "attestedAt": "2026-10-16T00:00:00Z",
+        "expiresAt": "2027-04-16T00:00:00Z",
+        "status": "active"
+      },
+      {
+        "handle": "@helphone-maintainers",
+        "fingerprint": "968479A1AFF927E37D1A566BB5690EEEBB952194",
+        "role": "release-custodian",
+        "attestedAt": "2026-10-16T00:00:00Z",
+        "expiresAt": "2027-04-16T00:00:00Z",
+        "status": "active"
+      }
+    ]
+  },
+  "codeownersSignOff": {
+    "quarter": "2026-Q4",
+    "signedOffAt": "2026-10-16T00:00:00Z",
+    "expiresAt": "2027-01-16T00:00:00Z",
+    "signers": [
+      "@helphone-security-owner",
+      "@helphone-maintainers"
+    ],
+    "highStakesPaths": [
+      "contracts/",
+      "circuits/",
+      "server/db/",
+      "server/middleware/auth.ts",
+      "config/maintainer-keys.json",
+      ".github/CODEOWNERS"
+    ]
+  },
   "trustedKeys": [
     {
       "fingerprint": "968479A1AFF927E37D1A566BB5690EEEBB952194",

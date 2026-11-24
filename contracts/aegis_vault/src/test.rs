@@ -776,12 +776,16 @@ fn reentrancy_lock_blocks_nested_write_and_clears_after_errors() {
     StellarAssetClient::new(&c.env, &usdc).mint(&depositor, &1_000);
     c.client.add_treasury_asset(&c.admin, &usdc);
 
-    c.env.storage().instance().set(&DataKey::ReentrancyLock, &true);
+    c.env.as_contract(&c.client.address, || {
+        c.env.storage().instance().set(&DataKey::ReentrancyLock, &true);
+    });
     assert_eq!(
         c.client.try_treasury_deposit(&depositor, &usdc, &500),
         Err(Ok(VaultError::ReentrantCall))
     );
-    c.env.storage().instance().remove(&DataKey::ReentrancyLock);
+    c.env.as_contract(&c.client.address, || {
+        c.env.storage().instance().remove(&DataKey::ReentrancyLock);
+    });
 
     assert_eq!(
         c.client.try_treasury_deposit(&depositor, &usdc, &0),

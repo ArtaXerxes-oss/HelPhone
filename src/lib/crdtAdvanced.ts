@@ -148,11 +148,14 @@ export function computeReconciliationMerge<T>(
           losers.push(winner)
           winner = w
         }
-        conflicts.push(`key=${winner.key}:${reason}`)
+        conflicts.push(`key=${winner.key}:actor=${winner.actor}:${reason}`)
       }
 
-      winner.mergeId = `${Date.now()}:${winner.actor}:${winner.counter}`
-      merged.push(winner)
+      const resolved: AnnotatedOperation<T> = {
+        ...winner,
+        mergeId: winner.mergeId ?? `${winner.actor}:${winner.counter}`,
+      }
+      merged.push(resolved)
     }
   }
 

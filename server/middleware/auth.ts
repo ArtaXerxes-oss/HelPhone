@@ -7,7 +7,7 @@ import {
 } from '../lib/session-store.js'
 
 export type AuthenticatedUser =
-  | { id: string; username?: string; algorithm: 'webauthn'; sessionId?: string }
+  | { id: string; username?: string; algorithm: 'webauthn'; sessionId?: string; uv?: boolean }
   | { publicKey: string; algorithm: string; timestamp: number }
 
 export type AuthResult =
@@ -52,7 +52,15 @@ export async function verifyBearerSession(token: string): Promise<AuthResult> {
   const renewal = claims.jti ? await renewSessionIfNeeded(token, claims) : null
   return {
     ok: true,
-    user: { id: claims.sub, username: claims.username, algorithm: 'webauthn', sessionId: claims.jti },
+    // #924: fail closed. Only an explicit uv=true claim counts as user-verified;
+    // a legacy token or a missing claim is treated as UV-less.
+    user: {
+      id: claims.sub,
+      username: claims.username,
+      algorithm: 'webauthn',
+      sessionId: claims.jti,
+      uv: claims.uv === true,
+    },
     renewalToken: renewal?.token,
   }
 }
@@ -80,7 +88,13 @@ export async function verifyRequestAuth(req: Request): Promise<AuthResult> {
 
   const timestamp = parseInt(timestampStr, 10)
   const now = Date.now()
-  if (Number.isNaN(timestamp) || Math.abs(now - timestamp) > 5 * 60 * 1000) {
+  const offset = Number(req.header('X-Clock-Offset') ?? 0)
+  const accuracy = Number(req.header('X-Clock-Accuracy') ?? 0)
+  const clockBoundValid = Number.isFinite(offset) && Math.abs(offset) <= 60 * 60_000
+    && Number.isFinite(accuracy) && accuracy >= 0 && accuracy <= 30_000
+  const correctedTimestamp = timestamp + (clockBoundValid ? offset : 0)
+  const tolerance = 5 * 60_000 + (clockBoundValid ? accuracy : 0)
+  if (Number.isNaN(timestamp) || Math.abs(now - correctedTimestamp) > tolerance) {
     return {
       ok: false,
       status: 401,

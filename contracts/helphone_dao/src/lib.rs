@@ -45,6 +45,11 @@ pub enum DataKey {
     SecurityThreshold,
     SecurityApproval(u64, u32, Address),
     SecurityEpoch,
+    Oracle,
+    OracleFallbackBps,
+    OracleChangeCount,
+    OracleChange(u64, u32),
+    OracleChangeApproval(u64, u32, Address),
 }
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -146,6 +151,12 @@ pub enum DaoError {
     ProposalNotQueued = 23,
     TimelockExpired = 24,
     SecurityEpochOverflow = 25,
+    OracleNotSet = 26,
+    PriceUnavailable = 27,
+    StalePrice = 28,
+    PriceFeedDown = 29,
+    InvalidPrice = 30,
+    Overflow = 31,
 }
 
 // ── Events ─────────────────────────────────────────────────────────
@@ -172,6 +183,14 @@ pub struct AidDisbursedEvent<'a> {
     pub recipient: &'a Address,
     pub source_amount: &'a i128,
     pub payout_amount: &'a i128,
+}
+
+#[contractevent(topics = ["oracle-change"], data_format = "map")]
+pub struct OracleChangeEvent<'a> {
+    #[topic]
+    pub change_id: &'a u64,
+    pub oracle: &'a Address,
+    pub approvals: &'a u32,
 }
 
 #[contractevent(topics = ["executed"], data_format = "map")]
@@ -954,12 +973,195 @@ impl HelPhoneDao {
             return Err(DaoError::NotAdmin);
         }
         admin.require_auth();
+        if env.storage().instance().has(&DataKey::Oracle) {
+            return Err(DaoError::InvalidProposal);
+        }
         env.storage().instance().set(&DataKey::Oracle, &oracle);
         Ok(())
     }
 
     pub fn get_oracle(env: Env) -> Option<Address> {
         env.storage().instance().get(&DataKey::Oracle)
+    }
+
+    /// Admin: set the fallback payout rate in basis points of `source_amount`.
+    /// 0 keeps the failure closed (payouts pause while the feed is down).
+    pub fn set_oracle_fallback_bps(
+        env: Env,
+        admin: Address,
+        fallback_bps: u32,
+    ) -> Result<(), DaoError> {
+        require_admin(&env, &admin)?;
+        if fallback_bps > 10_000 {
+            return Err(DaoError::InvalidAmount);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleFallbackBps, &fallback_bps);
+        Ok(())
+    }
+
+    /// Admin: propose an oracle address change. Guardians then approve it and
+    /// anyone may apply it once the configured multisig threshold is met.
+    pub fn propose_oracle_change(
+        env: Env,
+        admin: Address,
+        oracle: Address,
+    ) -> Result<u64, DaoError> {
+        require_admin(&env, &admin)?;
+        let change_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleChangeCount)
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(DaoError::SecurityEpochOverflow)?;
+        let epoch: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SecurityEpoch)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleChangeCount, &change_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::OracleChange(change_id, epoch), &oracle);
+        Ok(change_id)
+    }
+
+    pub fn approve_oracle_change(
+        env: Env,
+        guardian: Address,
+        change_id: u64,
+    ) -> Result<u32, DaoError> {
+        guardian.require_auth();
+        let guardians: SorobanVec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SecurityKeys)
+            .ok_or(DaoError::NotSecurityGuardian)?;
+        if !guardians.contains(&guardian) {
+            return Err(DaoError::NotSecurityGuardian);
+        }
+        if !env
+            .storage()
+            .instance()
+            .has(&DataKey::OracleChange(
+                change_id,
+                env.storage()
+                    .instance()
+                    .get(&DataKey::SecurityEpoch)
+                    .unwrap_or(0),
+            ))
+        {
+            return Err(DaoError::ProposalNotFound);
+        }
+        let epoch: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SecurityEpoch)
+            .unwrap_or(0);
+        let approval_key = DataKey::OracleChangeApproval(change_id, epoch, guardian.clone());
+        if !env.storage().persistent().has(&approval_key) {
+            env.storage().persistent().set(&approval_key, &true);
+        }
+        Ok(Self::get_oracle_change_approval_count(env, change_id))
+    }
+
+    pub fn get_oracle_change_approval_count(env: Env, change_id: u64) -> u32 {
+        let guardians: SorobanVec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SecurityKeys)
+            .unwrap_or(SorobanVec::new(&env));
+        let epoch: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SecurityEpoch)
+            .unwrap_or(0);
+        let mut count = 0u32;
+        for guardian in guardians {
+            if env.storage().persistent().has(&DataKey::OracleChangeApproval(
+                change_id,
+                epoch,
+                guardian,
+            )) {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    pub fn apply_oracle_change(env: Env, change_id: u64) -> Result<(), DaoError> {
+        let epoch: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SecurityEpoch)
+            .unwrap_or(0);
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::OracleChange(change_id, epoch))
+            .ok_or(DaoError::ProposalNotFound)?;
+        let approvals = Self::get_oracle_change_approval_count(env.clone(), change_id);
+        let threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::SecurityThreshold)
+            .ok_or(DaoError::InvalidSecurityThreshold)?;
+        if approvals < threshold {
+            return Err(DaoError::InsufficientSecurityApprovals);
+        }
+        env.storage().instance().set(&DataKey::Oracle, &oracle);
+        OracleChangeEvent {
+            change_id: &change_id,
+            oracle: &oracle,
+            approvals: &approvals,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Fallible payout quote: stale/negative/future prices are rejected; a
+    /// genuinely down feed either pauses (0 bps) or uses the configured
+    /// fallback rate. Voting never reads this path.
+    pub fn quote_conversion_or_fallback(
+        env: Env,
+        from_token: Address,
+        to_token: Address,
+        amount: i128,
+    ) -> Result<i128, DaoError> {
+        if amount <= 0 {
+            return Err(DaoError::InvalidAmount);
+        }
+        let oracle: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Oracle)
+            .ok_or(DaoError::OracleNotSet)?;
+        match oracle::try_convert(
+            &env,
+            &oracle,
+            &OracleAsset::Stellar(from_token),
+            &OracleAsset::Stellar(to_token),
+            amount,
+        ) {
+            Ok(value) => Ok(value),
+            Err(DaoError::PriceFeedDown) => {
+                let bps: u32 = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::OracleFallbackBps)
+                    .unwrap_or(0);
+                amount
+                    .checked_mul(bps as i128)
+                    .ok_or(DaoError::Overflow)?
+                    .checked_div(10_000)
+                    .ok_or(DaoError::Overflow)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Live conversion of `amount` from one token to another (rounded down),
@@ -1007,6 +1209,40 @@ impl HelPhoneDao {
         )?;
         if payout <= 0 {
             return Err(DaoError::InvalidAmount);
+        }
+        soroban_sdk::token::TokenClient::new(&env, &payout_token).transfer(
+            &env.current_contract_address(),
+            &recipient,
+            &payout,
+        );
+        AidDisbursedEvent {
+            recipient: &recipient,
+            source_amount: &source_amount,
+            payout_amount: &payout,
+        }
+        .publish(&env);
+        Ok(payout)
+    }
+
+    /// Admin: pay using the feed when healthy, or the configured fallback
+    /// basis points when the feed is down. Stale/invalid prices still abort.
+    pub fn disburse_aid_with_fallback(
+        env: Env,
+        admin: Address,
+        recipient: Address,
+        source_token: Address,
+        payout_token: Address,
+        source_amount: i128,
+    ) -> Result<i128, DaoError> {
+        require_admin(&env, &admin)?;
+        let payout = Self::quote_conversion_or_fallback(
+            env.clone(),
+            source_token,
+            payout_token.clone(),
+            source_amount,
+        )?;
+        if payout <= 0 {
+            return Err(DaoError::PriceFeedDown);
         }
         soroban_sdk::token::TokenClient::new(&env, &payout_token).transfer(
             &env.current_contract_address(),

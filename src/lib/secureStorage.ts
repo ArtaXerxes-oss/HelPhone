@@ -22,7 +22,20 @@ const fromBase64 = (b64: string): Uint8Array => Uint8Array.from(atob(b64), (c) =
 export class SecureStorage {
   private key: CryptoKey | null = null;
 
-  constructor(private readonly storage: Storage = globalThis.localStorage) {}
+  /**
+   * @param storage backing store (localStorage by default)
+   * @param scope   operator namespace from normalizeOperatorId(), or '' for the
+   *   device-wide store the app has always used. A scoped instance reads and
+   *   writes only its own entries and derives a key other scopes cannot reproduce.
+   */
+  constructor(
+    private readonly storage: Storage = globalThis.localStorage,
+    private readonly scope = '',
+  ) {}
+
+  get namespace(): string {
+    return this.scope;
+  }
 
   get unlocked(): boolean {
     return this.key !== null;
@@ -30,7 +43,11 @@ export class SecureStorage {
 
   /** Derive the key from a passphrase. Must be called before get/set. */
   async unlock(passphrase: string): Promise<void> {
-    this.key = await deriveStorageKey(passphrase);
+    this.key = await deriveStorageKey(passphrase, this.scope);
+  }
+
+  private entryName(name: string): string {
+    return this.scope ? `${PREFIX}op:${this.scope}:${name}` : PREFIX + name;
   }
 
   /** Drop the in-memory key. */
@@ -49,13 +66,13 @@ export class SecureStorage {
     const ct = new Uint8Array(
       await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(value)),
     );
-    this.storage.setItem(PREFIX + name, JSON.stringify({ v: VERSION, iv: toBase64(iv), ct: toBase64(ct) }));
+    this.storage.setItem(this.entryName(name), JSON.stringify({ v: VERSION, iv: toBase64(iv), ct: toBase64(ct) }));
   }
 
   /** Returns null if the entry is absent. Throws if it cannot be decrypted. */
   async getItem(name: string): Promise<string | null> {
     const key = this.requireKey();
-    const raw = this.storage.getItem(PREFIX + name);
+    const raw = this.storage.getItem(this.entryName(name));
     if (raw === null) return null;
     let parsed: { v?: number; iv?: string; ct?: string };
     try {
@@ -79,8 +96,52 @@ export class SecureStorage {
   }
 
   removeItem(name: string): void {
-    this.storage.removeItem(PREFIX + name);
+    this.storage.removeItem(this.entryName(name));
   }
+}
+
+const OPERATOR_ID_RE = /^[a-z0-9][a-z0-9-]{1,31}$/;
+
+/**
+ * Normalise a shift operator's id into a storage namespace (#925). Ids are 2-32
+ * characters of [a-z0-9-] after trimming and lower-casing. Anything else is refused,
+ * so a namespace cannot carry a separator or path-like character.
+ */
+export function normalizeOperatorId(operatorId: string): string {
+  const id = String(operatorId ?? '').trim().toLowerCase();
+  if (!OPERATOR_ID_RE.test(id)) {
+    throw new Error('Operator ID must be 2-32 characters: letters, digits or dashes');
+  }
+  return id;
+}
+
+const operatorVaults = new Map<string, SecureStorage>();
+
+/**
+ * The encrypted store for one operator. Instances are cached per operator, so
+ * one unlock serves that operator's screens and lockAllOperatorStorage() drops it.
+ */
+export function getOperatorStorage(operatorId: string, backing: Storage = globalThis.localStorage): SecureStorage {
+  const scope = normalizeOperatorId(operatorId);
+  let vault = operatorVaults.get(scope);
+  if (!vault) {
+    vault = new SecureStorage(backing, scope);
+    operatorVaults.set(scope, vault);
+  }
+  return vault;
+}
+
+/**
+ * Drop every operator key from memory: on shift handoff, manual lock, or auto-lock.
+ * Entries stay encrypted at rest. Returns how many were unlocked.
+ */
+export function lockAllOperatorStorage(): number {
+  let unlocked = 0;
+  for (const vault of operatorVaults.values()) {
+    if (vault.unlocked) unlocked += 1;
+    vault.lock();
+  }
+  return unlocked;
 }
 
 export interface JournalEntry {

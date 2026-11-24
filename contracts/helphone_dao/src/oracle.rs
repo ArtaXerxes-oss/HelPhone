@@ -57,6 +57,26 @@ pub fn fetch_price(env: &Env, oracle: &Address, asset: &OracleAsset) -> i128 {
     data.price
 }
 
+/// Fallible price read for payout paths. A missing feed or failed external
+/// call is a feed outage; malformed/stale/future prices remain hard errors.
+pub fn try_fetch_price(env: &Env, oracle: &Address, asset: &OracleAsset) -> Result<i128, DaoError> {
+    let data = match PriceOracleClient::new(env, oracle).try_lastprice(asset) {
+        Ok(Ok(Some(data))) => data,
+        _ => return Err(DaoError::PriceFeedDown),
+    };
+    if data.price <= 0 {
+        return Err(DaoError::InvalidPrice);
+    }
+    let now = env.ledger().timestamp();
+    if data.timestamp > now.saturating_add(MAX_FUTURE_SKEW_SECS) {
+        return Err(DaoError::InvalidPrice);
+    }
+    if now.saturating_sub(data.timestamp) > MAX_PRICE_AGE_SECS {
+        return Err(DaoError::StalePrice);
+    }
+    Ok(data.price)
+}
+
 /// `amount` of `from` expressed in `to`, rounded down. Both prices come from
 /// the same feed so its decimals cancel out.
 pub fn convert(
@@ -78,4 +98,28 @@ pub fn convert(
         .checked_mul(p_from)
         .unwrap_or_else(|| panic_with_error!(env, DaoError::Overflow))
         / p_to
+}
+
+/// Fallible conversion used by payout paths so a feed outage can pause
+/// payouts without reverting the whole transaction as an invariant failure.
+pub fn try_convert(
+    env: &Env,
+    oracle: &Address,
+    from: &OracleAsset,
+    to: &OracleAsset,
+    amount: i128,
+) -> Result<i128, DaoError> {
+    if amount <= 0 {
+        return Err(DaoError::InvalidAmount);
+    }
+    if from == to {
+        return Ok(amount);
+    }
+    let p_from = try_fetch_price(env, oracle, from)?;
+    let p_to = try_fetch_price(env, oracle, to)?;
+    amount
+        .checked_mul(p_from)
+        .ok_or(DaoError::Overflow)?
+        .checked_div(p_to)
+        .ok_or(DaoError::Overflow)
 }

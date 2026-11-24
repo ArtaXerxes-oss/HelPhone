@@ -16,6 +16,7 @@ import { sosAlert, fieldConfirm } from "../lib/field/audioAlert";
 import { isFlagEnabled } from "../lib/field/flags";
 import { enqueue, findByIdempotencyKey, PRIO } from "../lib/field/offlineQueue";
 import { postSwMessage } from "../lib/field/swChannel";
+import { flushSosQueue } from "../lib/field/sosDispatch";
 
 export const SOS_HOLD_MS = 1200;
 export const SOS_DEDUPE_MS = 10000;
@@ -45,6 +46,7 @@ export function useHardwareSOS({
   onCommit = null,
   onPttToggle = null,
   onNeedsConfirm = null,
+  getLocation = null,
 } = {}) {
   const flagOn = isFlagEnabled("hardwareSos") && enabled;
   const [pttActive, setPttActive] = useState(false);
@@ -53,6 +55,21 @@ export function useHardwareSOS({
   const [lastCommitAt, setLastCommitAt] = useState(null);
   const holdStartRef = useRef(null);
   const rafRef = useRef(null);
+  // Read through a ref so the drain always sees the latest fix without re-subscribing.
+  const getLocationRef = useRef(getLocation);
+  getLocationRef.current = getLocation;
+
+  // Push queued SOS intents to the server (#941). Best effort: a failure leaves the
+  // entry queued for the next trigger.
+  const drainSos = useCallback(() => {
+    let location = null;
+    try {
+      location = getLocationRef.current ? getLocationRef.current() : null;
+    } catch {
+      location = null;
+    }
+    flushSosQueue({ location }).catch(() => {});
+  }, []);
 
   const commit = useCallback(
     ({ source = "hardware", force = false } = {}) => {
@@ -71,15 +88,16 @@ export function useHardwareSOS({
         kind: "sos",
         prio: PRIO.SOS,
         idempotencyKey,
-        data: { ts: now, source },
+        data: { ts: now, source, force: force === true },
       });
       sosAlert();
       postSwMessage("HELPHONE_SOS", { idempotencyKey, ts: now, source });
       setLastCommitAt(now);
+      drainSos();
       if (onCommit) onCommit({ entry, duplicate, idempotencyKey, source });
       return { entry, duplicate };
     },
-    [canAutoDispatch, onCommit, onNeedsConfirm],
+    [canAutoDispatch, onCommit, onNeedsConfirm, drainSos],
   );
 
   const togglePtt = useCallback(() => {
@@ -137,6 +155,9 @@ export function useHardwareSOS({
 
     document.addEventListener("keydown", onKeyDown);
     document.addEventListener("keyup", onKeyUp);
+    // Connectivity returned: drain any SOS that was held offline.
+    const onOnline = () => drainSos();
+    window.addEventListener("online", onOnline);
 
     let mediaHandlers = false;
     try {
@@ -165,6 +186,7 @@ export function useHardwareSOS({
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("online", onOnline);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       if (mediaHandlers) {
         try {
@@ -175,7 +197,7 @@ export function useHardwareSOS({
         }
       }
     };
-  }, [flagOn, commit, togglePtt, onNeedsConfirm]);
+  }, [flagOn, commit, togglePtt, onNeedsConfirm, drainSos]);
 
   return {
     enabled: flagOn,

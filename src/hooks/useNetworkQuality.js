@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   getRpcHealthSnapshot,
   probeRpcNow,
@@ -19,6 +19,7 @@ import {
 let consumers = 0;
 
 export function useNetworkQuality() {
+  const [clock, setClock] = useState({ offsetMs: null, accuracyMs: null });
   const snapshot = useSyncExternalStore(
     subscribeRpcHealth,
     getRpcHealthSnapshot,
@@ -34,5 +35,25 @@ export function useNetworkQuality() {
     };
   }, []);
 
-  return { ...snapshot, refresh: probeRpcNow };
+  useEffect(() => {
+    let cancelled = false;
+    const samples = [];
+    Promise.all(Array.from({ length: 3 }, async () => {
+      const t0 = Date.now();
+      const response = await fetch("/api/time", { cache: "no-store" });
+      const { tServer } = await response.json();
+      const t1 = Date.now();
+      samples.push({ t0, t1, tServer });
+    })).then(() => {
+      if (cancelled || !samples.length) return;
+      const best = samples.reduce((a, b) => b.t1 - b.t0 < a.t1 - a.t0 ? b : a);
+      setClock({
+        offsetMs: Math.round(best.tServer - (best.t0 + best.t1) / 2),
+        accuracyMs: Math.ceil((best.t1 - best.t0) / 2),
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  return { ...snapshot, clockOffsetMs: clock.offsetMs, clockAccuracyMs: clock.accuracyMs, refresh: probeRpcNow };
 }

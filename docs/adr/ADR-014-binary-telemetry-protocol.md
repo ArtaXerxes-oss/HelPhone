@@ -4,7 +4,12 @@
 |---|---|
 | Status | Proposed (feasibility spike [#614](https://github.com/Hel-Phone/HelPhone/issues/614)) |
 | Date | 2026-09-24 |
-| Evidence | [Deserialization throughput & GC report](../spikes/614-binary-serialization-report.md) · raw data in [`docs/spikes/results/`](../spikes/results/) (`binary-serialization*.json`, `binary-conformance.json`) |
+| Evidence | [Deserialization throughput & GC report](../spikes/614-binary-serialization-report.md) · [Node](../spikes/results/binary-serialization.json), [browser](../spikes/results/binary-serialization-browser.json), [4× CPU](../spikes/results/binary-serialization-browser-cpu4x.json), [conformance](../spikes/results/binary-conformance.json) |
+
+**Evidence check:** `binary-serialization.json#/meta/rate = 10000`
+**Evidence check:** `binary-serialization-browser.json#/meta/rate = 10000`
+**Evidence check:** `binary-serialization-browser-cpu4x.json#/meta/rate = 10000`
+**Evidence check:** `binary-conformance.json#/cases/empty frame/flatbuffers/bytes/ours = 48`
 | Prototype | `src/schemas/telemetry.{fbs,capnp,proto}`, `src/utils/binaryParser.js`, `src/utils/binaryParserWasm.js`, `src/wasm/telemetry_reader/`, `src/components/TelemetryLab.jsx` (route `/lab/telemetry-bench`) |
 
 ## Context

@@ -12,7 +12,14 @@ import {
   splitCommit,
   splitTag,
   KeyStore,
+  verifyKeyCustody,
+  verifyCodeownersSignOff,
 } from "../scripts/security/verify_maintainer_keys.js";
+import {
+  parseBusFactorLedger,
+  generateRefreshChecklist,
+  validateRefreshState,
+} from "../scripts/security/codeowners_refresh.js";
 
 // #619 — Maintainer key revocation & web-of-trust engine. Fixtures in
 // test/fixtures/pgp were generated with GnuPG 2.4 from throwaway keys
@@ -190,5 +197,52 @@ describe("KeyStore cache", () => {
     const refresh = new KeyStore({ cacheDir, refresh: true, keyservers: ["https://keys.openpgp.org"], fetchImpl });
     await refresh.keys([FPR.dave]);
     expect(calls).toHaveLength(3);
+  });
+});
+
+describe("Maintainer-key ceremony & CODEOWNERS refresh (#953)", () => {
+  const config = JSON.parse(readFileSync(join(__dirname, "../config/maintainer-keys.json"), "utf8"));
+  const codeowners = readFileSync(join(__dirname, "../.github/CODEOWNERS"), "utf8");
+  const ledger = readFileSync(join(__dirname, "../docs/bus-factor-ledger.md"), "utf8");
+  const fixedNow = new Date("2026-11-21T12:00:00Z");
+
+  it("verifies 2-of-N key custody and fails on expired or incomplete key sets", () => {
+    expect(verifyKeyCustody(config, { now: fixedNow }).ok).toBe(true);
+
+    const expired = structuredClone(config);
+    expired.ceremony.custodians[0].expiresAt = "2026-01-01T00:00:00Z";
+    expect(verifyKeyCustody(expired, { now: fixedNow }).ok).toBe(false);
+
+    const incomplete = structuredClone(config);
+    incomplete.ceremony.custodians = incomplete.ceremony.custodians.slice(0, 1);
+    expect(verifyKeyCustody(incomplete, { now: fixedNow }).ok).toBe(false);
+  });
+
+  it("gates high-stakes paths on up-to-date CODEOWNERS sign-off", () => {
+    expect(verifyCodeownersSignOff(config, codeowners, { now: fixedNow }).ok).toBe(true);
+
+    const stale = structuredClone(config);
+    stale.codeownersSignOff.expiresAt = "2026-01-01T00:00:00Z";
+    expect(verifyCodeownersSignOff(stale, codeowners, { now: fixedNow }).ok).toBe(false);
+  });
+
+  it("extracts bus-factor-1 subsystems with dated drills and validates refresh checklist", () => {
+    const subsystems = parseBusFactorLedger(ledger);
+    const bf1 = subsystems.filter((s) => s.busFactor === 1);
+    expect(bf1.length).toBeGreaterThanOrEqual(4);
+    for (const s of bf1) {
+      expect(s.targetDate).toBeTruthy();
+      expect(s.drill).toBeTruthy();
+    }
+
+    const checklist = generateRefreshChecklist({ subsystems, config, codeownersText: codeowners });
+    const validation = validateRefreshState({
+      subsystems,
+      config,
+      codeownersText: codeowners,
+      checklistText: checklist,
+      now: fixedNow,
+    });
+    expect(validation.ok).toBe(true);
   });
 });

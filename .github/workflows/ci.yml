@@ -81,11 +81,23 @@ jobs:
       - name: Install Dependencies
         run: npm ci || npm install
 
+      - name: Verify environment templates
+        run: npm run config:check
+
+      - name: Reject IPv4-literal endpoints in env templates (#927)
+        run: npm run security:endpoint-literals
+
       - name: Scan dependency lifecycle scripts
         run: bash scripts/sandbox-install.sh --scan node_modules
 
       - name: Audit generated code for security defects
         run: npm run security:ai-code
+
+      - name: Three-way GraphQL/REST/OpenAPI schema contract drift guard (#946)
+        run: npm run schema:drift -- --report artifacts/schema-drift-report.md
+
+      - name: Feature flag governance & ZK/ranking pin audit (#944)
+        run: npm run security:flag-audit
 
       - name: Code Formatting & ESLint Quality Check
         run: npx eslint .
@@ -118,15 +130,6 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/helphone_test
-
-  # Network throttling matrix (CDP): one leg per profile so a regression names the network class it breaks on
-  e2e-throttling:
-    name: E2E throttling (${{ matrix.profile }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: ['2g', '3g', 'cap-500kbps', 'offline']
     steps:
       - name: Checkout Codebase
         uses: actions/checkout@v4
@@ -183,6 +186,31 @@ jobs:
               await c.end();
             })().catch((e) => { console.error(e); process.exit(1); });
           "
+
+      - name: Verify critical search index plans
+        run: npx tsx scripts/check-index-plans.ts
+
+  # Network throttling matrix (CDP): one leg per profile so a regression names the network class it breaks on
+  e2e-throttling:
+    name: E2E throttling (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ['2g', '3g', 'cap-500kbps', 'offline']
+    steps:
+      - name: Checkout Codebase
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci || npm install
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
@@ -239,6 +267,27 @@ jobs:
           path: |
             test-results/
             tests/e2e/layout.spec.ts-snapshots/
+          if-no-files-found: ignore
+
+  e2e-field-zk:
+    name: E2E field and ZK flows
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci || npm install
+      - run: npx playwright install --with-deps chromium
+      - run: npx playwright test tests/e2e/field-zk-flows.spec.ts --project=chromium --reporter=line
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: field-zk-playwright-traces
+          path: test-results/
           if-no-files-found: ignore
 
   # Build-pipeline network egress monitor: every outbound connection made
@@ -384,6 +433,11 @@ jobs:
       # crypto-pins.json (package-lock.json / Cargo.lock coupling).
       - name: Crypto-core pin gate
         run: node scripts/check-crypto-pins.js
+
+      # Refs #945 — fails if reputation circuit, prover pins, and ranking
+      # flag generation drift out of alignment.
+      - name: Reputation prover pin alignment
+        run: node scripts/check-reputation-pins.js
 
       # Closes #599 — GitHub Security Advisory scan + minimum-patch plan.
       # Report-only here; scheduled patch PRs come from cve-patch-bot.yml.

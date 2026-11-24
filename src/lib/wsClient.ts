@@ -1,3 +1,16 @@
+import { classifyProbeFailure, type ProbeFailureClass } from './networkEstimator';
+import {
+  createRaceTracker,
+  decideRace,
+  isRaceFlagOn,
+  readMeteredSignal,
+  readSyncBatteryLevel,
+  type NavigatorWithSignals,
+  type PayloadClass,
+  type RaceDecision,
+  type RaceHourTracker,
+} from './raceGate';
+
 export type ConnectionState = 'CONNECTING' | 'OPEN' | 'RECONNECTING' | 'FAILED';
 
 /** Origin tag injected into kiosk-sourced intent messages. */
@@ -11,6 +24,22 @@ export interface WsClientOptions {
   onStateChange?: (state: ConnectionState) => void;
   onMessage?: (data: unknown) => void;
   onResync?: () => void;
+  raceFlagOn?: boolean;
+  operatorOverride?: boolean;
+  secondarySend?: (payload: string) => void;
+  navigator?: NavigatorWithSignals | null;
+  now?: () => number;
+}
+
+export interface WsDispatchOptions {
+  payload?: PayloadClass;
+  stalled?: boolean;
+  rttMs?: number;
+  metered?: boolean;
+  batteryLevel?: number | null;
+  operatorOverride?: boolean;
+  raceFlagOn?: boolean;
+  secondarySend?: (payload: string) => void;
 }
 
 /**
@@ -29,12 +58,45 @@ export class WsClient {
   private readonly maxRetries: number;
   private readonly baseDelayMs: number;
   private readonly maxDelayMs: number;
+  private readonly now: () => number;
+  private readonly raceTracker: RaceHourTracker;
+  private readonly inboundDedupe = new ReplayCache();
+  private cachedBatteryLevel: number | null = null;
+  private duplicatesDropped = 0;
+  private racesFired = 0;
+  private lastFailureClass: ProbeFailureClass | null = null;
 
   constructor(private options: WsClientOptions) {
     this.url = options.url;
     this.maxRetries = options.maxRetries ?? Infinity;
     this.baseDelayMs = options.baseDelayMs ?? 1000;
     this.maxDelayMs = options.maxDelayMs ?? 30_000;
+    this.now = options.now ?? (() => Date.now());
+    this.raceTracker = createRaceTracker(this.now);
+    this.watchBattery();
+  }
+
+  private getNavigator(): NavigatorWithSignals | null {
+    if (this.options.navigator !== undefined) return this.options.navigator;
+    return typeof navigator !== 'undefined' ? (navigator as unknown as NavigatorWithSignals) : null;
+  }
+
+  private watchBattery(): void {
+    const nav = this.getNavigator();
+    if (!nav || typeof nav.getBattery !== 'function') return;
+    nav
+      .getBattery()
+      .then((battery) => {
+        if (!battery) return;
+        const update = () => {
+          if (typeof battery.level === 'number' && Number.isFinite(battery.level)) {
+            this.cachedBatteryLevel = battery.level;
+          }
+        };
+        update();
+        battery.addEventListener?.('levelchange', update);
+      })
+      .catch(() => {});
   }
 
   connect(): void {
@@ -52,11 +114,7 @@ export class WsClient {
     };
 
     this.ws.onmessage = (event) => {
-      try {
-        this.options.onMessage?.(JSON.parse(event.data));
-      } catch {
-        this.options.onMessage?.(event.data);
-      }
+      this.handleInboundMessage(event.data);
     };
 
     this.ws.onclose = () => {
@@ -65,8 +123,46 @@ export class WsClient {
     };
 
     this.ws.onerror = () => {
+      // Browsers expose no error detail on WebSocket, so the bucket comes from the endpoint shape (#928).
+      this.lastFailureClass = classifyProbeFailure(this.url, { error: 'websocket error' });
       this.ws?.close();
     };
+  }
+
+  handleInboundMessage(raw: unknown): boolean {
+    let parsed: unknown = raw;
+    if (typeof raw === 'string') {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        parsed = raw;
+      }
+    }
+    if (parsed && typeof parsed === 'object') {
+      const record = parsed as Record<string, unknown>;
+      const key = record.idempotencyKey ?? record.id ?? record.nonce;
+      if (typeof key === 'string' || typeof key === 'number') {
+        if (!this.inboundDedupe.checkAndAdd(String(key), this.now())) {
+          this.duplicatesDropped++;
+          return false;
+        }
+      }
+    }
+    this.options.onMessage?.(parsed);
+    return true;
+  }
+
+  getDuplicatesDropped(): number {
+    return this.duplicatesDropped;
+  }
+
+  /** Class of the most recent socket error, or null before any error (#928). */
+  getLastFailureClass(): ProbeFailureClass | null {
+    return this.lastFailureClass;
+  }
+
+  getRacesFired(): number {
+    return this.racesFired;
   }
 
   private scheduleReconnect(): void {
@@ -104,6 +200,67 @@ export class WsClient {
     if (this.ws && this.state === 'OPEN') {
       this.ws.send(typeof data === 'string' ? data : JSON.stringify(data));
     }
+  }
+
+  /**
+   * Send a dispatch payload gated by the pure P0 multipath race policy (#959).
+   * P1 and bulk payloads never race; P0 races at most once on a stalled path
+   * when not vetoed by metered bearer, low battery, or the rolling hourly cap.
+   */
+  sendDispatch(
+    data: Record<string, unknown>,
+    opts: WsDispatchOptions = {},
+  ): { sent: boolean; raced: boolean; decision: RaceDecision } {
+    const nav = this.getNavigator();
+    const rawPayload = opts.payload ?? (data.payloadClass as PayloadClass) ?? (data.priority as PayloadClass) ?? 'P1';
+    const payload: PayloadClass = rawPayload === 'P0' || rawPayload === 'P1' || rawPayload === 'bulk' ? rawPayload : 'P1';
+    const flagOn =
+      opts.raceFlagOn ??
+      this.options.raceFlagOn ??
+      isRaceFlagOn(
+        (typeof import.meta !== 'undefined' ? (import.meta as unknown as { env?: Record<string, string> }).env?.VITE_MULTIPATH_RACE : undefined) ??
+          (globalThis as unknown as { process?: { env?: Record<string, string> } }).process?.env?.VITE_MULTIPATH_RACE,
+      );
+    const stalled = opts.stalled ?? this.state === 'RECONNECTING';
+    const metered = opts.metered ?? readMeteredSignal(nav);
+    const batteryLevel =
+      opts.batteryLevel !== undefined
+        ? opts.batteryLevel
+        : readSyncBatteryLevel(nav, this.cachedBatteryLevel);
+    const operatorOverride = Boolean(opts.operatorOverride ?? this.options.operatorOverride);
+    const rttMs = opts.rttMs ?? 0;
+
+    const decision = decideRace(flagOn, {
+      payload,
+      path: { rttMs, stalled, metered },
+      batteryLevel,
+      racesLastHour: this.raceTracker.count(this.now()),
+      operatorOverride,
+    });
+
+    const serialized = JSON.stringify(data);
+    let sent = false;
+    if (this.ws && this.state === 'OPEN') {
+      this.ws.send(serialized);
+      sent = true;
+    }
+
+    let raced = false;
+    if (decision.race) {
+      this.raceTracker.record(this.now());
+      this.racesFired++;
+      const secondary = opts.secondarySend ?? this.options.secondarySend;
+      if (secondary) {
+        secondary(serialized);
+        raced = true;
+        sent = true;
+      } else if (this.ws && this.state === 'OPEN') {
+        this.ws.send(serialized);
+        raced = true;
+      }
+    }
+
+    return { sent, raced, decision };
   }
 
   /**

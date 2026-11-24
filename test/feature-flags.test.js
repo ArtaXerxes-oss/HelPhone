@@ -1,9 +1,17 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import {
   FeatureFlagEvaluator,
+  FLAG_PRECEDENCE,
   hashString,
   defaultEvaluator,
+  resolveUnifiedFlag,
 } from '../src/lib/featureFlags.js'
+import {
+  flagProvenanceBundle,
+  flagSnapshot,
+  isFlagEnabled,
+  setFlag,
+} from '../src/lib/field/flags.js'
 
 describe('Dynamic Feature Canary Rollouts & State Evaluation', () => {
   let evaluator
@@ -99,5 +107,72 @@ describe('Dynamic Feature Canary Rollouts & State Evaluation', () => {
     expect(fetchSpy).toHaveBeenCalledWith('/config.json')
     expect(fetched).toEqual(mockConfig)
     fetchSpy.mockRestore()
+  })
+
+  describe('Unified remote and field flag provenance (#943)', () => {
+    beforeEach(() => {
+      localStorage.clear()
+    })
+
+    it('documents precedence when remote config and field localStorage conflict', () => {
+      expect(FLAG_PRECEDENCE).toEqual([
+        'env_override',
+        'remote_config',
+        'field_local',
+        'default',
+      ])
+
+      // Field localStorage disables radioBridge
+      setFlag('radioBridge', false)
+      expect(isFlagEnabled('radioBridge', undefined, evaluator)).toBe(false)
+
+      // Conflicting remote config explicitly enables radioBridge -> remote_config wins
+      const remoteOverridesField = new FeatureFlagEvaluator({
+        version: '2.1.0',
+        flags: {
+          radioBridge: { enabled: true, rolloutPercentage: 100 },
+        },
+      })
+      expect(isFlagEnabled('radioBridge', undefined, remoteOverridesField)).toBe(true)
+
+      const resolved = resolveUnifiedFlag(
+        'radioBridge',
+        { override: false, defaultOn: true, version: 1 },
+        undefined,
+        remoteOverridesField,
+      )
+      expect(resolved.enabled).toBe(true)
+      expect(resolved.source).toBe('remote_config')
+      expect(resolved.provenance.remote.enabled).toBe(true)
+      expect(resolved.provenance.remote.version).toBe('2.1.0')
+      expect(resolved.provenance.field.enabled).toBe(false)
+      expect(resolved.provenance.field.version).toBe(1)
+    })
+
+    it('records both remote and field sources with versions in flagSnapshot() and bundle provenance', () => {
+      setFlag('nfcCheckIn', false)
+      const remoteEvaluator = new FeatureFlagEvaluator({
+        version: '3.0.0',
+        flags: {
+          hardwareSos: { enabled: false, rolloutPercentage: 100 },
+        },
+      })
+
+      const snap = flagSnapshot(undefined, remoteEvaluator)
+      expect(snap.hardwareSos.enabled).toBe(false)
+      expect(snap.hardwareSos.source).toBe('remote_config')
+      expect(snap.hardwareSos.provenance.remote.version).toBe('3.0.0')
+      expect(snap.hardwareSos.provenance.field.version).toBe(1)
+
+      expect(snap.nfcCheckIn.enabled).toBe(false)
+      expect(snap.nfcCheckIn.source).toBe('field_local')
+      expect(snap.nfcCheckIn.provenance.field.enabled).toBe(false)
+      expect(snap.nfcCheckIn.provenance.remote.present).toBe(false)
+
+      const bundle = flagProvenanceBundle(undefined, remoteEvaluator)
+      expect(bundle.remoteConfigVersion).toBe('3.0.0')
+      expect(bundle.precedence).toEqual(FLAG_PRECEDENCE)
+      expect(bundle.flags.hardwareSos.enabled).toBe(false)
+    })
   })
 })

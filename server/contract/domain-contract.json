@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "description": "Canonical REST ↔ GraphQL ↔ DB field table. Any change here is a contract change and must be reviewed with --update.",
+  "surfaces": {
+    "rest": "swagger.json",
+    "graphql": "server/graphql/schema.graphql",
+    "database": "server/lib/domainStore.ts"
+  },
+  "entities": {
+    "Incident": {
+      "dbTable": "incidents",
+      "restPath": "/api/dispatch/{id}",
+      "restRoot": "incident",
+      "fields": {
+        "id": { "db": "id", "graphqlType": "ID!", "nullable": false },
+        "status": { "db": "status", "graphqlType": "IncidentStatus!", "nullable": false },
+        "priority": { "db": "priority", "graphqlType": "Priority!", "nullable": false },
+        "createdAt": { "db": "created_at", "graphqlType": "String!", "nullable": false },
+        "version": { "db": "version", "graphqlType": "Int!", "nullable": false },
+        "location": { "db": "location", "graphqlType": "Location!", "nullable": false },
+        "responders": { "db": "join:responders", "graphqlType": "[Responder!]!", "nullable": false, "list": true },
+        "events": { "db": "join:events", "graphqlType": "[Event!]!", "nullable": false, "list": true }
+      }
+    },
+    "Responder": {
+      "dbTable": "responders",
+      "restPath": "/api/dispatch/{id}",
+      "restRoot": "incident.responders",
+      "fields": {
+        "id": { "db": "id", "graphqlType": "ID!", "nullable": false },
+        "incidentId": { "db": "incident_id", "graphqlType": "ID!", "nullable": false },
+        "name": { "db": "name", "graphqlType": "String!", "nullable": false },
+        "status": { "db": "status", "graphqlType": "ResponderStatus!", "nullable": false },
+        "location": { "db": "location", "graphqlType": "Location!", "nullable": false },
+        "lastEvent": { "db": "join:events", "graphqlType": "Event", "nullable": true }
+      }
+    },
+    "Event": {
+      "dbTable": "events",
+      "restPath": "/api/events",
+      "restRoot": "events",
+      "fields": {
+        "id": { "db": "id", "graphqlType": "ID!", "nullable": false },
+        "incidentId": { "db": "incident_id", "graphqlType": "ID!", "nullable": false },
+        "responderId": { "db": "responder_id", "graphqlType": "ID", "nullable": true },
+        "type": { "db": "type", "graphqlType": "String!", "nullable": false },
+        "at": { "db": "at", "graphqlType": "String!", "nullable": false },
+        "cursor": { "db": "cursor", "graphqlType": "String!", "nullable": false },
+        "payload": { "db": "payload", "graphqlType": "JSON", "nullable": true }
+      }
+    },
+    "Location": {
+      "dbTable": "inline",
+      "restPath": "/api/dispatch/{id}",
+      "restRoot": "incident.location",
+      "fields": {
+        "lat": { "db": "lat", "graphqlType": "Float!", "nullable": false },
+        "lng": { "db": "lng", "graphqlType": "Float!", "nullable": false }
+      }
+    },
+    "SyncConflict": {
+      "dbTable": "inline",
+      "restPath": "/api/sync/flush",
+      "restRoot": "conflict",
+      "fields": {
+        "conflict": { "db": "conflict", "graphqlType": "Boolean!", "nullable": false },
+        "serverVersion": { "db": "version", "graphqlType": "Int!", "nullable": false },
+        "mergeProposal": { "db": "merge_proposal", "graphqlType": "JSON!", "nullable": false }
+      }
+    },
+    "SyncSuccess": {
+      "dbTable": "inline",
+      "restPath": "/api/sync/flush",
+      "restRoot": "ok",
+      "fields": {
+        "ok": { "db": "ok", "graphqlType": "Boolean!", "nullable": false },
+        "serverVersion": { "db": "version", "graphqlType": "Int!", "nullable": false },
+        "incident": { "db": "incidents", "graphqlType": "Incident!", "nullable": false }
+      }
+    },
+    "ValidationError": {
+      "dbTable": "inline",
+      "restPath": "/api/dispatch",
+      "restRoot": "issues",
+      "fields": {
+        "error": { "db": "error", "graphqlType": "String!", "nullable": false },
+        "issues": { "db": "issues", "graphqlType": "[ValidationIssue!]!", "nullable": false, "list": true }
+      }
+    },
+    "ValidationIssue": {
+      "dbTable": "inline",
+      "restPath": "/api/dispatch",
+      "restRoot": "issues[]",
+      "fields": {
+        "path": { "db": "path", "graphqlType": "String!", "nullable": false },
+        "message": { "db": "message", "graphqlType": "String!", "nullable": false }
+      }
+    }
+  },
+  "enums": {
+    "IncidentStatus": ["open", "assigned", "acknowledged", "resolved"],
+    "Priority": ["low", "normal", "high", "critical"],
+    "ResponderStatus": ["assigned", "en_route", "on_scene", "offline"]
+  },
+  "operations": {
+    "getIncident": { "rest": "GET /api/dispatch/{id}", "graphql": "Query.incident", "write": false },
+    "listIncidents": { "rest": "GET /api/dispatch", "graphql": "Query.incidents", "write": false },
+    "listEvents": { "rest": "GET /api/events", "graphql": "Query.events", "write": false },
+    "createIncident": { "rest": "POST /api/dispatch", "graphql": null, "write": true },
+    "assignResponder": { "rest": "POST /api/dispatch/{id}/assign", "graphql": "Mutation.assignResponder", "write": true },
+    "acknowledgeIncident": { "rest": "POST /api/dispatch/{id}/ack", "graphql": null, "write": true },
+    "flushSync": { "rest": "POST /api/sync/flush", "graphql": "Mutation.syncFlush", "write": true }
+  }
+}

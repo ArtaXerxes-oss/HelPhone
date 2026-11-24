@@ -7,6 +7,7 @@
 resolver = "2"
 members = [
   "contracts/aegis_vault",
+  "contracts/emergency_vault",
   "contracts/helphone_dao",
   "contracts/maintainer_vault",
 ]

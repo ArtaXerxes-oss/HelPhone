@@ -1,0 +1,8 @@
+{
+  "$comment": "ISP-051 / #938: inner responder_credential VK hash, pinned as the recursive verifier constant. Verified by scripts/check-recursive-verifier-vk.mjs in CI. innerVkHash stays null until a reviewed build is pinned with --write; the check fails closed while it is null.",
+  "circuit": "responder_credential",
+  "innerVkHash": null,
+  "innerVkFields": 112,
+  "circuitArtifactSha256": null,
+  "pinnedWith": null
+}

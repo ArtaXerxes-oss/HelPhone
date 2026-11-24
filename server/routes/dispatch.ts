@@ -1,5 +1,15 @@
+/**
+ * server/routes/dispatch.ts
+ *
+ * Combines:
+ * 1. Encrypted Emergency Payload Relay (end-to-end encrypted dispatch blind relay).
+ * 2. Cross-Instance Federated Dispatch (ISP-144).
+ * 3. REST dispatch surface — canonical incident write/read path (aligned with GraphQL).
+ */
+
 import { Router } from 'express'
 import type { Request, Response } from 'express'
+import { z } from 'zod'
 import {
   deriveKeyIdFromPublicKey,
   isEncryptedEnvelope,
@@ -9,189 +19,188 @@ import {
 import type { EncryptedEnvelope, ResponderEncryptionKey } from '../../src/types/index.ts'
 import { PROMETHEUS_CONTENT_TYPE, renderPrometheus } from '../middleware/metrics.ts'
 import type { MetricFamily } from '../middleware/metrics.ts'
+import { getDomainStore, type DomainStore } from '../lib/domainStore.ts'
+import { getSqlCache, invalidateIncident } from '../lib/sqlCache.ts'
+import { DispatchQueue, toQueuePriority, type QueueMetrics } from '../../src/lib/dispatchQueue.ts'
+import { buildOpenTodaySlice } from '../lib/openTodaySlice.ts'
+import { haversineKm } from '../lib/geo.ts'
 
-/**
- * Encrypted Emergency Payload Relay (end-to-end encrypted dispatch).
- *
- *   POST /api/dispatch/keys            register a responder's public key
- *   GET  /api/dispatch/keys            list registered responder keys
- *   POST /api/dispatch/payload/:id     store a sealed envelope for a request
- *   GET  /api/dispatch/payload/:id     fetch the sealed envelopes for a request
- *   GET  /metrics/dispatch             Prometheus counters
- *
- * ## The one rule this module exists to enforce
- *
- * This process is a blind relay. It stores, indexes and returns **ciphertext
- * only**. It never holds a content key, a wrapping key, a responder private
- * key, or a plaintext contact number / medical note — and it is built so that
- * a mistake on the client cannot turn it into a decryption oracle:
- *
- *   * Bodies are structurally validated with `isEncryptedEnvelope`; anything
- *     that is not a well-formed v1 envelope is rejected outright.
- *   * `rejectPlaintextFields` refuses any body carrying a plaintext-looking
- *     key (`contact`, `medicalNotes`, `privateKey`, …). A client bug that
- *     sends the cleartext anyway fails loudly here instead of quietly
- *     persisting it to the operator's disk.
- *   * Nothing is logged except opaque ids, sizes and counters. Sealed blobs
- *     are never written to a log line.
- *   * The key registry holds *public* keys only. A private key posted to
- *     `POST /keys` is rejected by name.
- *
- * Confidentiality therefore rests entirely in the client-side envelope
- * (ECDH P-256 + HKDF-SHA256 + AES-256-GCM, see src/lib/crypto.ts) and in the
- * responder's key custody — not in anything enforced here.
- *
- * ## Storage
- *
- * In-memory Maps, matching `server/index.ts`'s preferences/feedback handlers.
- * This is a cache in front of the ledger: the authoritative copy of an
- * envelope is the `encrypted_payload` field of the on-chain `HelpRequest`.
- * Envelopes are therefore safe to lose — a restart degrades latency, not
- * availability or secrecy.
- */
+// ── Zod Schemas for Incident REST surface ───────────────────────────────────
 
-/**
- * Envelope addressing key.
- *
- * Two forms are accepted because the relay is indexed by *both*:
- *  - a client-generated submission id (a UUID), which is the `bindingContext`
- *    the envelope is sealed against and therefore known before signing; and
- *  - an on-chain request id, the `u64` the contract assigned, which is what a
- *    responder has when they tap a map marker.
- *
- * Bounded to 64 chars so it can never be used to blow up a log line or a
- * metric label.
- */
-const REQUEST_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+const prioritySchema = z.enum(['low', 'normal', 'high', 'critical'])
+const statusSchema = z.enum(['open', 'assigned', 'acknowledged', 'resolved'])
+const locationSchema = z.object({
+  lat: z.number().min(-90).max(90),
+  lng: z.number().min(-180).max(180),
+})
 
-/**
- * Stellar account binding. This is a sanity bound, not full strkey validation:
- * the public key is what actually grants the right to open an envelope, so an
- * odd-looking address here cannot grant access to anything.
- */
-const WALLET_RE = /^[A-Za-z0-9_]{8,64}$/
+const createIncidentSchema = z.object({
+  id: z.string().min(3).max(64).optional(),
+  status: statusSchema.optional(),
+  priority: prioritySchema.optional(),
+  location: locationSchema,
+})
 
-/** Uncompressed SEC1 P-256 point, hex. */
-const PUBLIC_KEY_RE = /^04[0-9a-f]{128}$/i
+const assignSchema = z.object({
+  responderId: z.string().min(1),
+  expectedVersion: z.number().int().positive().optional(),
+})
 
-/**
- * Envelopes retained per request. A requester legitimately re-seals (e.g. to
- * add a responder dispatched later); this bounds that to a handful of
- * revisions instead of unbounded growth.
- */
-const MAX_ENVELOPES_PER_REQUEST = 4
+const ackSchema = z.object({
+  expectedVersion: z.number().int().positive().optional(),
+})
 
-/** Fixed-window rate limit per client, applied to writes only. */
-const WRITE_RATE_LIMIT = 30
-const WRITE_RATE_WINDOW_MS = 60_000
+// Hardware SOS intake (#941). The key is the client's 10 s bucket: sos-<bucket>.
+const SOS_KEY_RE = /^sos-(\d{1,15})$/
+/** Auto-dispatch (no operator confirm) only within this radius of an unresolved incident. */
+const SOS_AUTO_DISPATCH_KM = 0.5
+const sosIntakeSchema = z.object({
+  idempotencyKey: z.string().regex(SOS_KEY_RE),
+  source: z.string().max(32).optional(),
+  force: z.boolean().default(false),
+  location: locationSchema.optional(),
+})
 
-/**
- * Body keys that would mean plaintext (or key material) is being handed to a
- * component that has no business holding it. Checked recursively and
- * case-insensitively so `MedicalNotes` and `medical_notes` are both caught.
- */
-const FORBIDDEN_BODY_KEYS = new Set([
-  'contact',
-  'contacts',
-  'phone',
-  'phonenumber',
-  'medicalnotes',
-  'medicalnote',
-  'notes',
-  'note',
-  'allergies',
-  'nickname',
-  'plaintext',
-  'cleartext',
-  'secret',
-  'key',
-  'privatekey',
-  'secretkey',
-  'contentkey',
-  'dek',
-  'password',
-  'passphrase',
-  'mnemonic',
-  'seed',
-  'seedphrase',
-])
-
-export interface DispatchStore {
-  putEnvelope(requestId: string, envelope: EncryptedEnvelope): { stored: boolean; reason?: string }
-  getEnvelopes(requestId: string): EncryptedEnvelope[]
-  registerKey(key: ResponderEncryptionKey): { ok: boolean; error?: string }
-  listKeys(): ResponderEncryptionKey[]
-  stats(): { requests: number; envelopes: number; keys: number; rejectedPlaintext: number }
+function issuesOf(error: z.ZodError) {
+  return error.issues.map((issue) => ({
+    path: issue.path.join('.') || 'body',
+    message: issue.message,
+  }))
 }
 
+function validationResponse(res: Response, issues: Array<{ path: string; message: string }>) {
+  return res.status(422).json({ error: 'validation_failed', issues })
+}
+
+function conflictResponse(res: Response, serverVersion: number, mergeProposal: Record<string, unknown>) {
+  return res.status(409).json({ conflict: true, serverVersion, mergeProposal })
+}
+
+// ── Encrypted Emergency Payload Relay ──────────────────────────────────────
+
+const REQUEST_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+const WALLET_RE = /^[A-Za-z0-9_]{8,64}$/
+const PUBLIC_KEY_RE = /^04[0-9a-fA-F]{128}$/
+
+const MAX_STORED_REQUESTS = 10_000
+const MAX_ENVELOPES_PER_REQUEST = 32
+const MAX_KEYS = 5_000
+
+const WRITE_RATE_LIMIT = 60
+const WRITE_RATE_WINDOW_MS = 60_000
+
+export interface SignedKeyPackage {
+  wallet: string
+  publicKey: string
+  validUntil?: number
+  signature?: string
+}
+
+export interface RecipientKeyDirectory {
+  registerKey(key: ResponderEncryptionKey): void
+  listKeys(): ResponderEncryptionKey[]
+  getKey(wallet: string): ResponderEncryptionKey | null
+}
+
+export interface DispatchEnvelopeStore {
+  putEnvelope(requestId: string, envelope: EncryptedEnvelope): { stored: boolean; reason?: string }
+  getEnvelopes(requestId: string): EncryptedEnvelope[]
+  stats(): { requests: number; envelopes: number; keys: number }
+}
+
+export type DispatchStore = RecipientKeyDirectory & DispatchEnvelopeStore
+
 export function createMemoryDispatchStore(): DispatchStore {
-  const byRequest = new Map<string, EncryptedEnvelope[]>()
-  const keys = new Map<string, ResponderEncryptionKey>() // keyed by keyId
-  const now = () => Date.now()
+  const keys = new Map<string, ResponderEncryptionKey>()
+  const envelopes = new Map<string, EncryptedEnvelope[]>()
 
   return {
-    putEnvelope(requestId, envelope) {
-      const existing = byRequest.get(requestId)
-      if (existing && existing.length >= MAX_ENVELOPES_PER_REQUEST) {
-        return { stored: false, reason: 'too-many-envelopes' }
+    registerKey(key: ResponderEncryptionKey) {
+      if (keys.size >= MAX_KEYS && !keys.has(key.wallet)) {
+        const oldest = keys.keys().next().value
+        if (oldest) keys.delete(oldest)
       }
-      if (existing) {
-        // Identical re-submission is a no-op rather than a new revision.
-        const duplicate = existing.some((e) => e.ciphertext === envelope.ciphertext)
-        if (duplicate) return { stored: true }
-        existing.push(envelope)
-      } else {
-        byRequest.set(requestId, [envelope])
+      keys.set(key.wallet, key)
+    },
+
+    listKeys() {
+      return Array.from(keys.values())
+    },
+
+    getKey(wallet: string) {
+      return keys.get(wallet) ?? null
+    },
+
+    putEnvelope(requestId: string, envelope: EncryptedEnvelope) {
+      if (envelopes.size >= MAX_STORED_REQUESTS && !envelopes.has(requestId)) {
+        const oldest = envelopes.keys().next().value
+        if (oldest) envelopes.delete(oldest)
       }
+      const list = envelopes.get(requestId) ?? []
+      if (list.length >= MAX_ENVELOPES_PER_REQUEST) {
+        return { stored: false, reason: 'request_envelope_limit_reached' }
+      }
+      const dup = list.some(
+        (e) =>
+          e.iv === envelope.iv &&
+          e.ciphertext === envelope.ciphertext &&
+          e.ephemeralPublicKey === envelope.ephemeralPublicKey
+      )
+      if (dup) return { stored: true }
+      list.push(envelope)
+      envelopes.set(requestId, list)
       return { stored: true }
     },
-    getEnvelopes(requestId) {
-      return byRequest.get(requestId) ?? []
+
+    getEnvelopes(requestId: string) {
+      return [...(envelopes.get(requestId) ?? [])]
     },
-    registerKey(key) {
-      // Keyed by keyId so one wallet can hold several keys (a laptop and a
-      // phone) and still be published for every one of them.
-      if (keys.has(key.keyId)) return { ok: true }
-      keys.set(key.keyId, key)
-      return { ok: true }
-    },
-    listKeys() {
-      return [...keys.values()]
-    },
+
     stats() {
-      let envelopes = 0
-      for (const list of byRequest.values()) envelopes += list.length
+      let totalEnvelopes = 0
+      for (const list of envelopes.values()) totalEnvelopes += list.length
       return {
-        requests: byRequest.size,
-        envelopes,
+        requests: envelopes.size,
+        envelopes: totalEnvelopes,
         keys: keys.size,
-        rejectedPlaintext: 0,
       }
     },
   }
 }
 
 export interface DispatchRouterOptions {
-  /** Injectable for tests; defaults to a process-local store. */
-  store?: DispatchStore
-  /** Master switch. Set false to refuse every write without unmounting. */
+  store?: DispatchStore | DomainStore
+  domainStore?: DomainStore
   enabled?: boolean
+  queue?: DispatchQueue
+  tickIntervalMs?: number
 }
 
-/**
- * Depth-limited scan for plaintext-shaped keys anywhere in a body.
- * Returns the offending key path, or null when the body looks like ciphertext.
- */
-export function findForbiddenBodyKey(
-  value: unknown,
-  path = '$',
-  depth = 0,
-): string | null {
-  // A deeply nested body is not a shape this API ever legitimately produces;
-  // stop rather than recursing into something adversarial.
-  if (depth > 8) return null
+const FORBIDDEN_BODY_KEYS = new Set([
+  'privatekey',
+  'privkey',
+  'secretkey',
+  'seckey',
+  'keypair',
+  'seed',
+  'mnemonic',
+  'passphrase',
+  'phone',
+  'phonenumber',
+  'contactnumber',
+  'medicalnotes',
+  'allergies',
+  'medications',
+  'conditions',
+  'patientname',
+  'victimname',
+  'callername',
+])
+
+export function findForbiddenBodyKey(value: unknown, path = 'body', depth = 0): string | null {
+  if (depth > 6) return null
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i += 1) {
+    for (let i = 0; i < value.length; i++) {
       const hit = findForbiddenBodyKey(value[i], `${path}[${i}]`, depth + 1)
       if (hit) return hit
     }
@@ -214,17 +223,19 @@ export interface DispatchMetricOptions {
   writes: number
   reads: number
   rateLimited: number
+  queueMetrics?: QueueMetrics
 }
 
 export function dispatchMetricFamilies(opts: DispatchMetricOptions): MetricFamily[] {
   const s = opts.store.stats()
+  const qm = opts.queueMetrics
   const sample = (name: string, help: string, value: number) => ({
     name,
     help,
     type: 'counter' as const,
     samples: [{ labels: {}, value }],
   })
-  return [
+  const families: MetricFamily[] = [
     {
       name: 'helphone_dispatch_envelopes',
       help: 'Sealed emergency payload envelopes currently held by the relay.',
@@ -265,14 +276,37 @@ export function dispatchMetricFamilies(opts: DispatchMetricOptions): MetricFamil
       opts.rateLimited,
     ),
   ]
+  if (qm) {
+    families.push(
+      {
+        name: 'helphone_dispatch_queue_queued',
+        help: 'Current number of queued dispatch items.',
+        type: 'gauge',
+        samples: [{ labels: {}, value: qm.queued }],
+      },
+      {
+        name: 'helphone_dispatch_queue_critical',
+        help: 'Current number of queued P0 (critical) dispatch items.',
+        type: 'gauge',
+        samples: [{ labels: {}, value: qm.critical }],
+      },
+      {
+        name: 'helphone_dispatch_queue_max_wait_ms',
+        help: 'Maximum wait time (ms) among queued dispatch items.',
+        type: 'gauge',
+        samples: [{ labels: {}, value: qm.maxWaitTime }],
+      },
+      sample(
+        'helphone_dispatch_queue_stale_prevented_total',
+        'Count of stale updates skipped to prevent starving P0 requests.',
+        qm.stalePrevented,
+      ),
+    )
+  }
+  return families
 }
 
-/**
- * Fixed-window per-client write limiter. Hand-rolled (like
- * `middleware/keepAlive.ts` and `middleware/compression.ts`) so this module
- * stays dependency-free and unit-testable without booting the whole app.
- */
-function createWriteLimiter(limit: number, windowMs: number) {
+export function createWriteLimiter(limit: number, windowMs: number) {
   const hits = new Map<string, { count: number; resetAt: number }>()
   return {
     allow(client: string, now = Date.now()): boolean {
@@ -291,33 +325,37 @@ function createWriteLimiter(limit: number, windowMs: number) {
 }
 
 export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
-  const store = opts.store ?? createMemoryDispatchStore()
+  const isDomainStore = opts.store && 'listIncidents' in opts.store
+  const domainStore = opts.domainStore ?? (isDomainStore ? (opts.store as DomainStore) : getDomainStore())
+  const store = !isDomainStore && opts.store ? (opts.store as DispatchStore) : createMemoryDispatchStore()
+
   const enabled = opts.enabled ?? true
   const limiter = createWriteLimiter(WRITE_RATE_LIMIT, WRITE_RATE_WINDOW_MS)
+  const queue = opts.queue ?? new DispatchQueue()
+
+  queue.onProcess(async (item) => {
+    const data = item.payload as { requestId?: string; envelope?: EncryptedEnvelope } | undefined
+    if (data?.requestId && data?.envelope) {
+      store.putEnvelope(data.requestId, data.envelope)
+    }
+  })
+  if (opts.tickIntervalMs && opts.tickIntervalMs > 0) {
+    queue.startTick(opts.tickIntervalMs)
+  } else if (process.env.NODE_ENV !== 'test') {
+    queue.startTick(100)
+  }
 
   const counters = { rejectedPlaintext: 0, rejectedMalformed: 0, writes: 0, reads: 0, rateLimited: 0 }
 
   const api = Router()
 
   // ── Actionable slice for rapid join (<20s, <1MB) ─────────────────────
-  api.get('/', (req: Request, res: Response) => {
-    if (req.query.slice === 'open-today') {
-      const active = [
-        { id: 'disp-today-1', status: 'open', geohash: 'u4pruydqqvj', team: 'alpha', server_received_at: new Date().toISOString() },
-        { id: 'disp-today-2', status: 'assigned', geohash: 'u4pruydqqvk', team: 'bravo', server_received_at: new Date().toISOString() },
-      ];
-      return res.json(active);
-    }
-    return res.json({ success: true, count: store.stats().requests });
-  });
-
-  api.get('/open-today', (_req: Request, res: Response) => {
-    const active = [
-      { id: 'disp-today-1', status: 'open', geohash: 'u4pruydqqvj', team: 'alpha', server_received_at: new Date().toISOString() },
-      { id: 'disp-today-2', status: 'assigned', geohash: 'u4pruydqqvk', team: 'bravo', server_received_at: new Date().toISOString() },
-    ];
-    return res.json(active);
-  });
+  // Unresolved incidents from the domain store, bounded by OPEN_TODAY_LIMIT and
+  // OPEN_TODAY_MAX_BYTES. Served as a plain array; crdtSync.js depends on that shape.
+  const sendOpenToday = (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store').json(buildOpenTodaySlice(domainStore))
+  }
+  api.get('/open-today', sendOpenToday)
 
   // ── Responder key registry (public keys only) ──────────────────────
   api.post('/keys', async (req: Request, res: Response) => {
@@ -328,8 +366,6 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
     const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.trim() : ''
     const publicKey = typeof req.body?.publicKey === 'string' ? req.body.publicKey.trim() : ''
 
-    // Reject key material by name before validating anything else: this
-    // endpoint must never be a place a private key ends up stored or logged.
     const forbidden = findForbiddenBodyKey(req.body)
     if (forbidden) {
       counters.rejectedPlaintext += 1
@@ -362,8 +398,6 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
       keyId,
       registeredAt: Date.now(),
     })
-    // Cache-Control: the key list is per-deployment, and a shared cache must
-    // not hand one responder's registry to another tenant's tab.
     res.set('Cache-Control', 'no-store').json({
       success: true,
       keyId,
@@ -420,7 +454,7 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
       res.status(400).json({ success: false, error: 'Too many recipients in envelope.' })
       return
     }
-    const size = Buffer.byteLength(JSON.stringify(envelope), 'utf8')
+    const size = JSON.stringify(envelope).length
     if (size > MAX_ENVELOPE_BYTES) {
       counters.rejectedMalformed += 1
       res.status(413).json({
@@ -430,18 +464,22 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
       return
     }
 
+    const priority = req.priorityContext?.priority ?? toQueuePriority(req.headers['x-priority']?.toString())
+    queue.enqueue({
+      id: `envelope:${requestId}:${Date.now()}`,
+      priority,
+      payload: { requestId, envelope },
+      timestamp: req.priorityContext?.timestamp ?? Date.now(),
+      maxRetries: 3,
+      isUpdate: req.priorityContext?.isUpdate ?? false,
+    })
+
     const outcome = store.putEnvelope(requestId, envelope)
     if (!outcome.stored) {
       res.status(409).json({ success: false, error: outcome.reason ?? 'rejected' })
       return
     }
     counters.writes += 1
-    // Log shape only. Never the blob.
-    console.info('[dispatch] stored envelope', {
-      requestId,
-      recipients: envelope.wrappedKeys.length,
-      bytes: size,
-    })
     res.set('Cache-Control', 'no-store').json({
       success: true,
       requestId,
@@ -457,8 +495,6 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
     }
     counters.reads += 1
     const envelopes = store.getEnvelopes(requestId)
-    // A miss is a normal cache miss, not an error: the ledger copy is
-    // authoritative and the client can fall back to reading it from-chain.
     res.set('Cache-Control', 'no-store').json({ success: true, requestId, envelopes })
   })
 
@@ -472,43 +508,6 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
     acknowledgedAt?: number
     custodyMarker: 'local_verified' | 'peer_asserted'
   }>()
-
-  api.post('/', (req: Request, res: Response) => {
-    const { incident_id, incidentId, responder, target_instance, targetInstance } = req.body || {}
-    const incId = incident_id || incidentId
-    const target = target_instance || targetInstance
-
-    if (!incId) {
-      res.status(400).json({ success: false, error: 'incident_id is required' })
-      return
-    }
-    if (!responder) {
-      res.status(400).json({ success: false, error: 'responder is required' })
-      return
-    }
-
-    if (!target) {
-      // Local-only lookup check: if incident not in local ledger/cache, reject
-      res.status(404).json({ success: false, error: `Unknown incident ${incId}: local responders only` })
-      return
-    }
-
-    // Federated dispatch origination
-    const record = {
-      incidentId: incId,
-      responder,
-      targetInstance: target,
-      status: 'dispatched' as const,
-      dispatchedAt: Date.now(),
-      custodyMarker: 'local_verified' as const,
-    }
-    federatedDispatches.set(incId, record)
-    res.json({
-      success: true,
-      message: `Federated dispatch initiated to ${target}`,
-      dispatch: record,
-    })
-  })
 
   api.post('/ack', (req: Request, res: Response) => {
     const { incidentId, incident_id, responder, sourceInstance } = req.body || {}
@@ -549,13 +548,228 @@ export function createDispatchRouters(opts: DispatchRouterOptions = {}) {
     res.json({ success: true, dispatch })
   })
 
+  // ── Domain Incidents REST API ───────────────────────────────────────────
+
+  // ── Hardware SOS intake (#941) ──────────────────────────────────────
+  // Server-wide idempotency: every device that presses inside one 10 s bucket
+  // maps to the same incident id, and createIncident refuses a duplicate id, so
+  // two rugged devices cannot open two incidents for one press. Without operator
+  // confirm (force), the SOS is only accepted near an unresolved incident; anywhere
+  // else it is declined with 202 needs_confirm and no incident is created.
+  api.post('/sos', (req: Request, res: Response) => {
+    if (!enabled) {
+      res.status(503).json({ success: false, error: 'Encrypted dispatch is disabled.' })
+      return
+    }
+    const parsed = sosIntakeSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return validationResponse(res, issuesOf(parsed.error))
+    }
+    const { idempotencyKey, force, location } = parsed.data
+    const bucket = SOS_KEY_RE.exec(idempotencyKey)?.[1] ?? ''
+    const incidentId = `SOS-${bucket}`
+
+    const existing = domainStore.getIncident(incidentId)
+    if (existing) {
+      return res.status(200).json({ status: 'duplicate', incident: existing })
+    }
+
+    if (location === undefined) {
+      if (!force) {
+        return res.status(202).json({ status: 'needs_confirm', idempotencyKey })
+      }
+      return validationResponse(res, [{ path: 'location', message: 'required to open an incident' }])
+    }
+
+    if (!force) {
+      const nearActive = domainStore
+        .listActiveIncidents(500)
+        .some((incident) => haversineKm(location, incident.location) <= SOS_AUTO_DISPATCH_KM)
+      if (!nearActive) {
+        return res.status(202).json({ status: 'needs_confirm', idempotencyKey })
+      }
+    }
+
+    try {
+      const incident = domainStore.createIncident({ id: incidentId, status: 'open', priority: 'critical', location })
+      invalidateIncident(incident.id)
+      return res.status(201).json({ status: 'created', incident })
+    } catch (error) {
+      if ((error as { code?: string }).code === 'conflict') {
+        return res.status(200).json({ status: 'duplicate', incident: domainStore.getIncident(incidentId) })
+      }
+      return res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  api.get('/', (req: Request, res: Response) => {
+    if (req.query.slice === 'open-today') {
+      return sendOpenToday(req, res)
+    }
+
+    if (req.query.limit || req.query.cursor) {
+      const limit = Math.min(100, Math.max(1, Number(req.query.limit) || 20))
+      const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : null
+      const page = domainStore.listIncidents(limit, cursor)
+      return res.set('Cache-Control', 'no-store').json({
+        incidents: page.items,
+        nextCursor: page.nextCursor,
+        hasNextPage: page.hasNextPage,
+      })
+    }
+
+    return res.json({ success: true, count: store.stats().requests })
+  })
+
+  api.post('/', (req: Request, res: Response) => {
+    if (req.body?.location) {
+      const parsed = createIncidentSchema.safeParse(req.body)
+      if (!parsed.success) {
+        return validationResponse(res, issuesOf(parsed.error))
+      }
+      try {
+        const incident = domainStore.createIncident(parsed.data)
+        invalidateIncident(incident.id)
+        return res.status(201).json({ incident })
+      } catch (error) {
+        const typed = error as { code?: string; message?: string }
+        if (typed.code === 'conflict') {
+          return conflictResponse(res, 0, { reason: typed.message })
+        }
+        return res.status(500).json({ error: 'internal_error' })
+      }
+    }
+
+    // Federated dispatch origination
+    const { incident_id, incidentId, responder, target_instance, targetInstance } = req.body || {}
+    const incId = incident_id || incidentId
+    const target = target_instance || targetInstance
+
+    if (!incId) {
+      return res.status(400).json({ success: false, error: 'incident_id is required' })
+    }
+    if (!responder) {
+      return res.status(400).json({ success: false, error: 'responder is required' })
+    }
+
+    if (!target) {
+      return res.status(404).json({ success: false, error: `Unknown incident ${incId}: local responders only` })
+    }
+
+    const record = {
+      incidentId: incId,
+      responder,
+      targetInstance: target,
+      status: 'dispatched' as const,
+      dispatchedAt: Date.now(),
+      custodyMarker: 'local_verified' as const,
+    }
+    federatedDispatches.set(incId, record)
+    res.json({
+      success: true,
+      message: `Federated dispatch initiated to ${target}`,
+      dispatch: record,
+    })
+  })
+
+  api.get('/:id', async (req: Request, res: Response, next) => {
+    const id = req.params.id
+    if (['keys', 'payload', 'status', 'open-today', 'ack'].includes(id)) {
+      return next()
+    }
+    const bypass = req.query.nocache === '1' || req.query.nocache === 'true'
+    const bundle = await getSqlCache().withCache(
+      'rest',
+      `dispatch:${id}`,
+      () => {
+        const incident = domainStore.getIncident(id)
+        if (!incident) return null
+        const responders = domainStore.getRespondersWithLastEvent(id)
+        return { incident: { ...incident, responders }, responders }
+      },
+      { bypass, ttlMs: 2_000 }
+    )
+
+    if (!bundle) {
+      return res.status(404).json({ error: 'not_found', message: `incident ${id} not found` })
+    }
+    res.set('Cache-Control', 'no-store').json({ incident: bundle.incident })
+  })
+
+  api.post('/:id/assign', (req: Request, res: Response) => {
+    const parsed = assignSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return validationResponse(res, issuesOf(parsed.error))
+    }
+    try {
+      const incident = domainStore.assignResponder(req.params.id, parsed.data.responderId, parsed.data.expectedVersion)
+      invalidateIncident(req.params.id)
+      res.json({ incident })
+    } catch (error) {
+      const typed = error as {
+        code?: string
+        message?: string
+        serverVersion?: number
+        mergeProposal?: Record<string, unknown>
+      }
+      if (typed.code === 'conflict') {
+        conflictResponse(res, typed.serverVersion ?? 0, typed.mergeProposal ?? {})
+        return
+      }
+      if (typed.code === 'not_found') {
+        res.status(404).json({ error: 'not_found', message: typed.message })
+        return
+      }
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  api.post('/:id/ack', (req: Request, res: Response) => {
+    const parsed = ackSchema.safeParse(req.body)
+    if (!parsed.success) {
+      return validationResponse(res, issuesOf(parsed.error))
+    }
+    try {
+      const incident = domainStore.acknowledge(req.params.id, parsed.data.expectedVersion)
+      invalidateIncident(req.params.id)
+      res.json({ incident })
+    } catch (error) {
+      const typed = error as {
+        code?: string
+        message?: string
+        serverVersion?: number
+        mergeProposal?: Record<string, unknown>
+      }
+      if (typed.code === 'conflict') {
+        conflictResponse(res, typed.serverVersion ?? 0, typed.mergeProposal ?? {})
+        return
+      }
+      if (typed.code === 'not_found') {
+        res.status(404).json({ error: 'not_found', message: typed.message })
+        return
+      }
+      res.status(500).json({ error: 'internal_error' })
+    }
+  })
+
+  api.get('/queue/metrics', (_req: Request, res: Response) => {
+    res.set('Cache-Control', 'no-store').json(queue.getMetrics())
+  })
 
   const metrics = Router()
   metrics.get('/dispatch', (_req: Request, res: Response) => {
     res
       .set('Content-Type', PROMETHEUS_CONTENT_TYPE)
-      .send(renderPrometheus(dispatchMetricFamilies({ store, ...counters })))
+      .send(renderPrometheus(dispatchMetricFamilies({ store, ...counters, queueMetrics: queue.getMetrics() })))
   })
 
-  return { api, metrics, store, limiter }
+  return { api, metrics, store, limiter, queue }
 }
+
+export function createDispatchRouter(options: DispatchRouterOptions = {}): Router {
+  return createDispatchRouters(options).api
+}
+
+export const dispatchRouter = createDispatchRouter()
+
+export default createDispatchRouter

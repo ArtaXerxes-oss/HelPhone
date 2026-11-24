@@ -3,11 +3,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   TARGET_FPS,
   OVERLAY_COLORS,
+  DEFAULT_VIEWPORT_TRANSFORM,
   pulsePhase,
+  applyViewportTransform,
+  projectLngLatToViewport,
+  buildViewportOverlays,
   drawOverlayFrame,
   FpsMeter,
   isOffscreenCanvasSupported,
   createOverlayRenderer,
+  runOverlayBenchmark,
 } from '../src/lib/offscreenCanvas.ts';
 
 const SIZE = { width: 1140, height: 540, dpr: 2 };
@@ -371,5 +376,71 @@ describe('canvas-worker message protocol', () => {
     expect(ctx.calls.some((c) => c[0] === 'clearRect')).toBe(true);
     handle({ data: { type: 'stop' } });
     vi.useRealTimers();
+  });
+
+  it('applies viewport transform messages without reallocating the canvas backing store', async () => {
+    const handle = await load();
+    init(handle);
+    let widthAssignments = 0;
+    let currentWidth = offscreen.width;
+    Object.defineProperty(offscreen, 'width', {
+      get: () => currentWidth,
+      set: (v) => {
+        widthAssignments++;
+        currentWidth = v;
+      },
+      configurable: true,
+    });
+
+    handle({ data: { type: 'overlays', overlays: [{ id: 'a', x: 10, y: 20, kind: 'pending' }] } });
+    handle({
+      data: {
+        type: 'viewport',
+        transform: { scale: 2, offsetX: 5, offsetY: -3, zoom: 6, bounds: [-180, -85, 180, 85] },
+      },
+    });
+    // Redundant resize with same dimensions must not touch offscreen.width
+    handle({ data: { type: 'resize', ...SIZE } });
+    frame(16);
+
+    expect(widthAssignments).toBe(0);
+    // Transformed coordinates: x = 10 * 2 + 5 = 25, y = 20 * 2 - 3 = 37
+    expect(ctx.calls.some((c) => c[0] === 'arc' && c[1] === 25 && c[2] === 37)).toBe(true);
+  });
+});
+
+describe('HP-037 cluster layer viewport coordination & benchmark harness (#958)', () => {
+  it('projects clusters and markers through the same shared ViewportTransform', () => {
+    const transform = {
+      ...DEFAULT_VIEWPORT_TRANSFORM,
+      scale: 1.5,
+      offsetX: 12,
+      offsetY: -8,
+      zoom: 5,
+      bounds: [-180, -85, 180, 85],
+    };
+    const clusters = [
+      {
+        id: 'cluster-1',
+        properties: { cluster: true, cluster_id: 1, point_count: 4 },
+        geometry: { coordinates: [0, 0] },
+      },
+    ];
+    const points = [{ id: 'resp-1', lng: 0, lat: 0, kind: 'responder' }];
+    const overlays = buildViewportOverlays({ points, clusters, size: SIZE, transform });
+    const direct = projectLngLatToViewport(0, 0, SIZE, transform);
+
+    expect(overlays).toHaveLength(2);
+    expect(overlays[0]).toEqual({ id: 'cluster-1', x: direct.x, y: direct.y, kind: 'pending' });
+    expect(overlays[1]).toEqual({ id: 'resp-1', x: direct.x, y: direct.y, kind: 'responder' });
+    expect(applyViewportTransform(10, 20, DEFAULT_VIEWPORT_TRANSFORM)).toEqual({ x: 10, y: 20 });
+  });
+
+  it('meets target 60 FPS in the pan/zoom benchmark harness without jank or canvas memory growth', () => {
+    const result = runOverlayBenchmark({ overlayCount: 64, frameCount: 120, size: SIZE });
+    expect(result.meetsTarget).toBe(true);
+    expect(result.fps).toBeGreaterThanOrEqual(58);
+    expect(result.jankFrames).toBe(0);
+    expect(result.backingStoreAllocations).toBe(1);
   });
 });

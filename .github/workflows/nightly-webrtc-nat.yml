@@ -1,0 +1,146 @@
+name: Nightly — WebRTC NAT matrix & background-kill drills
+
+# Runs at 02:30 UTC every night and can be triggered manually.
+# Implements the nightly Playwright suite described in issue #907 (spike #719 §4).
+#
+# Two suites:
+#   webrtc-nat   — five topology legs run in parallel, each named so a failure
+#                  report identifies the exact topology that broke.
+#   background-kill — locked-phone kill/relaunch drills with dispatch-subscription
+#                     reconnect assertions.
+#
+# Traces are uploaded on failure so the WebRTC ICE log and BroadcastChannel
+# event sequence are available without re-running locally.
+
+on:
+  schedule:
+    - cron: '30 2 * * *'   # 02:30 UTC nightly
+  workflow_dispatch:
+    inputs:
+      topology:
+        description: 'Run a single NAT topology leg (leave blank for all)'
+        required: false
+        type: choice
+        default: ''
+        options:
+          - ''
+          - full-cone
+          - restricted-cone
+          - port-restricted
+          - symmetric
+          - symmetric-with-relay
+
+permissions: {}
+
+jobs:
+  # ── WebRTC NAT matrix ──────────────────────────────────────────────────────
+  webrtc-nat:
+    name: WebRTC NAT — ${{ matrix.topology }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        topology:
+          - full-cone
+          - restricted-cone
+          - port-restricted
+          - symmetric
+          - symmetric-with-relay
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run NAT topology leg
+        run: |
+          TOPOLOGY="${{ matrix.topology }}"
+          if [ -n "${{ github.event.inputs.topology }}" ] && [ "$TOPOLOGY" != "${{ github.event.inputs.topology }}" ]; then
+            echo "Skipping $TOPOLOGY (manual filter: ${{ github.event.inputs.topology }})"
+            exit 0
+          fi
+          npx playwright test \
+            --project="webrtc-nat-${TOPOLOGY}" \
+            --reporter=line,html
+        env:
+          CI: 'true'
+
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-nat-traces-${{ matrix.topology }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── Background-kill drills ─────────────────────────────────────────────────
+  background-kill:
+    name: Background-kill drills
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Run background-kill drills
+        run: npx playwright test --project=background-kill --reporter=line,html
+        env:
+          CI: 'true'
+
+      - name: Upload traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: background-kill-traces
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── Nightly summary notification ──────────────────────────────────────────
+  notify-on-failure:
+    name: Notify on nightly failure
+    runs-on: ubuntu-latest
+    needs: [webrtc-nat, background-kill]
+    if: failure() && github.event_name == 'schedule'
+    permissions:
+      contents: read
+    steps:
+      - name: Report nightly failure
+        run: |
+          echo "Nightly WebRTC NAT / background-kill suite failed."
+          echo "Check the 'webrtc-nat-traces-*' and 'background-kill-traces' artifacts."
+          echo "Re-run a single topology with: workflow_dispatch topology=<name>"
+          # Wire in your alerting here (Slack, PagerDuty, etc.).
+          exit 0

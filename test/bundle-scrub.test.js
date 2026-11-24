@@ -83,6 +83,23 @@ describe("incident bundle generator (ISP-130)", () => {
     expect(raw.includes(Buffer.from("+393331234567"))).toBe(false);
     const verified = verifyBundle(out);
     expect(verified.ok).toBe(true);
+    expect(manifest.files.map((f) => f.path)).toEqual(expect.arrayContaining([
+      "ledger/state.json",
+      "metrics/snapshot.txt",
+      "client/slice.json",
+    ]));
+  });
+
+  it("collects and scrubs supplied operational artifacts", () => {
+    const artifact = path.join(TMP, "artifact.json");
+    fs.writeFileSync(artifact, JSON.stringify(PII_FIXTURE));
+    const { manifest } = collectBundle({
+      out: path.join(TMP, "artifacts.tgz"),
+      ledgerFile: artifact,
+      metricsFile: artifact,
+      clientSlice: artifact,
+    });
+    expect(manifest.files.filter((f) => /^(ledger|metrics|client)\//.test(f.path))).toHaveLength(3);
   });
 
   it("detects tampering via verify", () => {

@@ -12,9 +12,17 @@
  *   - Decrypted in-memory state is wiped on lock.
  *   - The encrypted secureStorage queue is preserved so no intake is lost.
  *   - Draft reclaim uses an anonymous session-scoped code (no cross-user leak).
+ *
+ * Shared devices (#925):
+ *   - Staff elevation names an operator. Each operator's encrypted storage is a
+ *     separate namespace (secureStorage.getOperatorStorage) with its own key.
+ *   - When a different operator signs in, the previous operator's keys are dropped
+ *     and handoffFrom is set until the new shift acknowledges it on screen.
+ *   - Lock (manual or auto) drops elevation, the operator, and every operator key.
  */
 
 import { sha256 } from './crypto'
+import { lockAllOperatorStorage, normalizeOperatorId } from './secureStorage'
 
 export type KioskRole = 'kiosk-anon' | 'staff-pin'
 
@@ -25,10 +33,18 @@ export interface KioskSessionState {
   elevatedUntil: number | null
   pinLockUntil: number | null
   wrongPinCount: number
+  /** Operator whose staff elevation is active, or null. */
+  operatorId: string | null
+  /** Previous operator whose shift was sealed at handoff; null once acknowledged. */
+  handoffFrom: string | null
 }
 
 /** In-memory session — intentionally not persisted. */
 let _session: KioskSessionState | null = null
+/** Last operator to hold staff elevation. Survives lock wipes, not page reloads. */
+let _lastOperatorId: string | null = null
+/** Pending handoff notice. Survives lock wipes until acknowledged. */
+let _handoffFrom: string | null = null
 
 const STAFF_ELEVATION_MS = 10 * 60 * 1000   // 10 minutes
 const PIN_LOCK_MS = 5 * 60 * 1000            // 5-minute lockout after 5 wrong PINs
@@ -48,8 +64,45 @@ export function startKioskSession(shelterId: string, shelterName: string): Kiosk
     elevatedUntil: null,
     pinLockUntil: null,
     wrongPinCount: 0,
+    operatorId: null,
+    handoffFrom: _handoffFrom,
   }
   return _session
+}
+
+/** The operator must be re-identified after any lock; a fresh session has none. */
+function adoptOperator(operatorId: string): void {
+  if (_lastOperatorId !== null && _lastOperatorId !== operatorId) {
+    // Shift handoff: seal the previous operator's decrypted state, and show it.
+    lockAllOperatorStorage()
+    _handoffFrom = _lastOperatorId
+  }
+  _lastOperatorId = operatorId
+  if (_session) {
+    _session.operatorId = operatorId
+    _session.handoffFrom = _handoffFrom
+  }
+}
+
+/** The new shift has seen the handoff notice. Clears it everywhere. */
+export function acknowledgeHandoff(): void {
+  _handoffFrom = null
+  if (_session) _session.handoffFrom = null
+}
+
+/** True when staff elevation is not active: intake only, no triage data. */
+export function isLimitedMode(): boolean {
+  return !isElevated()
+}
+
+/**
+ * Manual lock (#925): demote to anonymous, forget the operator, and drop every
+ * operator key from memory. Encrypted entries stay on the device.
+ */
+export function lockKiosk(): number {
+  demoteToAnon()
+  if (_session) _session.operatorId = null
+  return lockAllOperatorStorage()
 }
 
 export function getKioskSession(): KioskSessionState | null {
@@ -88,13 +141,23 @@ export function pinLockRemainingMs(): number {
 }
 
 /**
- * Attempt PIN elevation. Returns 'elevated', 'wrong-pin', or 'locked'.
+ * Attempt PIN elevation for a named operator. Returns 'elevated', 'wrong-pin',
+ * 'locked', or 'invalid-operator'. An invalid operator id is refused before the PIN
+ * is checked, so a typo never counts as a wrong PIN.
  */
 export async function attemptPinElevation(
   pin: string,
-): Promise<'elevated' | 'wrong-pin' | 'locked'> {
+  operatorId: string,
+): Promise<'elevated' | 'wrong-pin' | 'locked' | 'invalid-operator'> {
   if (!_session) return 'locked'
   if (isPinLocked()) return 'locked'
+
+  let operator: string
+  try {
+    operator = normalizeOperatorId(operatorId)
+  } catch {
+    return 'invalid-operator'
+  }
 
   const pinBytes = await sha256(pin.trim())
   const pinHex = Array.from(pinBytes)
@@ -114,6 +177,7 @@ export async function attemptPinElevation(
   _session.pinLockUntil = null
   _session.role = 'staff-pin'
   _session.elevatedUntil = Date.now() + STAFF_ELEVATION_MS
+  adoptOperator(operator)
   return 'elevated'
 }
 
@@ -124,9 +188,13 @@ export function demoteToAnon(): void {
   _session.elevatedUntil = null
 }
 
-/** Wipe all decrypted in-memory state (auto-lock fires this). */
+/**
+ * Wipe all decrypted in-memory state (auto-lock fires this). Operator keys are
+ * dropped with the session, so a locked device holds no decrypted operator data.
+ */
 export function wipeKioskSession(): void {
   _session = null
+  lockAllOperatorStorage()
 }
 
 /** Returns ms until elevation expires, or null. */

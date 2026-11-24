@@ -72,3 +72,15 @@ export function rankByRealisticEta<T extends EtaInput>(candidates: T[]): Array<T
     .map(candidate => ({ ...candidate, eta: estimateEta(candidate) }))
     .sort((a, b) => (a.eta.minMinutes + a.eta.maxMinutes) - (b.eta.minMinutes + b.eta.maxMinutes))
 }
+
+/**
+ * Gate for ETAs while history is still hydrating (#932). A partial history can
+ * be missing the road closures and responder state that shape an ETA, so no
+ * number is shown until actionable state is complete. Returns null in that case.
+ */
+export function estimateEtaWhileSyncing(
+  input: EtaInput,
+  { actionableComplete }: { actionableComplete: boolean },
+): EtaEstimate | null {
+  return actionableComplete ? estimateEta(input) : null
+}

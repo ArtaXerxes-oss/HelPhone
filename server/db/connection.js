@@ -18,6 +18,22 @@ function resolveIdleTimeout() {
   return IDLE_TIMEOUT_MS;
 }
 async function createPgClient() {
+  const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+  if (url) {
+    const { Client } = await import('pg');
+    const client = new Client({ connectionString: url });
+    await client.connect();
+    const now = Date.now();
+    return {
+      id: `pg-${now}-${Math.random().toString(36).slice(2, 6)}`,
+      createdAt: now,
+      lastUsedAt: now,
+      state: 'idle',
+      query: (sql, params) => client.query(sql, params),
+      release() {},
+      end: () => client.end(),
+    };
+  }
   const id = `conn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
   return {
     id,
@@ -97,11 +113,30 @@ export async function getAsOfLsn() {
   }
 }
 
-export async function getHistoryConn(lagBudgetMs = 10000) {
+/** Default history read budget (ISP-065 "Lagging" tier starts here). */
+export const REPLICA_LAG_BUDGET_MS = 10_000;
+/** ISP-065 "Severe" tier: stale badge + dispatch confirmation override. */
+export const SEVERE_REPLICA_LAG_MS = 30_000;
+
+/**
+ * Maps replay lag onto the ISP-065 load-shedding table. Pure so the routing
+ * decision can be unit tested without a database.
+ *   <= budget           -> normal   (read replica)
+ *   budget .. severe    -> lagging  (primary reserve, else HTTP 209)
+ *   > severe            -> severe   (primary reserve, else HTTP 209; UI confirms dispatch)
+ */
+export function classifyReplicaLag(lagMs, lagBudgetMs = REPLICA_LAG_BUDGET_MS) {
+  if (!Number.isFinite(lagMs) || lagMs <= lagBudgetMs) return 'normal';
+  if (lagMs <= Math.max(SEVERE_REPLICA_LAG_MS, lagBudgetMs)) return 'lagging';
+  return 'severe';
+}
+
+export async function getHistoryConn(lagBudgetMs = REPLICA_LAG_BUDGET_MS) {
   const lagMs = await getReplicationLagMs();
   const asOfLsn = await getAsOfLsn();
+  const tier = classifyReplicaLag(lagMs, lagBudgetMs);
 
-  if (lagMs <= lagBudgetMs) {
+  if (tier === 'normal') {
     const client = await getClient();
     return {
       client,
@@ -109,6 +144,7 @@ export async function getHistoryConn(lagBudgetMs = 10000) {
       isReserve: false,
       isStale: false,
       lagMs,
+      tier,
       asOfLsn,
       release: () => releaseClient(client),
     };
@@ -122,6 +158,7 @@ export async function getHistoryConn(lagBudgetMs = 10000) {
       isReserve: true,
       isStale: false,
       lagMs,
+      tier,
       asOfLsn,
       release: () => getPool().releasePrimaryReserve(reserveClient),
     };
@@ -132,6 +169,7 @@ export async function getHistoryConn(lagBudgetMs = 10000) {
       isReserve: false,
       isStale: true,
       lagMs,
+      tier,
       asOfLsn,
       release: () => {},
     };

@@ -4,6 +4,9 @@
  * at rest under a user passphrase via AES-GCM (WebCrypto).
  */
 
+import { mintRestoredGeneration } from './sessionGenerations';
+import type { SessionIdentity } from './sessionKey';
+
 const GF256_EXP = new Uint8Array(512);
 const GF256_LOG = new Uint8Array(256);
 
@@ -166,4 +169,44 @@ export async function recoverPrivateKey(
   }
   const shards = await Promise.all(encryptedShards.map((e) => decryptShard(e, passphrase)));
   return reconstructSecret(shards);
+}
+
+export interface RestoreRequest {
+  sessionId: string;
+  /** Generation recorded in the backup. It can be stale, so it is only a lower bound. */
+  backupGeneration: number;
+  /** Device performing the restore. It becomes the sole dispatchable holder. */
+  deviceId: string;
+}
+
+export type RestoreResult =
+  | { ok: true; privateKey: Uint8Array; identity: SessionIdentity }
+  | { ok: false; error: 'stale_generation' };
+
+/**
+ * Restore a session from guardian shards (#923). The key is recovered first,
+ * and the generation is minted only after decryption succeeds, so a wrong
+ * passphrase leaves the ledger untouched. The mint runs synchronously after the
+ * decrypt, so two concurrent restores each receive a distinct generation and
+ * the later one supersedes the earlier. A restore never reuses a generation
+ * that was revoked or superseded, even when the backup records an older one.
+ */
+export async function restoreSessionFromShards(
+  encryptedShards: EncryptedShard[],
+  passphrase: string,
+  request: RestoreRequest,
+): Promise<RestoreResult> {
+  const privateKey = await recoverPrivateKey(encryptedShards, passphrase);
+  const minted = mintRestoredGeneration({
+    sessionId: request.sessionId,
+    backupGeneration: request.backupGeneration,
+    deviceId: request.deviceId,
+  });
+  // mintRestoredGeneration only refuses a malformed backup generation here.
+  if (!minted.ok) return { ok: false, error: 'stale_generation' };
+  return {
+    ok: true,
+    privateKey,
+    identity: { sessionId: minted.sessionId, generation: minted.generation, deviceId: minted.deviceId },
+  };
 }

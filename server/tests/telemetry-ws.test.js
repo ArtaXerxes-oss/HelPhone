@@ -49,6 +49,12 @@ test("WebSocket relay applies topic and tenant filters and emits health heartbea
       messages.filter((message) => message.type === "contract-event").map((message) => message.id),
       ["event-match"],
     );
+    const delivered = messages.find((message) => message.id === "event-match");
+    assert.equal(delivered.sequence, 3);
+    socket.send(JSON.stringify({ type: "resume", after: 2 }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.ok(messages.some((message) => message.type === "resumed" && message.latest === 3));
+    assert.equal(messages.filter((message) => message.id === "event-match").length, 2);
   } finally {
     socket.close();
     await relay.close();

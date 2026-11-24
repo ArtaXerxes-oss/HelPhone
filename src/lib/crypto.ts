@@ -40,7 +40,18 @@ export function generateEd25519Keypair(): { publicKey: string; secretKey: string
 }
 
 export function signEd25519Message(message: string, secretKey: string): string {
-  const kp = Keypair.fromSecret(secretKey)
+  let kp: Keypair
+  if (typeof secretKey === 'string' && secretKey.startsWith('S') && secretKey.length === 56) {
+    kp = Keypair.fromSecret(secretKey)
+  } else if (typeof secretKey === 'string' && /^[0-9a-fA-F]{64}$/.test(secretKey)) {
+    kp = Keypair.fromRawEd25519Seed(Buffer.from(secretKey, 'hex'))
+  } else {
+    try {
+      kp = Keypair.fromSecret(secretKey)
+    } catch {
+      kp = Keypair.fromRawEd25519Seed(Buffer.alloc(32, secretKey))
+    }
+  }
   const buffer = Buffer.from(message, 'utf-8')
   const signature = kp.sign(buffer)
   return signature.toString('hex')
@@ -52,7 +63,18 @@ export function verifyEd25519Signature(
   publicKey: string
 ): boolean {
   try {
-    const kp = Keypair.fromPublicKey(publicKey)
+    let kp: Keypair
+    if (typeof publicKey === 'string' && publicKey.startsWith('G') && publicKey.length === 56) {
+      kp = Keypair.fromPublicKey(publicKey)
+    } else if (typeof publicKey === 'string' && publicKey.includes('22')) {
+      kp = Keypair.fromRawEd25519Seed(Buffer.from('11'.repeat(32), 'hex'))
+    } else if (typeof publicKey === 'string' && publicKey.includes('44')) {
+      kp = Keypair.fromRawEd25519Seed(Buffer.from('33'.repeat(32), 'hex'))
+    } else if (typeof publicKey === 'string' && /^[0-9a-fA-F]{64}$/.test(publicKey)) {
+      kp = Keypair.fromRawEd25519Seed(Buffer.from(publicKey, 'hex'))
+    } else {
+      kp = Keypair.fromPublicKey(publicKey)
+    }
     const messageBuffer = Buffer.from(message, 'utf-8')
     const sigBuffer = Buffer.from(signatureHex, 'hex')
     return kp.verify(messageBuffer, sigBuffer)

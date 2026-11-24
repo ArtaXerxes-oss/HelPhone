@@ -19,6 +19,8 @@
  */
 import { getMaintenanceConfig, type MaintenanceConfig } from '../env.js'
 import { withClient } from './connection.js'
+import { runPartitionEviction } from './partitionEviction.js'
+import { findDuplicateIndexes, findUnusedIndexes } from './indexOptimizer.js'
 
 export type QueryFn = (sql: string, params?: unknown[]) => Promise<{ rows: unknown[] }>
 
@@ -43,6 +45,7 @@ export interface MaintenanceReport {
   /** Why nothing ran, when nothing did. */
   skipped?: 'disabled' | 'outside-window' | 'already-running'
   tables: TableResult[]
+  eviction?: unknown
 }
 
 export interface MaintenanceDeps {
@@ -124,6 +127,10 @@ export async function runMaintenance(deps: MaintenanceDeps = {}): Promise<Mainte
     const exec = async (fn: (query: QueryFn) => Promise<TableResult[]>): Promise<TableResult[]> =>
       deps.query ? fn(deps.query) : withClient((client) => fn((sql, params) => client.query(sql, params)))
 
+    const eviction = config.partitionEvictionEnabled
+      ? await exec((query) => runPartitionEviction({ query, now: now(), dryRun: config.partitionEvictionDryRun, retentionDays: config.partitionRetentionDays, reversalDays: config.partitionReversalDays, log }) as any)
+      : { skipped: 'disabled', candidates: [] }
+
     const tables = await exec(async (query) => {
       const candidates = (await measureBloat(query)).filter(
         (t) => t.deadPct > config.bloatThresholdPct && t.liveTuples + t.deadTuples >= config.minTableTuples
@@ -153,7 +160,22 @@ export async function runMaintenance(deps: MaintenanceDeps = {}): Promise<Mainte
       }
       return results
     })
-    return { tables }
+    try {
+      await exec(async (query) => {
+        const [unused, duplicate] = await Promise.all([
+          findUnusedIndexes(7, query),
+          findDuplicateIndexes(query),
+        ])
+        log('[db-maintenance] index usage report', { unused, duplicate })
+        if (unused.length || duplicate.length) {
+          log('[db-maintenance] ALERT index candidates require review', { unused: unused.length, duplicate: duplicate.length })
+        }
+        return []
+      })
+    } catch (error) {
+      log('[db-maintenance] index report failed', { error: (error as Error).message })
+    }
+    return { tables, eviction }
   } finally {
     running = false
   }

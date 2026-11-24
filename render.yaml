@@ -31,9 +31,14 @@ services:
         value: fromEnv
         sync: false
       - key: SOROBAN_RPC_URL
-        value: "https://soroban-testnet.stellar.org"
+        value: fromEnv
+        sync: false
       - key: CONTRACT_ID
-        value: "CC325F37QW7N2F5M3QGHL4A4O7J2K9L0M1N2O3P4Q5R6S7T8U9V0"
+        value: fromEnv
+        sync: false
+      - key: STELLAR_NETWORK
+        value: fromEnv
+        sync: false
       # Rate-limit whitelist (#536): verified emergency-service subnets / API keys
       # are stored in Redis and managed via /admin/whitelist (see docs/security-runbook.md).
       - key: REDIS_URL
@@ -104,6 +109,11 @@ services:
         value: fromEnv
         sync: false
       - key: SOROBAN_RPC_URL
-        value: "https://soroban-testnet.stellar.org"
+        value: fromEnv
+        sync: false
       - key: CONTRACT_ID
-        value: "CC325F37QW7N2F5M3QGHL4A4O7J2K9L0M1N2O3P4Q5R6S7T8U9V0"
+        value: fromEnv
+        sync: false
+      - key: STELLAR_NETWORK
+        value: fromEnv
+        sync: false

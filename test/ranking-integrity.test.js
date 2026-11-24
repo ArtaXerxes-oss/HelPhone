@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, afterEach } from 'vitest'
 import {
   annotateLeaderboard,
+  bootReputationPinCheck,
+  EXPECTED_REPUTATION_PINS,
   filterGamingEvents,
+  isProvenTierAllowed,
   reduceRanking,
+  resetReputationPinAlignment,
+  verifyReputationPinAlignment,
 } from '../src/lib/rankingIntegrity.ts'
 
 describe('ISP-102 ranking integrity (#772)', () => {
@@ -109,5 +114,65 @@ describe('ISP-102 ranking integrity (#772)', () => {
     const a = reduceRanking(events)
     const b = reduceRanking([...events].reverse())
     expect(a).toEqual(b)
+  })
+
+  describe('prover pin alignment (#945)', () => {
+    afterEach(() => {
+      resetReputationPinAlignment()
+    })
+
+    it('allows proven tier when circuit, prover pins, and ranking generation align', () => {
+      const status = bootReputationPinCheck({ ...EXPECTED_REPUTATION_PINS })
+      expect(status.aligned).toBe(true)
+      expect(isProvenTierAllowed()).toBe(true)
+
+      const ranked = reduceRanking([
+        {
+          id: 'p1',
+          responderId: 'medic',
+          requesterId: 'neighbour',
+          kind: 'completion',
+          at: 1000,
+          proofValid: true,
+        },
+      ])
+      expect(ranked[0].tier).toBe('proven')
+    })
+
+    it('degrades proven tier to probationary on prover pin mismatch', () => {
+      const status = verifyReputationPinAlignment({
+        ...EXPECTED_REPUTATION_PINS,
+        bbJs: '0.88.0',
+      })
+      expect(status.aligned).toBe(false)
+      expect(isProvenTierAllowed()).toBe(false)
+
+      const ranked = reduceRanking([
+        {
+          id: 'p1',
+          responderId: 'medic',
+          requesterId: 'neighbour',
+          kind: 'completion',
+          at: 1000,
+          proofValid: true,
+        },
+      ])
+      expect(ranked[0].tier).toBe('probationary')
+
+      const board = annotateLeaderboard(
+        [{ responder: 'medic', total_arrivals: 1 }],
+        [
+          {
+            id: 'p1',
+            responderId: 'medic',
+            requesterId: 'neighbour',
+            kind: 'completion',
+            at: 1000,
+            proofValid: true,
+          },
+        ],
+      )
+      expect(board[0].tier).toBe('probationary')
+    })
   })
 })

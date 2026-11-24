@@ -1,141 +1,181 @@
 /**
- * src/lib/networkEstimator.ts — RPC health inspector & failover selector.
+ * src/lib/networkEstimator.ts
  *
- * Probes a pool of Soroban RPC endpoints with a lightweight `getHealth`
- * JSON-RPC call, keeps a smoothed (EWMA) round-trip time per endpoint, and
- * decides which endpoint the client should use:
- *
- *  - The primary (first) endpoint stays active while it is healthy.
- *  - After `failureThreshold` consecutive failures it is abandoned for the
- *    healthy endpoint with the lowest smoothed latency.
- *  - When the primary recovers it is switched back to.
- *
- * Real-call failures can be fed in with `reportFailure()` so a dying node is
- * dropped without waiting for the next probe.
- *
- * Endpoint URLs may embed provider API keys, so snapshots expose only a
- * `label` (the hostname) and the active URL is handed solely to `onChange`.
+ * 1. RPC health inspector & failover selector (Soroban RPC endpoints)
+ * 2. Network-class estimation & per-device OTel batch tunables (ISP-032)
  */
-import type { EndpointHealth, NetworkQuality, RpcHealthSnapshot } from '../types/index'
 
-export const DEFAULT_PROBE_INTERVAL_MS = 30_000
-export const DEFAULT_PROBE_TIMEOUT_MS = 5_000
-export const DEFAULT_FAILURE_THRESHOLD = 2
+import type { EndpointHealth, NetworkQuality, RpcHealthSnapshot } from '../types/index';
+
+// ===========================================================================
+// Soroban RPC Health Inspector & Failover Selector
+// ===========================================================================
+
+export const DEFAULT_PROBE_INTERVAL_MS = 30_000;
+export const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+export const DEFAULT_FAILURE_THRESHOLD = 2;
 /** Weight of the newest sample in the smoothed latency. */
-export const EWMA_ALPHA = 0.3
+export const EWMA_ALPHA = 0.3;
 /** Smoothed latency above this is reported as "degraded". */
-export const DEGRADED_LATENCY_MS = 800
+export const DEGRADED_LATENCY_MS = 800;
 
 export interface ProbeResult {
-  ok: boolean
-  latencyMs: number
-  error?: string
+  ok: boolean;
+  latencyMs: number;
+  error?: string;
+  failureClass?: ProbeFailureClass;
+}
+
+/**
+ * Why an endpoint failed (#928). `ipv6-nat64` is the bucket for IPv6-only
+ * bearers: an IPv4-literal endpoint that fails at the network layer, or any
+ * endpoint that reports an unreachable-family error. DNS64 cannot translate a
+ * dotted-quad, so the failure is structural rather than transient.
+ */
+export type ProbeFailureClass = 'timeout' | 'http' | 'unhealthy' | 'ipv6-nat64' | 'network';
+
+const IPV4_LITERAL = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+const FAMILY_UNREACHABLE = /ENETUNREACH|EHOSTUNREACH|EAFNOSUPPORT/i;
+
+/** True for a dotted-quad host such as 203.0.113.10. */
+export function isIpv4LiteralHost(host: string): boolean {
+  return IPV4_LITERAL.test(host);
+}
+
+/** Classify a failed probe or request. Pure, so every bearer path can share it. */
+export function classifyProbeFailure(
+  url: string,
+  failure: { aborted?: boolean; status?: number; error?: string } = {},
+): ProbeFailureClass {
+  if (failure.aborted || failure.error === 'timeout') return 'timeout';
+  if (typeof failure.status === 'number') return 'http';
+  if (failure.error === 'node not healthy') return 'unhealthy';
+  if (FAMILY_UNREACHABLE.test(failure.error ?? '')) return 'ipv6-nat64';
+  if (isIpv4LiteralHost(hostOf(url))) return 'ipv6-nat64';
+  return 'network';
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
 }
 
 type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }) => Promise<{
-  ok: boolean
-  status: number
-  json: () => Promise<unknown>
-}>
+  ok: boolean;
+  status: number;
+  json: () => Promise<unknown>;
+}>;
 
 export interface ProbeOptions {
-  fetchImpl?: FetchLike
-  timeoutMs?: number
-  now?: () => number
+  fetchImpl?: FetchLike;
+  timeoutMs?: number;
+  now?: () => number;
 }
 
 /** Measure one `getHealth` round trip. Never throws. */
 export async function probeEndpoint(url: string, opts: ProbeOptions = {}): Promise<ProbeResult> {
-  const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike)
-  const now = opts.now ?? (() => performance.now())
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-  const start = now()
+  const fetchImpl = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
+  const now = opts.now ?? (() => performance.now());
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const start = now();
   try {
     const res = await fetchImpl(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getHealth' }),
       signal: controller.signal,
-    })
-    const latencyMs = Math.max(0, now() - start)
-    if (!res.ok) return { ok: false, latencyMs, error: `HTTP ${res.status}` }
-    const body = (await res.json()) as { result?: { status?: string }; error?: unknown }
-    if (body?.error || body?.result?.status !== 'healthy') {
-      return { ok: false, latencyMs, error: 'node not healthy' }
+    });
+    const latencyMs = Math.max(0, now() - start);
+    if (!res.ok) {
+      return { ok: false, latencyMs, error: `HTTP ${res.status}`, failureClass: classifyProbeFailure(url, { status: res.status }) };
     }
-    return { ok: true, latencyMs }
+    const body = (await res.json()) as { result?: { status?: string }; error?: unknown };
+    if (body?.error || body?.result?.status !== 'healthy') {
+      return { ok: false, latencyMs, error: 'node not healthy', failureClass: 'unhealthy' };
+    }
+    return { ok: true, latencyMs };
   } catch (err) {
-    const aborted = controller.signal.aborted
-    return { ok: false, latencyMs: Math.max(0, now() - start), error: aborted ? 'timeout' : (err as Error).message }
+    const aborted = controller.signal.aborted;
+    const error = aborted ? 'timeout' : (err as Error).message;
+    return {
+      ok: false,
+      latencyMs: Math.max(0, now() - start),
+      error,
+      failureClass: classifyProbeFailure(url, { aborted, error }),
+    };
   } finally {
-    clearTimeout(timer)
+    clearTimeout(timer);
   }
 }
 
 /** Hostname only — never the path/query, which may carry an API key. */
 export function endpointLabel(url: string): string {
   try {
-    return new URL(url).hostname
+    return new URL(url).hostname;
   } catch {
-    return 'invalid-url'
+    return 'invalid-url';
   }
 }
 
 /** Split a comma-separated URL list, dropping blanks and duplicates. */
 export function parseEndpointList(...raw: Array<string | undefined>): string[] {
-  const seen = new Set<string>()
+  const seen = new Set<string>();
   for (const chunk of raw) {
     for (const part of (chunk ?? '').split(',')) {
-      const url = part.trim()
-      if (url) seen.add(url)
+      const url = part.trim();
+      if (url) seen.add(url);
     }
   }
-  return [...seen]
+  return [...seen];
 }
 
 interface EndpointState {
-  url: string
-  ewmaMs: number | null
-  lastMs: number | null
-  healthy: boolean
-  failures: number
-  checkedAt: number | null
-  error?: string
+  url: string;
+  ewmaMs: number | null;
+  lastMs: number | null;
+  healthy: boolean;
+  failures: number;
+  checkedAt: number | null;
+  error?: string;
+  failureClass?: ProbeFailureClass;
 }
 
 export interface EstimatorOptions {
   /** Primary first, then backups. */
-  endpoints: string[]
-  probeIntervalMs?: number
-  timeoutMs?: number
-  failureThreshold?: number
-  fetchImpl?: FetchLike
+  endpoints: string[];
+  probeIntervalMs?: number;
+  timeoutMs?: number;
+  failureThreshold?: number;
+  fetchImpl?: FetchLike;
   /** Clock for both latency timing and `lastCheckedAt`; defaults to performance.now / Date.now. */
-  now?: () => number
+  now?: () => number;
   /** Called with the new active URL whenever failover (or fail-back) happens. */
-  onChange?: (url: string, previous: string) => void
+  onChange?: (url: string, previous: string) => void;
 }
 
 export interface NetworkEstimator {
-  probeAll(): Promise<RpcHealthSnapshot>
+  probeAll(): Promise<RpcHealthSnapshot>;
   /** Record a failed real request against an endpoint. */
-  reportFailure(url: string): void
-  getActiveUrl(): string
-  getSnapshot(): RpcHealthSnapshot
-  subscribe(listener: () => void): () => void
-  start(): void
-  stop(): void
+  reportFailure(url: string): void;
+  getActiveUrl(): string;
+  getSnapshot(): RpcHealthSnapshot;
+  subscribe(listener: () => void): () => void;
+  start(): void;
+  stop(): void;
 }
 
 export function createNetworkEstimator(opts: EstimatorOptions): NetworkEstimator {
-  const urls = [...new Set(opts.endpoints)]
-  if (urls.length === 0) throw new Error('createNetworkEstimator requires at least one endpoint')
+  const urls = [...new Set(opts.endpoints)];
+  if (urls.length === 0) throw new Error('createNetworkEstimator requires at least one endpoint');
 
-  const wallClock = opts.now ?? (() => Date.now())
-  const probeIntervalMs = opts.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS
-  const threshold = Math.max(1, opts.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD)
+  const wallClock = opts.now ?? (() => Date.now());
+  const probeIntervalMs = opts.probeIntervalMs ?? DEFAULT_PROBE_INTERVAL_MS;
+  const threshold = Math.max(1, opts.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD);
   const states: EndpointState[] = urls.map((url) => ({
     url,
     ewmaMs: null,
@@ -143,17 +183,17 @@ export function createNetworkEstimator(opts: EstimatorOptions): NetworkEstimator
     healthy: true, // optimistic until probed
     failures: 0,
     checkedAt: null,
-  }))
-  const listeners = new Set<() => void>()
-  let active = 0
-  let timer: ReturnType<typeof setInterval> | null = null
-  let probing: Promise<RpcHealthSnapshot> | null = null
-  let snapshot: RpcHealthSnapshot | null = null
+  }));
+  const listeners = new Set<() => void>();
+  let active = 0;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let probing: Promise<RpcHealthSnapshot> | null = null;
+  let snapshot: RpcHealthSnapshot | null = null;
 
   function quality(): NetworkQuality {
-    const activeState = states[active]
-    if (!activeState.healthy && !states.some((s) => s.healthy)) return 'offline'
-    return activeState.healthy && (activeState.ewmaMs ?? 0) <= DEGRADED_LATENCY_MS ? 'good' : 'degraded'
+    const activeState = states[active];
+    if (!activeState.healthy && !states.some((s) => s.healthy)) return 'offline';
+    return activeState.healthy && (activeState.ewmaMs ?? 0) <= DEGRADED_LATENCY_MS ? 'good' : 'degraded';
   }
 
   function build(): RpcHealthSnapshot {
@@ -166,93 +206,258 @@ export function createNetworkEstimator(opts: EstimatorOptions): NetworkEstimator
       lastCheckedAt: s.checkedAt,
       active: i === active,
       primary: i === 0,
-    }))
-    return { activeLabel: endpoints[active].label, activeLatencyMs: endpoints[active].latencyMs, quality: quality(), endpoints }
+      failureClass: s.failures > 0 ? (s.failureClass ?? null) : null,
+    }));
+    return { activeLabel: endpoints[active].label, activeLatencyMs: endpoints[active].latencyMs, quality: quality(), endpoints };
   }
 
   function publish(): void {
-    snapshot = build()
-    for (const l of listeners) l()
+    snapshot = build();
+    for (const l of listeners) l();
   }
 
   /** Pick the endpoint that should be active; returns true if it changed. */
   function reselect(): boolean {
-    const primary = states[0]
-    let next = active
+    const primary = states[0];
+    let next = active;
     if (primary.healthy) {
-      next = 0 // fail back to (or stay on) a healthy primary
+      next = 0;
     } else if (!states[active].healthy) {
-      const healthy = states.filter((s) => s.healthy)
+      const healthy = states.filter((s) => s.healthy);
       if (healthy.length > 0) {
-        const best = healthy.reduce((a, b) => ((a.ewmaMs ?? Infinity) <= (b.ewmaMs ?? Infinity) ? a : b))
-        next = states.indexOf(best)
+        const best = healthy.reduce((a, b) => ((a.ewmaMs ?? Infinity) <= (b.ewmaMs ?? Infinity) ? a : b));
+        next = states.indexOf(best);
       }
     }
-    if (next === active) return false
-    const previous = states[active].url
-    active = next
-    opts.onChange?.(states[active].url, previous)
-    return true
+    if (next === active) return false;
+    const previous = states[active].url;
+    active = next;
+    opts.onChange?.(states[active].url, previous);
+    return true;
   }
 
   function record(state: EndpointState, result: ProbeResult): void {
-    state.checkedAt = wallClock()
-    state.error = result.error
+    state.checkedAt = wallClock();
+    state.error = result.error;
     if (result.ok) {
-      state.failures = 0
-      state.healthy = true
-      state.lastMs = result.latencyMs
-      state.ewmaMs = state.ewmaMs === null ? result.latencyMs : EWMA_ALPHA * result.latencyMs + (1 - EWMA_ALPHA) * state.ewmaMs
+      state.failures = 0;
+      state.healthy = true;
+      state.lastMs = result.latencyMs;
+      state.ewmaMs = state.ewmaMs === null ? result.latencyMs : EWMA_ALPHA * result.latencyMs + (1 - EWMA_ALPHA) * state.ewmaMs;
     } else {
-      state.failures += 1
-      if (state.failures >= threshold) state.healthy = false
+      state.failures += 1;
+      state.failureClass = result.failureClass ?? 'network';
+      if (state.failures >= threshold) state.healthy = false;
     }
   }
 
   function probeAll(): Promise<RpcHealthSnapshot> {
-    if (probing) return probing // coalesce overlapping probes
+    if (probing) return probing;
     probing = (async () => {
       const results = await Promise.all(
         states.map((s) => probeEndpoint(s.url, { fetchImpl: opts.fetchImpl, timeoutMs: opts.timeoutMs, now: opts.now }))
-      )
-      results.forEach((r, i) => record(states[i], r))
-      reselect()
-      publish()
-      return snapshot as RpcHealthSnapshot
+      );
+      results.forEach((r, i) => record(states[i], r));
+      reselect();
+      publish();
+      return snapshot as RpcHealthSnapshot;
     })().finally(() => {
-      probing = null
-    })
-    return probing
+      probing = null;
+    });
+    return probing;
   }
 
-  snapshot = build()
+  snapshot = build();
 
   return {
     probeAll,
     reportFailure(url) {
-      const state = states.find((s) => s.url === url)
-      if (!state) return
-      record(state, { ok: false, latencyMs: 0, error: 'request failed' })
-      reselect()
-      publish()
+      const state = states.find((s) => s.url === url);
+      if (!state) return;
+      record(state, {
+        ok: false,
+        latencyMs: 0,
+        error: 'request failed',
+        failureClass: classifyProbeFailure(url, { error: 'request failed' }),
+      });
+      reselect();
+      publish();
     },
     getActiveUrl: () => states[active].url,
     getSnapshot: () => snapshot as RpcHealthSnapshot,
     subscribe(listener) {
-      listeners.add(listener)
+      listeners.add(listener);
       return () => {
-        listeners.delete(listener)
-      }
+        listeners.delete(listener);
+      };
     },
     start() {
-      if (timer) return
-      void probeAll()
-      timer = setInterval(() => void probeAll(), probeIntervalMs)
-      ;(timer as { unref?: () => void }).unref?.()
+      if (timer) return;
+      void probeAll();
+      timer = setInterval(() => void probeAll(), probeIntervalMs);
+      ;(timer as { unref?: () => void }).unref?.();
     },
     stop() {
-      if (timer) clearInterval(timer)
-      timer = null
+      if (timer) clearInterval(timer);
+      timer = null;
     },
-  }
+  };
+}
+
+// ===========================================================================
+// Network-Class Estimation & Per-Device OTel Batch Tunables (ISP-032)
+// ===========================================================================
+
+export type NetworkClass = 'offline' | '2g' | '3g' | '4g';
+
+export interface NetworkSample {
+  online?: boolean;
+  effectiveType?: string;
+  downlinkMbps?: number;
+  rttMs?: number;
+  saveData?: boolean;
+}
+
+export interface NetworkProfile {
+  maxQueueSize: number;
+  scheduledDelayMillis: number;
+  maxExportBatchSize: number;
+  normalSampleRate: number;
+  heartbeatSampleRate: number;
+  criticalSampleRate: 1;
+  outboxOnly: boolean;
+}
+
+export const NETWORK_PROFILES: Record<NetworkClass, NetworkProfile> = {
+  '2g': {
+    maxQueueSize: 50,
+    scheduledDelayMillis: 5_000,
+    maxExportBatchSize: 5,
+    normalSampleRate: 0.2,
+    heartbeatSampleRate: 0.02,
+    criticalSampleRate: 1,
+    outboxOnly: false,
+  },
+  '3g': {
+    maxQueueSize: 200,
+    scheduledDelayMillis: 2_000,
+    maxExportBatchSize: 20,
+    normalSampleRate: 0.5,
+    heartbeatSampleRate: 0.1,
+    criticalSampleRate: 1,
+    outboxOnly: false,
+  },
+  '4g': {
+    maxQueueSize: 1_000,
+    scheduledDelayMillis: 1_000,
+    maxExportBatchSize: 200,
+    normalSampleRate: 1,
+    heartbeatSampleRate: 0.25,
+    criticalSampleRate: 1,
+    outboxOnly: false,
+  },
+  offline: {
+    maxQueueSize: 100,
+    scheduledDelayMillis: 0,
+    maxExportBatchSize: 50,
+    normalSampleRate: 1,
+    heartbeatSampleRate: 0.05,
+    criticalSampleRate: 1,
+    outboxOnly: true,
+  },
+};
+
+/** Pure classifier — the single source of truth for every runtime. */
+export function classifyNetwork(sample: NetworkSample = {}): NetworkClass {
+  if (sample.online === false) return 'offline';
+  if (sample.saveData) return '2g';
+
+  const effective = String(sample.effectiveType || '').toLowerCase();
+  if (effective === 'slow-2g' || effective === '2g') return '2g';
+  if (effective === '3g') return '3g';
+  if (effective === '4g') return '4g';
+
+  const rtt = sample.rttMs;
+  const downlink = sample.downlinkMbps;
+
+  if (Number.isFinite(rtt) && (rtt as number) >= 1_000) return '2g';
+  if (Number.isFinite(downlink) && (downlink as number) >= 0 && (downlink as number) < 0.5) return '2g';
+  if (Number.isFinite(rtt) && (rtt as number) >= 300) return '3g';
+  if (Number.isFinite(downlink) && (downlink as number) >= 0 && (downlink as number) < 1.5) return '3g';
+
+  return '4g';
+}
+
+export function profileFor(networkClass: NetworkClass): NetworkProfile {
+  return NETWORK_PROFILES[networkClass] ?? NETWORK_PROFILES['4g'];
+}
+
+type ConnectionLike = {
+  effectiveType?: string;
+  downlink?: number;
+  rtt?: number;
+  saveData?: boolean;
+  addEventListener?: (type: 'change', listener: () => void) => void;
+  removeEventListener?: (type: 'change', listener: () => void) => void;
+};
+
+export function estimateNetwork(env: unknown = globalThis): NetworkClass {
+  const nav = (env as { navigator?: { connection?: ConnectionLike; onLine?: boolean } } | undefined)?.navigator;
+  const connection = nav?.connection;
+  return classifyNetwork({
+    online: nav?.onLine,
+    effectiveType: connection?.effectiveType,
+    downlinkMbps: connection?.downlink,
+    rttMs: connection?.rtt,
+    saveData: connection?.saveData,
+  });
+}
+
+export interface NetworkMonitor {
+  get(): NetworkClass;
+  subscribe(listener: (networkClass: NetworkClass) => void): () => void;
+  stop(): void;
+}
+
+export function createNetworkMonitor(env: unknown = globalThis, intervalMs = 0): NetworkMonitor {
+  const nav = (env as {
+    navigator?: { onLine?: boolean; connection?: ConnectionLike };
+    addEventListener?: (type: string, listener: () => void) => void;
+    removeEventListener?: (type: string, listener: () => void) => void;
+  } | undefined)?.navigator;
+
+  const listeners = new Set<(networkClass: NetworkClass) => void>();
+  let current = estimateNetwork(env);
+  let timer: ReturnType<typeof setInterval> | null = null;
+
+  const emit = () => {
+    const next = estimateNetwork(env);
+    if (next === current) return;
+    current = next;
+    for (const listener of listeners) listener(next);
+  };
+
+  const connection = nav?.connection;
+  const onConnectionChange = () => emit();
+
+  if (nav?.addEventListener) nav.addEventListener('online', emit);
+  if (nav?.addEventListener) nav.addEventListener('offline', emit);
+  connection?.addEventListener?.('change', onConnectionChange);
+  if (intervalMs > 0) timer = setInterval(emit, intervalMs);
+
+  return {
+    get: () => current,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    stop() {
+      listeners.clear();
+      if (timer) clearInterval(timer);
+      timer = null;
+      nav?.removeEventListener?.('online', emit);
+      nav?.removeEventListener?.('offline', emit);
+      connection?.removeEventListener?.('change', onConnectionChange);
+    },
+  };
 }

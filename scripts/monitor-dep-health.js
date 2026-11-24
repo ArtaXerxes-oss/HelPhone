@@ -1,17 +1,12 @@
 #!/usr/bin/env node
-// #591 — Open-source dependency health & sustainability monitor.
-//
-// Scores every direct dependency on commit frequency (via npm last-publish),
-// open-issue pressure, and maintainer responsiveness signals; flags packages
-// untouched for >12 months (abandoned); and emits a 0–100 Sustainability
-// Health Index plus docs/sustainability-report.md.
+// #591 / #949 — Open-source dependency health & sustainability monitor
+// with committed local metadata cache & offline fallback.
 //
 // Usage:
-//   node scripts/monitor-dep-health.js [--json] [--write <path>] [--offline]
-//   --offline skips registry lookups (CI-safe, deterministic).
+//   node scripts/monitor-dep-health.js [--json] [--write <path>] [--offline] [--cache <path>] [--update-cache] [--fail-on-known-bad]
 //
-// Zero runtime dependencies (node built-ins only). Registry failures degrade
-// to "unknown" — never fail closed.
+// Zero runtime dependencies (node built-ins only). Registry failures fall back
+// to the committed metadata cache and mark the report explicitly as degraded.
 
 import fs from "node:fs";
 import path from "node:path";
@@ -20,6 +15,11 @@ import { fileURLToPath } from "node:url";
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
+);
+export const DEFAULT_CACHE_PATH = path.join(
+  REPO_ROOT,
+  "config",
+  "dep-health-cache.json",
 );
 export const ABANDONED_MONTHS = 12;
 
@@ -44,18 +44,20 @@ export function classifyDep(
   return "healthy";
 }
 
-// 0–100 index: healthy=1, stale=0.6, at-risk=0.3, abandoned=0, unknown=0.5.
+// 0–100 index over known dependencies: healthy=1, stale=0.6, at-risk=0.3, abandoned=0.
+// Unknown dependencies are excluded so offline/unreachable registries do not report
+// a falsely low score (50/100); returns null when zero dependencies are known.
 export function healthIndex(results) {
-  if (results.length === 0) return 100;
+  const known = results.filter((r) => r.status !== "unknown");
+  if (known.length === 0) return null;
   const weights = {
     healthy: 1,
     stale: 0.6,
     "at-risk": 0.3,
     abandoned: 0,
-    unknown: 0.5,
   };
-  const sum = results.reduce((s, r) => s + (weights[r.status] ?? 0.5), 0);
-  return Math.round((sum / results.length) * 100);
+  const sum = known.reduce((s, r) => s + (weights[r.status] ?? 0), 0);
+  return Math.round((sum / known.length) * 100);
 }
 
 export function collectDirectDeps(root = REPO_ROOT) {
@@ -73,6 +75,34 @@ export function collectDirectDeps(root = REPO_ROOT) {
     }
   }
   return [...out.values()];
+}
+
+export function loadMetadataCache(cachePath = DEFAULT_CACHE_PATH) {
+  try {
+    const raw = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    return {
+      generatedAt: raw.generatedAt || null,
+      packages: raw.packages && typeof raw.packages === "object" ? raw.packages : {},
+    };
+  } catch {
+    return { generatedAt: null, packages: {} };
+  }
+}
+
+export function saveMetadataCache(
+  cachePath = DEFAULT_CACHE_PATH,
+  packages = {},
+  now = new Date(),
+) {
+  const sorted = {};
+  for (const name of Object.keys(packages).sort()) {
+    sorted[name] = packages[name];
+  }
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(
+    cachePath,
+    `${JSON.stringify({ schemaVersion: 1, generatedAt: now.toISOString(), packages: sorted }, null, 2)}\n`,
+  );
 }
 
 export async function fetchNpmMeta(
@@ -105,24 +135,118 @@ export async function fetchNpmMeta(
   }
 }
 
-export function renderReport(results, index) {
+export async function scoreDependencies({
+  deps,
+  cache = { packages: {} },
+  offline = false,
+  fetchImpl = globalThis.fetch,
+  now = new Date(),
+} = {}) {
+  const packages = cache.packages || {};
+  const results = [];
+  let registryFailures = 0;
+
+  for (const d of deps) {
+    const cached = packages[d.name] || null;
+
+    if (offline) {
+      const lastPublish = cached?.lastPublish || null;
+      const status = classifyDep(
+        { lastPublish, openIssues: cached?.openIssues },
+        now,
+      );
+      results.push({
+        ...d,
+        lastPublish,
+        status,
+        source: cached ? "cache" : "unknown",
+      });
+      continue;
+    }
+
+    const meta = await fetchNpmMeta(d.name, fetchImpl);
+    if (meta.ok) {
+      const status = classifyDep({ lastPublish: meta.lastPublish }, now);
+      results.push({
+        ...d,
+        lastPublish: meta.lastPublish,
+        version: meta.version,
+        status,
+        source: "registry",
+      });
+    } else {
+      registryFailures += 1;
+      const lastPublish = cached?.lastPublish || null;
+      const status = classifyDep(
+        { lastPublish, openIssues: cached?.openIssues },
+        now,
+      );
+      results.push({
+        ...d,
+        lastPublish,
+        status,
+        source: cached ? "cache-fallback" : "unknown",
+      });
+    }
+  }
+
+  const degraded = offline || registryFailures > 0;
+  const degradedReason = offline
+    ? "offline-mode"
+    : registryFailures > 0
+      ? "registry-unreachable"
+      : null;
+  const index = healthIndex(results);
+
+  return {
+    results,
+    index,
+    degraded,
+    degradedReason,
+    registryFailures,
+  };
+}
+
+export function shouldFailCi({ results, index }) {
+  const hasAbandoned = results.some((r) => r.status === "abandoned");
+  const lowKnownIndex = index !== null && index < 50;
+  return hasAbandoned || lowKnownIndex;
+}
+
+export function renderReport(
+  results,
+  index,
+  {
+    degraded = false,
+    degradedReason = null,
+    cachePath = "config/dep-health-cache.json",
+  } = {},
+) {
   const rows = results
     .map(
       (r) =>
-        `| ${r.name} | ${r.range} | ${r.lastPublish || "unknown"} | ${r.status} |`,
+        `| ${r.name} | ${r.range} | ${r.lastPublish || "unknown"} | ${r.status} | ${r.source || "unknown"} |`,
     )
     .join("\n");
   const abandoned = results.filter((r) => r.status === "abandoned");
+  const indexLabel =
+    index === null ? "N/A (degraded — no known metadata)" : `${index}/100`;
+  const degradedBanner = degraded
+    ? `> **DEGRADED (${degradedReason || "offline"})**: Live npm registry was ${degradedReason === "offline-mode" ? "skipped (--offline)" : "unreachable"}; scored from committed metadata cache (\`${cachePath}\`).\n\n`
+    : "";
+
   return (
     `# Sustainability Report\n\n` +
-    `> Auto-generated by \`scripts/monitor-dep-health.js\` (#591). Do not edit by hand.\n\n` +
-    `## Health index: ${index}/100\n\n` +
+    `> Auto-generated by \`scripts/monitor-dep-health.js\` (#591, #949). Do not edit by hand.\n\n` +
+    degradedBanner +
+    `## Health index: ${indexLabel}\n\n` +
+    `- Degraded: ${degraded ? `yes (${degradedReason})` : "no"}\n` +
     `- Dependencies scored: ${results.length}\n` +
     `- Healthy: ${results.filter((r) => r.status === "healthy").length}\n` +
     `- Stale (>6mo): ${results.filter((r) => r.status === "stale").length}\n` +
     `- At-risk: ${results.filter((r) => r.status === "at-risk").length}\n` +
     `- Abandoned (>12mo): ${abandoned.length}\n` +
-    `- Unknown (registry unreachable): ${results.filter((r) => r.status === "unknown").length}\n\n` +
+    `- Unknown (no registry or cache metadata): ${results.filter((r) => r.status === "unknown").length}\n\n` +
     `## Abandoned packages\n\n` +
     (abandoned.length
       ? abandoned
@@ -132,7 +256,7 @@ export function renderReport(results, index) {
           )
           .join("\n") + "\n"
       : "None.\n") +
-    `\n## All dependencies\n\n| Package | Range | Last publish | Status |\n| --- | --- | --- | --- |\n${rows}\n`
+    `\n## All dependencies\n\n| Package | Range | Last publish | Status | Source |\n| --- | --- | --- | --- | --- |\n${rows}\n`
   );
 }
 
@@ -141,40 +265,77 @@ if (isMain) {
   const args = process.argv.slice(2);
   const asJson = args.includes("--json");
   const offline = args.includes("--offline");
+  const updateCache = args.includes("--update-cache");
+  const failOnKnownBad = args.includes("--fail-on-known-bad");
+  const cacheIdx = args.indexOf("--cache");
+  const cachePath =
+    cacheIdx !== -1
+      ? path.resolve(REPO_ROOT, args[cacheIdx + 1])
+      : DEFAULT_CACHE_PATH;
   const writeIdx = args.indexOf("--write");
   const writePath =
     writeIdx !== -1 ? args[writeIdx + 1] : "docs/sustainability-report.md";
 
   const deps = collectDirectDeps();
-  const results = [];
-  for (const d of deps) {
-    if (offline) {
-      results.push({ ...d, lastPublish: null, status: "unknown" });
-      continue;
+  const cache = loadMetadataCache(cachePath);
+  const scored = await scoreDependencies({ deps, cache, offline });
+
+  if (updateCache && !offline) {
+    const nextPackages = { ...cache.packages };
+    for (const r of scored.results) {
+      if (r.source === "registry" && r.lastPublish) {
+        nextPackages[r.name] = {
+          version: r.version || null,
+          lastPublish: r.lastPublish,
+        };
+      }
     }
-    const meta = await fetchNpmMeta(d.name);
-    const lastPublish = meta.ok ? meta.lastPublish : null;
-    results.push({ ...d, lastPublish, status: classifyDep({ lastPublish }) });
+    saveMetadataCache(cachePath, nextPackages);
   }
-  const index = healthIndex(results);
 
   if (asJson) {
-    console.log(JSON.stringify({ index, results }, null, 2));
+    console.log(
+      JSON.stringify(
+        {
+          index: scored.index,
+          degraded: scored.degraded,
+          degradedReason: scored.degradedReason,
+          results: scored.results,
+        },
+        null,
+        2,
+      ),
+    );
   } else {
-    console.log(`dep-health: ${deps.length} deps scored, index ${index}/100`);
-    for (const r of results.filter((x) => x.status === "abandoned"))
+    const idxText = scored.index === null ? "N/A" : `${scored.index}/100`;
+    console.log(
+      `dep-health: ${deps.length} deps scored, index ${idxText}, degraded=${scored.degraded}${scored.degradedReason ? ` (${scored.degradedReason})` : ""}`,
+    );
+    for (const r of scored.results.filter((x) => x.status === "abandoned")) {
       console.log(
         `ABANDONED: ${r.name} last publish ${r.lastPublish || "unknown"}`,
       );
+    }
     console.log(
-      index >= 50 ? "dep-health: OK" : "dep-health: REVIEW (index < 50)",
+      shouldFailCi(scored)
+        ? "dep-health: KNOWN-BAD (abandoned or index < 50)"
+        : "dep-health: OK",
     );
   }
+
   if (writePath) {
     fs.writeFileSync(
       path.resolve(REPO_ROOT, writePath),
-      renderReport(results, index),
+      renderReport(scored.results, scored.index, {
+        degraded: scored.degraded,
+        degradedReason: scored.degradedReason,
+        cachePath: path.relative(REPO_ROOT, cachePath),
+      }),
     );
     console.log(`dep-health: report written -> ${writePath}`);
+  }
+
+  if (failOnKnownBad && shouldFailCi(scored)) {
+    process.exit(1);
   }
 }

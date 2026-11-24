@@ -17,13 +17,34 @@ const COORD_KEYS = new Set(["lat", "lng", "lon", "latitude", "longitude", "dispa
 const E164_RE = /\+?\d[\d\s().-]{7,}\d/g;
 const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 
-function salt() {
-  return process.env.PII_HMAC_SALT || "helphone-dev-salt-not-for-production";
+export function piiSaltSet(env = process.env) {
+  const active = env.PII_HMAC_ACTIVE_VERSION || "v1";
+  const configured = env.PII_HMAC_SALTS
+    ? Object.fromEntries(env.PII_HMAC_SALTS.split(",").map((entry) => {
+        const split = entry.indexOf(":");
+        return [entry.slice(0, split), entry.slice(split + 1)];
+      }))
+    : { [active]: env.PII_HMAC_SALT || "helphone-dev-salt-not-for-production" };
+  if (!configured[active]) throw new Error(`PII HMAC rotation incomplete: active salt ${active} is missing`);
+  if (env.PII_HMAC_REQUIRED_VERSION && env.PII_HMAC_REQUIRED_VERSION !== active) {
+    throw new Error(`PII HMAC rotation incomplete: expected ${env.PII_HMAC_REQUIRED_VERSION}, got ${active}`);
+  }
+  return { active, salts: configured };
 }
 
 export function pseudonymize(value) {
   if (value == null || value === "") return value;
-  return `hmac:${createHmac("sha256", salt()).update(String(value).trim().toLowerCase()).digest("hex").slice(0, 16)}`;
+  const { active, salts } = piiSaltSet();
+  return `hmac:${active}:${createHmac("sha256", salts[active]).update(String(value).trim().toLowerCase()).digest("hex").slice(0, 16)}`;
+}
+
+/** During the overlap window, match a lookup against both active and previous salts. */
+export function pseudonymCandidates(value) {
+  if (value == null || value === "") return [value];
+  const { salts } = piiSaltSet();
+  return Object.entries(salts).map(([version, key]) =>
+    `hmac:${version}:${createHmac("sha256", key).update(String(value).trim().toLowerCase()).digest("hex").slice(0, 16)}`,
+  );
 }
 
 export function coarsenCoord(value) {

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { NmeaStream } from '../lib/nmeaParser'
 import { PositionArbiter, type ArbitratedFix } from '../lib/positionArbiter'
+import { recordPositionFix, recordPositionSwitch } from '../lib/positionTelemetry'
 
 // Nordic UART service: what most BLE NMEA pucks expose.
 const NUS_SERVICE = '6e400001-b5a3-f393-e0a9-e50e24dcca9e'
@@ -35,14 +36,16 @@ export function usePositionArbiter({ enabled = true, tickMs = 100 } = {}): Posit
   useEffect(() => {
     if (!enabled || !navigator.geolocation) return
     const id = navigator.geolocation.watchPosition(
-      (pos) =>
+      (pos) => {
+        recordPositionFix('phone', pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy);
         arbiterRef.current.push({
           source: 'phone',
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy,
           at: pos.timestamp || Date.now(),
-        }),
+        })
+      },
       (err) => setError(err.message),
       { enableHighAccuracy: true, maximumAge: 5_000 },
     )
@@ -86,11 +89,13 @@ export function usePositionArbiter({ enabled = true, tickMs = 100 } = {}): Posit
       characteristic.addEventListener('characteristicvaluechanged', (event: any) => {
         for (const nmea of stream.push(decoder.decode(event.target.value))) {
           if (nmea.hdop != null) hdop = nmea.hdop
+          const accuracy = nmea.accuracy ?? (hdop != null ? hdop * 5 : 10)
+          recordPositionFix('puck', nmea.lat, nmea.lng, accuracy)
           arbiterRef.current.push({
             source: 'puck',
             lat: nmea.lat,
             lng: nmea.lng,
-            accuracy: nmea.accuracy ?? (hdop != null ? hdop * 5 : 10),
+            accuracy,
             hdop,
             at: Date.now(),
           })
@@ -111,6 +116,7 @@ export function usePositionArbiter({ enabled = true, tickMs = 100 } = {}): Posit
   }, [])
 
   const setManual = useCallback((lat: number, lng: number) => {
+    recordPositionFix('manual', lat, lng, 15)
     arbiterRef.current.push({ source: 'manual', lat, lng, accuracy: 15, at: Date.now() })
   }, [])
 

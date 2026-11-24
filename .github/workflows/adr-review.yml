@@ -1,0 +1,62 @@
+name: ADR review
+
+on:
+  pull_request:
+    paths: ['docs/adr/**', 'scripts/adr-review.mjs', '.github/workflows/adr-review.yml']
+  push:
+    branches: [main]
+    paths: ['docs/adr/**', 'scripts/adr-review.mjs', '.github/workflows/adr-review.yml']
+  schedule:
+    - cron: '0 6 * * *'
+    - cron: '0 7 1 1,4,7,10 *'
+  workflow_dispatch:
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/adr-review.mjs --check
+
+  reminders:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Open expiry reminders once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          node scripts/adr-review.mjs --due-json | jq -c '.[]' | while read -r item; do
+            file=$(jq -r .file <<< "$item")
+            expiry=$(jq -r .expiry <<< "$item")
+            owner=$(jq -r .owner <<< "$item")
+            title="ADR review: $file expires $expiry"
+            count=$(gh issue list -R "$REPO" --state all --search "\"$title\" in:title" --json number --jq length)
+            if [ "$count" -eq 0 ]; then
+              gh issue create -R "$REPO" --title "$title" \
+                --body "Review [${file}](https://github.com/${REPO}/blob/main/docs/adr/${file}) before ${expiry} ends. Decision owner: ${owner}. Record the decision, evidence, and CODEOWNERS review."
+            fi
+          done
+      - name: Quarterly review report
+        if: github.event.schedule == '0 7 1 1,4,7,10 *' || github.event_name == 'workflow_dispatch'
+        run: |
+          node scripts/adr-review.mjs --report > adr-review-report.md
+          cat adr-review-report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: github.event.schedule == '0 7 1 1,4,7,10 *' || github.event_name == 'workflow_dispatch'
+        with:
+          name: adr-review-report
+          path: adr-review-report.md

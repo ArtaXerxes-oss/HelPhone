@@ -127,6 +127,80 @@ export function checkOverlap(a: ZoneBox, b: ZoneBox, p: ZonePrivacyParams): Zone
   return w < minDim || h < minDim || cells < big(p.kCells) ? fail('overlap_too_small') : ok
 }
 
+export interface OverlapDetails {
+  disjoint: boolean
+  width: bigint
+  height: bigint
+  cells: bigint
+  minDim: bigint
+  minCells: bigint
+  ok: boolean
+  error?: ZonePrivacyViolation
+}
+
+/**
+ * Compute detailed overlap geometry between two zones with exact BigInt semantics.
+ */
+export function computeOverlap(
+  a: ZoneBox,
+  b: ZoneBox,
+  p: ZonePrivacyParams = DEFAULT_ZONE_PRIVACY
+): OverlapDetails {
+  const ea = edges(a)
+  const eb = edges(b)
+  const minDim = minBoxDimension(p) || 0n
+  const minCells = big(p.kCells || 25)
+
+  if (!ea || !eb) {
+    return {
+      disjoint: false,
+      width: 0n,
+      height: 0n,
+      cells: 0n,
+      minDim,
+      minCells,
+      ok: false,
+      error: 'malformed',
+    }
+  }
+
+  const max = (x: bigint, y: bigint) => (x > y ? x : y)
+  const min = (x: bigint, y: bigint) => (x < y ? x : y)
+  const xMin = max(ea.xMin, eb.xMin)
+  const xMax = min(ea.xMax, eb.xMax)
+  const yMin = max(ea.yMin, eb.yMin)
+  const yMax = min(ea.yMax, eb.yMax)
+
+  if (xMin > xMax || yMin > yMax) {
+    return {
+      disjoint: true,
+      width: 0n,
+      height: 0n,
+      cells: 0n,
+      minDim,
+      minCells,
+      ok: true,
+    }
+  }
+
+  const w = xMax - xMin
+  const h = yMax - yMin
+  const grid = big(p.grid || 10_000)
+  const cells = grid > 0n ? (w / grid) * (h / grid) : 0n
+  const ok = w >= minDim && h >= minDim && cells >= minCells
+
+  return {
+    disjoint: false,
+    width: w,
+    height: h,
+    cells,
+    minDim,
+    minCells,
+    ok,
+    error: ok ? undefined : 'overlap_too_small',
+  }
+}
+
 /**
  * Grow a box until it satisfies the policy: snap every edge outward to the grid
  * (never inward, so the region only ever gets less precise), then widen each
@@ -252,5 +326,142 @@ export function jitterCoordinates(
   return {
     lat: lat + latJitter,
     lng: lng + lngJitter,
+  }
+}
+
+export interface BuildCampaignZoneParams {
+  bounds?: ZoneBox
+  lat?: number
+  lng?: number
+  radiusMeters?: number
+  campaignId?: string
+  privacy?: ZonePrivacyParams
+  existingZones?: ZoneBox[]
+}
+
+export type BuildCampaignZoneResult =
+  | {
+      ok: true
+      zone: ProofZone
+      box: ZoneBox
+      aligned: boolean
+      preflight: { valid: true }
+    }
+  | {
+      ok: false
+      error: ZonePrivacyViolation
+      reason: string
+      minDimension: bigint
+      proposedBox?: ZoneBox
+    }
+
+/**
+ * Builds and preflights a campaign zone under differential privacy rules.
+ * Snaps edges outward to the grid and widens to the Laplace floor rather than shrinking.
+ * Checks Laplace, grid alignment, map boundaries, and k-anonymity overlap.
+ */
+export function buildCampaignZone(params: BuildCampaignZoneParams): BuildCampaignZoneResult {
+  const privacy = params.privacy ?? DEFAULT_ZONE_PRIVACY
+  const minDim = minBoxDimension(privacy) || 300_000n
+
+  let initialBox: ZoneBox
+  let initialZone: ProofZone | null = null
+
+  if (params.bounds) {
+    initialBox = params.bounds
+  } else if (params.lat !== undefined && params.lng !== undefined) {
+    initialZone = buildLocationProofZone({
+      lat: params.lat,
+      lng: params.lng,
+      radiusMeters: params.radiusMeters ?? 3000,
+    })
+    initialBox = {
+      boxXMin: initialZone.boxXMin,
+      boxXMax: initialZone.boxXMax,
+      boxYMin: initialZone.boxYMin,
+      boxYMax: initialZone.boxYMax,
+    }
+  } else {
+    return {
+      ok: false,
+      error: 'malformed',
+      reason: 'Either bounds or lat/lng must be provided to build a campaign zone.',
+      minDimension: minDim,
+    }
+  }
+
+  // If privacy is disabled on the vault, return the raw or aligned box
+  if (!privacy.enabled) {
+    const zone: ProofZone = initialZone ?? {
+      ...initialBox,
+      campaignId: params.campaignId ?? '0',
+    }
+    return {
+      ok: true,
+      zone,
+      box: initialBox,
+      aligned: false,
+      preflight: { valid: true },
+    }
+  }
+
+  // Snap edges outward to grid and widen symmetrically to Laplace floor (never shrinks)
+  const alignedBox = alignZone(initialBox, privacy)
+  if (!alignedBox) {
+    return {
+      ok: false,
+      error: 'too_small',
+      reason: `Could not align zone to satisfy minimum dimension of ${minDim} units on map.`,
+      minDimension: minDim,
+      proposedBox: initialBox,
+    }
+  }
+
+  // Validate zone rules
+  const val = validateZone(alignedBox, privacy)
+  if (!val.ok) {
+    const reasons: Record<ZonePrivacyViolation, string> = {
+      invalid_params: 'Vault privacy policy parameters are invalid.',
+      malformed: 'Zone coordinates are outside valid map boundaries.',
+      not_on_grid: `Zone boundary edges are not aligned to grid (${privacy.grid} units).`,
+      too_small: `Zone dimension is smaller than required Laplace privacy floor (${minDim} units).`,
+      overlap_too_small: 'Zone overlap violates k-anonymity requirement.',
+    }
+    return {
+      ok: false,
+      error: val.error,
+      reason: reasons[val.error] || 'Zone validation failed against privacy policy.',
+      minDimension: minDim,
+      proposedBox: alignedBox,
+    }
+  }
+
+  // Check overlap with existing active zones
+  if (params.existingZones && params.existingZones.length > 0) {
+    for (const existing of params.existingZones) {
+      const ov = checkOverlap(alignedBox, existing, privacy)
+      if (!ov.ok) {
+        return {
+          ok: false,
+          error: 'overlap_too_small',
+          reason: `Zone overlaps an existing campaign zone by less than ${minDim} units or fewer than ${privacy.kCells} cells, violating k-anonymity.`,
+          minDimension: minDim,
+          proposedBox: alignedBox,
+        }
+      }
+    }
+  }
+
+  const finalZone: ProofZone = {
+    ...alignedBox,
+    campaignId: params.campaignId ?? (initialZone?.campaignId || '0'),
+  }
+
+  return {
+    ok: true,
+    zone: finalZone,
+    box: alignedBox,
+    aligned: true,
+    preflight: { valid: true },
   }
 }

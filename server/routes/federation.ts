@@ -5,6 +5,7 @@
  * CRDT delta exchange, and IOU aid settlement without a central server.
  */
 import { Router, Request, Response } from 'express'
+import { federationVersionNegotiationMiddleware } from '../middleware/apiVersion.ts'
 import {
   createTrustBundle,
   verifyTrustBundle,
@@ -41,6 +42,7 @@ const revocationAuditLog: Array<{ identity: string; revokedAt: number; sourceIns
 
 export function createFederationRouter(options: FederationRouterOptions = {}) {
   const router = Router()
+  router.use(federationVersionNegotiationMiddleware())
 
   const instanceId = options.instanceId || process.env.INSTANCE_ID || 'helphone-instance-a'
   const domain = options.domain || process.env.FEDERATION_DOMAIN || 'instance-a.helphone.org'

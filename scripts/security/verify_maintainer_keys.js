@@ -538,6 +538,128 @@ function mergeKeys(list) {
 
 // ── CLI ──────────────────────────────────────────────────────────────────
 
+// ── Ceremony / Key-Custody & CODEOWNERS Sign-Off (#953) ──────────────────
+
+const FINGERPRINT_RE = /^[0-9A-F]{40}$/;
+
+/**
+ * Verify 2-of-N maintainer key-custody ceremony attestation and expiration.
+ * Any expired custodian key or insufficient active quorum produces a `fail` finding.
+ */
+export function verifyKeyCustody(config, { now = new Date() } = {}) {
+  const ceremony = config?.ceremony;
+  const findings = [];
+  if (!ceremony || typeof ceremony !== "object") {
+    findings.push(finding("ceremony", "fail", "missing ceremony configuration in config/maintainer-keys.json"));
+    return { ok: false, activeCustodians: [], expiredCustodians: [], threshold: 0, findings };
+  }
+
+  const threshold = Number(ceremony.threshold ?? 2);
+  if (!Number.isInteger(threshold) || threshold < 2) {
+    findings.push(finding("ceremony.threshold", "fail", `key-custody threshold must be >= 2 (got ${ceremony.threshold})`));
+  }
+
+  if (ceremony.nextCeremonyDue) {
+    const due = new Date(ceremony.nextCeremonyDue);
+    if (Number.isNaN(due.getTime()) || due <= now) {
+      findings.push(finding("ceremony.schedule", "fail", `maintainer-key ceremony overdue (nextCeremonyDue=${ceremony.nextCeremonyDue})`));
+    } else {
+      findings.push(finding("ceremony.schedule", "ok", `next ceremony due ${ceremony.nextCeremonyDue}`));
+    }
+  }
+
+  const custodians = Array.isArray(ceremony.custodians) ? ceremony.custodians : [];
+  const activeCustodians = [];
+  const expiredCustodians = [];
+
+  for (const c of custodians) {
+    const label = `custodian ${c.handle || c.fingerprint || "unknown"}`;
+    const fpr = String(c.fingerprint || "").toUpperCase();
+    if (!FINGERPRINT_RE.test(fpr)) {
+      findings.push(finding(label, "fail", `invalid OpenPGP v4 fingerprint "${c.fingerprint}"`));
+      continue;
+    }
+    if (!c.handle || !c.attestedAt || !c.expiresAt) {
+      findings.push(finding(label, "fail", "incomplete custodian attestation (requires handle, attestedAt, expiresAt)"));
+      continue;
+    }
+    const exp = new Date(c.expiresAt);
+    if (Number.isNaN(exp.getTime()) || exp <= now || c.status !== "active") {
+      expiredCustodians.push(c);
+      findings.push(finding(label, "fail", `custodian key expired or inactive (status=${c.status}, expiresAt=${c.expiresAt})`));
+      continue;
+    }
+    activeCustodians.push(c);
+    findings.push(finding(label, "ok", `attested fingerprint ${fpr} (expires ${c.expiresAt})`));
+  }
+
+  if (activeCustodians.length < threshold) {
+    findings.push(
+      finding(
+        "ceremony.quorum",
+        "fail",
+        `incomplete key set: ${activeCustodians.length} active custodians < ${threshold}-of-${custodians.length} threshold`,
+      ),
+    );
+  } else {
+    findings.push(
+      finding(
+        "ceremony.quorum",
+        "ok",
+        `${activeCustodians.length}-of-${custodians.length} custodians active (threshold ${threshold})`,
+      ),
+    );
+  }
+
+  const ok = findings.every((f) => f.status === "ok");
+  return { ok, activeCustodians, expiredCustodians, threshold, findings };
+}
+
+/**
+ * Verify CODEOWNERS quarterly sign-off freshness and high-stakes path coverage.
+ */
+export function verifyCodeownersSignOff(config, codeownersText, { now = new Date() } = {}) {
+  const signOff = config?.codeownersSignOff;
+  const threshold = Number(config?.ceremony?.threshold ?? 2);
+  const findings = [];
+
+  if (!signOff || typeof signOff !== "object") {
+    findings.push(finding("codeowners.signOff", "fail", "missing codeownersSignOff record in config/maintainer-keys.json"));
+    return { ok: false, findings };
+  }
+
+  const exp = new Date(signOff.expiresAt);
+  if (!signOff.signedOffAt || Number.isNaN(exp.getTime()) || exp <= now) {
+    findings.push(finding("codeowners.signOff", "fail", `CODEOWNERS sign-off expired or missing (expiresAt=${signOff.expiresAt})`));
+  } else {
+    findings.push(finding("codeowners.signOff", "ok", `quarter ${signOff.quarter} signed off at ${signOff.signedOffAt} (expires ${signOff.expiresAt})`));
+  }
+
+  const signers = Array.isArray(signOff.signers) ? signOff.signers : [];
+  if (signers.length < threshold) {
+    findings.push(finding("codeowners.signers", "fail", `need >= ${threshold} signers for CODEOWNERS sign-off (got ${signers.length})`));
+  } else {
+    findings.push(finding("codeowners.signers", "ok", `${signers.length} signers recorded (${signers.join(", ")})`));
+  }
+
+  const highStakes = Array.isArray(signOff.highStakesPaths) ? signOff.highStakesPaths : [];
+  const ownerLines = String(codeownersText || "")
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+
+  for (const p of highStakes) {
+    const matched = ownerLines.find((l) => l.split(/\s+/)[0] === p && l.split(/\s+/).length >= 2);
+    if (!matched) {
+      findings.push(finding(`codeowners.path ${p}`, "fail", `high-stakes path "${p}" missing explicit owner in .github/CODEOWNERS`));
+    } else {
+      findings.push(finding(`codeowners.path ${p}`, "ok", `protected by CODEOWNERS (${matched.split(/\s+/).slice(1).join(" ")})`));
+    }
+  }
+
+  return { ok: findings.every((f) => f.status === "ok"), findings };
+}
+
 function issuerOf(signature) {
   try {
     const pkt = [...readPackets(dearmor(signature))].find((p) => p.tag === 2);
@@ -556,11 +678,12 @@ async function main() {
   };
   const getAll = (flag) => args.flatMap((a, i) => (a === flag ? [args[i + 1]] : []));
   const strict = args.includes("--strict");
+  const ceremony = args.includes("--ceremony");
   const configPath = path.resolve(REPO_ROOT, getArg("--config", "config/maintainer-keys.json"));
   const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
   const max = Number(getArg("--max", "50"));
   const artifacts = getAll("--artifact").map((a, i) => ({ file: a, sig: getAll("--signature")[i] }));
-  const explicit = args.includes("--range") || args.includes("--tags") || args.includes("--pinned") || artifacts.length;
+  const explicit = args.includes("--range") || args.includes("--tags") || args.includes("--pinned") || ceremony || artifacts.length;
   const range = getArg("--range", explicit ? null : "HEAD");
   const pinned = args.includes("--pinned") || !explicit;
 
@@ -587,6 +710,16 @@ async function main() {
       if (rev && !(rev.code === 1 || rev.code === 3))
         findings.push(finding(`trusted root ${root.owner}`, "fail", `trusted root key revoked (${rev.reason}) — remove it from ${path.relative(REPO_ROOT, configPath)}`));
     }
+  }
+
+  // 1b. Key-custody ceremony & CODEOWNERS sign-off gate (#953).
+  if (ceremony) {
+    const custodyRes = verifyKeyCustody(config);
+    findings.push(...custodyRes.findings);
+    const codeownersPath = path.resolve(REPO_ROOT, ".github/CODEOWNERS");
+    const codeownersText = fs.existsSync(codeownersPath) ? fs.readFileSync(codeownersPath, "utf8") : "";
+    const signOffRes = verifyCodeownersSignOff(config, codeownersText);
+    findings.push(...signOffRes.findings);
   }
 
   // 2. Git objects: commits in range + tags.

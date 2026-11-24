@@ -22,7 +22,10 @@ import {
   approveDaoCancellation,
   cancelQueuedDaoProposal,
   configureDaoSecurityMultisig,
+  getZonePrivacyPolicy,
+  setAegisPrivacyParams,
 } from "../lib/contract";
+import { DEFAULT_ZONE_PRIVACY } from "../lib/privacy";
 
 function sanitizeAddress(raw) {
   if (typeof raw !== "string") return "";
@@ -70,6 +73,9 @@ export default function Admin() {
   const votingEnds = Number(daoProposal?.voting_ends || 0);
   const secondsRemaining = Math.max(0, executeAfter - clock);
 
+  const [privacyPolicy, setPrivacyPolicy] = useState(DEFAULT_ZONE_PRIVACY);
+  const [privacyDraft, setPrivacyDraft] = useState(DEFAULT_ZONE_PRIVACY);
+
   useEffect(() => {
     if (!daoProposal) return undefined;
     const timer = window.setInterval(() => setClock(Math.floor(Date.now() / 1000)), 1000);
@@ -103,16 +109,21 @@ export default function Admin() {
     setLoading(true);
     setMessage("");
     try {
-      const [admin, payout, pending] = await Promise.all([
+      const [admin, payout, pending, privacy] = await Promise.all([
         getAegisAdmin(),
         getAegisPayoutAmount(),
         getPendingOwner(),
+        getZonePrivacyPolicy(),
       ]);
       setContractAdmin(admin);
       setPayoutAmount(payout);
       setPendingOwner(pending);
+      if (privacy) {
+        setPrivacyPolicy(privacy);
+        setPrivacyDraft(privacy);
+      }
     } catch (err) {
-      setMessage("Failed to load admin data: " + err.message);
+      setMessage
       setMessageType("error");
     }
     setLoading(false);
@@ -321,6 +332,36 @@ export default function Admin() {
       setMessageType("error");
     }
     setActionLoading(false);
+  }
+
+  async function handleSetPrivacy() {
+    const next = {
+      enabled: privacyDraft.enabled,
+      epsilonMilli: Number(privacyDraft.epsilonMilli),
+      sensitivity: Number(privacyDraft.sensitivity),
+      tailMult: Number(privacyDraft.tailMult),
+      grid: Number(privacyDraft.grid),
+      kCells: Number(privacyDraft.kCells),
+    };
+    setActionLoading(true);
+    setMessage("");
+    try {
+      if (!privacyPolicy.enabled && next.enabled) {
+        const confirmed = window.confirm(
+          "Enabling zone privacy affects live campaigns immediately. Announce the migration, preflight active zones, and confirm dry-run results before enabling.");
+        if (!confirmed) return;
+      }
+      const result = await setAegisPrivacyParams(next, StellarWalletsKit);
+      setPrivacyPolicy(next);
+      setPrivacyDraft(next);
+      setMessage(`Privacy parameters ${next.enabled ? "enabled" : "disabled"}. TX: ${result.hash || "submitted"}`);
+      setMessageType("success");
+    } catch (err) {
+      setMessage(`Privacy update failed: ${err.message}`);
+      setMessageType("error");
+    } finally {
+      setActionLoading(false);
+    }
   }
 
   const cardStyle = {
@@ -1099,6 +1140,44 @@ export default function Admin() {
             </div>
           )}
         </section>
+
+        {/* Differential-privacy zone policy */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: "10px", letterSpacing: "1.5px", color: "#7fb8ba", fontWeight: 900, marginBottom: "12px" }}>
+            DIFFERENTIAL-PRIVACY ZONES
+          </div>
+          <p style={{ color: "rgba(242,236,220,0.55)", fontSize: "12px", lineHeight: 1.6 }}>
+            Checks are {privacyPolicy.enabled ? "enabled" : "disabled"}. Enabling applies to live campaign validations; announce and dry-run first.
+          </p>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, color: "#F4ECDC", fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={!!privacyDraft.enabled}
+              onChange={(e) => setPrivacyDraft((p) => ({ ...p, enabled: e.target.checked }))}
+            />
+            Enable zone checks
+          </label>
+          {[
+            ["epsilonMilli", "Epsilon ×1000", "1000"],
+            ["sensitivity", "Sensitivity", "100000"],
+            ["tailMult", "Tail multiplier", "3"],
+            ["grid", "Grid units", "10000"],
+            ["kCells", "Minimum overlap cells", "25"],
+          ].map(([key, label, placeholder]) => (
+            <input
+              key={key}
+              aria-label={label}
+              type="number"
+              value={privacyDraft[key] ?? ""}
+              placeholder={placeholder}
+              onChange={(e) => setPrivacyDraft((p) => ({ ...p, [key]: Number(e.target.value) }))}
+              style={{ ...inputStyle, marginTop: "8px" }}
+            />
+          ))}
+          <button type="button" onClick={handleSetPrivacy} disabled={actionLoading} style={{ ...btnDanger, marginTop: "12px", width: "100%" }}>
+            {actionLoading ? "Submitting…" : "Apply with multisig admin approval"}
+          </button>
+        </div>
 
         {/* Quick Actions */}
         <div style={cardStyle}>

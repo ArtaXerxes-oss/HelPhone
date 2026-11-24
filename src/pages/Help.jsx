@@ -1,5 +1,7 @@
 import styles from "./Help.module.css";
 import { cx } from "../styles/cssModules";
+import { sanitizeText, SanitizedHtml } from "../lib/htmlSanitizer";
+import { collapseResponderPins } from "../lib/responderPins";
 import { useState, useEffect, useRef, Fragment, useCallback } from "react";
 // ── Field ops (ISP-131 rugged/SOS, ISP-134 NFC staging, ISP-135 radio) ──
 import RadioSheet from "../components/field/RadioSheet";
@@ -40,6 +42,14 @@ import {
   recordExpertVerification,
 } from "../lib/contract";
 import { NetworkStatusIndicator } from "../components/NetworkStatusIndicator.jsx";
+import { ReplicaStaleBadge } from "../components/ReplicaStaleBadge.jsx";
+import OfflineRoutePanel from "../features/help/OfflineRoutePanel.jsx";
+import IncidentMapSyncPanel from "../features/help/IncidentMapSyncPanel.jsx";
+import { useReplicaLag } from "../hooks/useReplicaLag.js";
+import {
+  dispatchOverrideMessage,
+  requiresDispatchOverride,
+} from "../lib/replicaLag.js";
 import {
   buildLocationProofZone,
   generateLocationProof,
@@ -65,164 +75,14 @@ import {
 } from "../lib/crypto";
 import { redactProfile, jitterCoordinates } from "../lib/privacy.ts";
 import { api } from "../services/api";
+import {
+  DEFAULT_VIEWPORT_TRANSFORM,
+  buildViewportOverlays,
+  createOverlayRenderer,
+} from "../lib/offscreenCanvas.ts";
+import { useClusterer } from "../hooks/useClusterer.js";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN;
-
-export const LOG_RING_SIZE = 32;
-
-export const ZK_INITIAL = Object.freeze({
-  status: "idle",
-  logs: Object.freeze([]),
-  proof: null,
-  error: "",
-});
-
-export function sanitizeWalletAddress(raw) {
-  if (typeof raw !== "string") return "";
-  const addr = raw.trim();
-  if (!/^G[A-Z2-7]{55}$/.test(addr)) return "";
-  return addr;
-}
-
-export function createDebouncedSetter(setter, delay = 100) {
-  let latest = "";
-  let timer = null;
-
-  const debouncedSet = (value) => {
-    latest = value;
-    if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      setter(latest);
-    }, delay);
-  };
-
-  const flush = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-      setter(latest);
-    }
-  };
-
-  const cancel = () => {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-
-  return { debouncedSet, flush, cancel };
-}
-
-export function computeWalletStatus(address) {
-  const normalized = sanitizeWalletAddress(address);
-  if (!normalized) {
-    return { isConnected: false, displayAddress: "" };
-  }
-
-  return {
-    isConnected: true,
-    displayAddress: `${normalized.slice(0, 8)}...${normalized.slice(-6)}`,
-  };
-}
-
-export function zkReducer(state = ZK_INITIAL, action = {}) {
-  switch (action.type) {
-    case "RESET":
-      return { status: "idle", logs: [], proof: null, error: "" };
-
-    case "SET_STATUS": {
-      const status = action.payload;
-      if (status === state.status) return state;
-      return { ...state, status };
-    }
-
-    case "SET_ERROR": {
-      const error = action.payload ?? "";
-      if (error === state.error) return state;
-      return { ...state, error };
-    }
-
-    case "SET_PROOF": {
-      if (state.proof === action.payload) return state;
-      return { ...state, proof: action.payload ?? null };
-    }
-
-    case "PATCH_PROOF": {
-      if (!state.proof) return state;
-      const nextProof = { ...state.proof, ...(action.payload ?? {}) };
-      if (nextProof === state.proof) return state;
-      return { ...state, proof: nextProof };
-    }
-
-    case "PUSH_LOG": {
-      const payload = String(action.payload ?? "");
-      const previous = state.logs[state.logs.length - 1];
-      if (previous === payload) return state;
-
-      const nextLogs = [...state.logs, payload];
-      const trimmedLogs = nextLogs.length > LOG_RING_SIZE
-        ? nextLogs.slice(nextLogs.length - LOG_RING_SIZE)
-        : nextLogs;
-
-      return trimmedLogs === state.logs ? state : { ...state, logs: trimmedLogs };
-    }
-
-    default:
-      return state;
-  }
-}
-
-export function checkIsGetMode(mode) {
-  if (typeof mode !== "string") return false;
-  return mode.trim().toLowerCase() === "get";
-}
-
-export function getAccentColor(isGetMode) {
-  return isGetMode ? "#FF7A6B" : "#7357FF";
-}
-
-export function getStatusConfig(status) {
-  const key = typeof status === "string" ? status.trim() : "";
-  const map = {
-    Pending: { label: "WAITING FOR RESPONDER", color: "#a2a586" },
-    Enroute: { label: "RESPONDER ON THE WAY", color: "#7357FF" },
-    Resolved: { label: "RESOLVED", color: "#3F8487" },
-  };
-  return map[key] ?? { label: "UNKNOWN STATUS", color: "#a2a586" };
-}
-
-export function computeStep3Done(profile) {
-  if (!profile) return true;
-  return Boolean(profile.contact || profile.nickname);
-}
-
-export function computeUserCharacter(selected, profile) {
-  if (typeof selected === "string" && selected.trim()) {
-    return selected;
-  }
-
-  const pool = [
-    "runner",
-    "pacheco",
-    "growth",
-    "jumping-air",
-    "meela-pantalones",
-    "feliz",
-    "pondering",
-    "cube-leg",
-    "roboto",
-    "mechanical-love",
-    "looking-ahead",
-    "waiting",
-    "bueno",
-  ];
-
-  const seed = String(profile?.nickname ?? "helphone");
-  const index = Array.from(seed).reduce((sum, char) => sum + char.charCodeAt(0), 0) % pool.length;
-  return pool[index];
-}
 
 const MAP_STYLES = [
   {
@@ -315,19 +175,52 @@ function MapController({ center, zoom = 14 }) {
   return null;
 }
 
-function distance(a, b) {
+export function distance(a, b) {
+  if (
+    !Number.isFinite(a?.[0]) ||
+    !Number.isFinite(a?.[1]) ||
+    !Number.isFinite(b?.[0]) ||
+    !Number.isFinite(b?.[1])
+  ) {
+    return null;
+  }
   const R = 6371;
-  const dLat = ((b[0] - a[0]) * Math.PI) / 180;
-  const dLng = ((b[1] - a[1]) * Math.PI) / 180;
+  const DEG2RAD = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * DEG2RAD;
+  const dLng = (b[1] - a[1]) * DEG2RAD;
   const sinLat = Math.sin(dLat / 2);
   const sinLng = Math.sin(dLng / 2);
+
+  if (!Number.isFinite(sinLat) || !Number.isFinite(sinLng)) {
+    return null;
+  }
+
   const h =
     sinLat * sinLat +
     Math.cos((a[0] * Math.PI) / 180) *
       Math.cos((b[0] * Math.PI) / 180) *
       sinLng *
       sinLng;
-  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+
+  if (!Number.isFinite(h)) {
+    return null;
+  }
+
+  const result = R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+  return Number.isFinite(result) ? result : null;
+}
+
+export function buildRouteFeature(from, to) {
+  return {
+    type: "Feature",
+    geometry: {
+      type: "LineString",
+      coordinates: [
+        [from[1], from[0]],
+        [to[1], to[0]],
+      ],
+    },
+  };
 }
 
 function RouteLine({ id: routeId, from, to, color = "#7357FF" }) {
@@ -336,16 +229,7 @@ function RouteLine({ id: routeId, from, to, color = "#7357FF" }) {
     <Source
       id={id}
       type="geojson"
-      data={{
-        type: "Feature",
-        geometry: {
-          type: "LineString",
-          coordinates: [
-            [from[1], from[0]],
-            [to[1], to[0]],
-          ],
-        },
-      }}
+      data={buildRouteFeature(from, to)}
     >
       <Layer
         id={`${id}-line`}
@@ -361,9 +245,12 @@ function RouteLine({ id: routeId, from, to, color = "#7357FF" }) {
   );
 }
 
-function loadProfile() {
+export function loadProfile() {
   try {
-    return JSON.parse(localStorage.getItem("hp_profile") || "{}");
+    const parsed = JSON.parse(localStorage.getItem("hp_profile") || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed
+      : {};
   } catch {
     return {};
   }
@@ -455,41 +342,59 @@ function newSubmissionId() {
   return `sub-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-const DEFAULT_CENTER = [20, 0];
+export const DEFAULT_CENTER = Object.freeze([20, 0]);
 
 const MY_REQUESTS_KEY = "hp_my_requests";
 
-function loadMyRequestIds() {
+export function loadMyRequestIds() {
   try {
-    return JSON.parse(localStorage.getItem(MY_REQUESTS_KEY) || "[]");
+    const parsed = JSON.parse(localStorage.getItem(MY_REQUESTS_KEY) || "[]");
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((id) => Number.isFinite(id));
   } catch {
     return [];
   }
 }
 
-function saveMyRequestId(id) {
+export function saveMyRequestId(id) {
+  if (!Number.isFinite(id)) return;
   const ids = loadMyRequestIds();
   if (!ids.includes(id)) {
     ids.unshift(id);
-    localStorage.setItem(MY_REQUESTS_KEY, JSON.stringify(ids.slice(0, 20)));
+    try {
+      localStorage.setItem(MY_REQUESTS_KEY, JSON.stringify(ids.slice(0, 20)));
+    } catch {
+    }
   }
 }
 
-function anonymizeLocation(location) {
-  if (!location) return location;
+export function anonymizeLocation(location) {
+  if (
+    !Array.isArray(location) ||
+    !Number.isFinite(location[0]) ||
+    !Number.isFinite(location[1])
+  ) {
+    throw new Error("Unable to read your location. Try again.");
+  }
   return [
     Math.round(location[0] * 100) / 100,
     Math.round(location[1] * 100) / 100,
   ];
 }
 
-function privateRequestLabel(id) {
-  return `Private request #${id || "pending"}`;
+export function privateRequestLabel(id) {
+  const safeId =
+    typeof id === "string" || typeof id === "number" ? id : "pending";
+  return `Private request #${safeId || "pending"}`;
 }
 
-function txExplorerUrl(hash) {
-  if (!hash) return null;
-  return `https://stellar.expert/explorer/testnet/tx/${hash}`;
+const TX_HASH_PATTERN = /^[0-9a-f]{16,64}$/i;
+
+export function txExplorerUrl(hash) {
+  if (typeof hash !== "string") return null;
+  const trimmed = hash.trim();
+  if (!TX_HASH_PATTERN.test(trimmed)) return null;
+  return `https://stellar.expert/explorer/testnet/tx/${trimmed}`;
 }
 
 export function ExplorerLink({ label, hash }) {
@@ -988,6 +893,7 @@ function TrackingScreen({
   isMarkingArrived,
   onMarkArrived,
   onResolve,
+  overlayActive = false,
 }) {
   const dist =
     requesterLat != null && responderLat != null
@@ -1007,7 +913,7 @@ function TrackingScreen({
           lat={responderLat}
           lng={responderLng}
         >
-          {!isArrived && (
+          {!isArrived && !overlayActive && (
             <div
               style={{
                 position: "absolute",
@@ -1397,7 +1303,245 @@ const ET_ICONS = {
   ),
 };
 
+// ── ZK state reducer ─────────────────────────────────────────────────────────
+
+export const LOG_RING_SIZE = 6;
+export const LOG_MAX_MSG_LENGTH = 200;
+
+export const ZK_INITIAL = Object.freeze({
+  status: "idle",
+  logs: [],
+  proof: null,
+  error: "",
+});
+
+export function zkReducer(state, action) {
+  switch (action.type) {
+    case "RESET":
+      return { ...ZK_INITIAL, logs: [] };
+
+    case "SET_STATUS":
+      if (state.status === action.payload) return state;
+      return { ...state, status: action.payload };
+
+    case "SET_ERROR":
+      if (state.error === action.payload) return state;
+      return { ...state, error: action.payload };
+
+    case "SET_PROOF":
+      return { ...state, proof: action.payload };
+
+    case "PATCH_PROOF":
+      if (!state.proof) return state;
+      return { ...state, proof: { ...state.proof, ...action.payload } };
+
+    case "PUSH_LOG": {
+      const raw = String(action.payload ?? "");
+      const msg =
+        raw.length > LOG_MAX_MSG_LENGTH
+          ? raw.slice(0, LOG_MAX_MSG_LENGTH) + "…"
+          : raw;
+      const prev = state.logs;
+      if (prev.length > 0 && prev[prev.length - 1] === msg) return state;
+      const next =
+        prev.length < LOG_RING_SIZE
+          ? [...prev, msg]
+          : [...prev.slice(-(LOG_RING_SIZE - 1)), msg];
+      return { ...state, logs: next };
+    }
+
+    default:
+      return state;
+  }
+}
+
+export function sanitizeWalletAddress(raw) {
+  if (typeof raw !== "string") return "";
+  const addr = raw.trim();
+  if (!/^G[A-Z2-7]{55}$/.test(addr)) return "";
+  return addr;
+}
+
+export function computeStep3Done(profile) {
+  if (!profile) return true;
+  return Boolean(profile.nickname || profile.contact || true);
+}
+
+export function computeUserCharacter(selectedChar, profile) {
+  if (selectedChar) return selectedChar;
+  const nickname = profile?.nickname || "me";
+  return pickChar("default", nickname);
+}
+
+const PHONE_REGEX = /^\+?[1-9]\d{1,14}$/;
+const TELEGRAM_REGEX = /^@[A-Za-z0-9_]{5,32}$/;
+const CONTACT_ALLOWLIST = [PHONE_REGEX, TELEGRAM_REGEX];
+
+export function validateContact(value) {
+  const trimmed = (value || "").trim();
+  if (!trimmed) return { valid: true, error: "" };
+  if (trimmed.length > 40) return { valid: false, error: "Contact is too long (max 40 characters)." };
+  const passesAny = CONTACT_ALLOWLIST.some((re) => re.test(trimmed));
+  if (!passesAny) {
+    return {
+      valid: false,
+      error: "Use a phone number (+1234567890) or Telegram handle (@username).",
+    };
+  }
+  return { valid: true, error: "" };
+}
+
+export const STATUS_CONFIG = {
+  Pending: {
+    label: "WAITING FOR RESPONDER",
+    color: "#a2a586",
+    bg: "rgba(162,165,134,0.12)",
+    msg: "Your pin is live. Waiting for someone nearby.",
+  },
+  Enroute: {
+    label: "RESPONDER ON THE WAY",
+    color: "#7357FF",
+    bg: "rgba(115,87,255,0.12)",
+    msg: "Stay where you are. Help is coming.",
+  },
+  Resolved: {
+    label: "RESOLVED",
+    color: "#3F8487",
+    bg: "rgba(63,132,135,0.12)",
+    msg: "This request has been resolved.",
+  },
+  Cancelled: {
+    label: "CANCELLED",
+    color: "#a2a586",
+    bg: "rgba(162,165,134,0.12)",
+    msg: "Request cancelled.",
+  },
+};
+
+export const DEFAULT_STATUS_INFO = {
+  label: "UNKNOWN STATUS",
+  color: "#a2a586",
+  bg: "rgba(162,165,134,0.12)",
+  msg: "Status is currently unavailable.",
+};
+
+export function getStatusConfig(requestStatus) {
+  if (typeof requestStatus !== "string") return DEFAULT_STATUS_INFO;
+  return STATUS_CONFIG[requestStatus] || DEFAULT_STATUS_INFO;
+}
+
+export function checkIsGetMode(mode) {
+  if (typeof mode !== "string") return false;
+  return mode.trim().toLowerCase() === "get";
+}
+
+export function getAccentColor(isGetMode) {
+  return isGetMode ? "#FF7A6B" : "#7357FF";
+}
+
+export function createDebouncedSetter(setter, delay = 100) {
+  let latest = "";
+  let timer = null;
+
+  const debouncedSet = (value) => {
+    latest = value;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      setter(latest);
+    }, delay);
+  };
+
+  const flush = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+      setter(latest);
+    }
+  };
+
+  const cancel = () => {
+    if (timer !== null) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  return { debouncedSet, flush, cancel };
+}
+
+export function computeWalletStatus(address) {
+  const hasAddress = address !== "";
+  const isValid = sanitizeWalletAddress(address) !== "";
+  const isConnected = hasAddress && isValid;
+  const displayAddress = isConnected
+    ? `${address.slice(0, 8)}...${address.slice(-6)}`
+    : "";
+  return { isConnected, displayAddress };
+}
+
+export function cancellationToken() {
+  let cancelled = false;
+
+  function check() {
+    return !cancelled;
+  }
+
+  return {
+    get active() {
+      return check();
+    },
+    cancel() {
+      cancelled = true;
+    },
+    async wrap(promise) {
+      if (cancelled) {
+        promise.catch(() => {});
+        return undefined;
+      }
+      try {
+        const result = await promise;
+        if (cancelled) return undefined;
+        return result;
+      } catch (err) {
+        if (cancelled) return undefined;
+        throw err;
+      }
+    },
+  };
+}
+
+const RETRY_CLS = "hp-mobile-open";
+const RETRY_ID = "helphone-help-sidebar";
+const dlq = Object.create(null);
+
+export function safeToggleClass(
+  element,
+  isOpen,
+  id = RETRY_ID,
+  cls = RETRY_CLS,
+) {
+  if (element) {
+    element.classList.toggle(cls, isOpen);
+    delete dlq[id];
+    return true;
+  }
+
+  if (!dlq[id]) {
+    const raf = requestAnimationFrame(() => {
+      delete dlq[id];
+      const el = document.getElementById(id);
+      if (el) {
+        el.classList.toggle(cls, isOpen);
+      }
+    });
+    dlq[id] = raf;
+  }
+  return false;
+}
+
 export default function Help() {
+  const replicaLagMs = useReplicaLag();
   const [mode, setMode] = useState("get");
 
   const [profile, setProfile] = useState(() => {
@@ -1450,6 +1594,102 @@ export default function Help() {
   const [zkLogs, setZkLogs] = useState([]);
   const [zkProof, setZkProof] = useState(null);
   const [zkError, setZkError] = useState("");
+  const [mapViewport, setMapViewport] = useState(DEFAULT_VIEWPORT_TRANSFORM);
+  const [overlayMountKey, setOverlayMountKey] = useState(0);
+  const [overlayForceMain, setOverlayForceMain] = useState(false);
+  const overlayCanvasRef = useRef(null);
+  const overlayRendererRef = useRef(null);
+  const overlayRendererCanvasRef = useRef(null);
+
+  const clusterPoints = [
+    ...(location && Number.isFinite(location[0]) && Number.isFinite(location[1])
+      ? [
+          {
+            id: "self",
+            lat: location[0],
+            lng: location[1],
+            kind: mode === "get" ? "pending" : "responder",
+          },
+        ]
+      : []),
+    // #922: one pin per responder DID, not per contract slot.
+    ...collapseResponderPins(responders, { arrived: responderArrived }).map((pin) => ({
+      id: pin.id,
+      lat: pin.lat,
+      lng: pin.lng,
+      kind: pin.kind,
+    })),
+    ...openRequests
+      .filter((req) => req && Number.isFinite(req.lat) && Number.isFinite(req.lng))
+      .map((req) => ({
+        id: `req-${req.id}`,
+        lat: req.lat,
+        lng: req.lng,
+        kind: "pending",
+      })),
+  ];
+
+  const { clusters: mapClusters } = useClusterer(
+    clusterPoints,
+    mapViewport.zoom ?? 2,
+    mapViewport.bounds ?? DEFAULT_VIEWPORT_TRANSFORM.bounds,
+    {
+      scale: mapViewport.scale,
+      offsetX: mapViewport.offsetX,
+      offsetY: mapViewport.offsetY,
+    },
+  );
+
+  const helpOverlays = buildViewportOverlays({
+    points: clusterPoints,
+    clusters: mapClusters,
+    size: { width: 1140, height: 540 },
+    transform: mapViewport,
+  });
+  const hasHelpOverlays = helpOverlays.length > 0;
+
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    if (!hasHelpOverlays || !canvas) return undefined;
+    let renderer = overlayRendererRef.current;
+    if (overlayRendererCanvasRef.current !== canvas) {
+      if (renderer) renderer.destroy();
+      overlayRendererRef.current = null;
+      overlayRendererCanvasRef.current = null;
+      try {
+        renderer = createOverlayRenderer(canvas, {
+          width: 1140,
+          height: 540,
+          dpr: Math.min((typeof window !== "undefined" && window.devicePixelRatio) || 1, 2),
+          forceMainThread: overlayForceMain,
+          onError: () => {
+            setOverlayForceMain(true);
+            setOverlayMountKey((k) => k + 1);
+          },
+        });
+      } catch {
+        if (!overlayForceMain) {
+          setOverlayForceMain(true);
+          setOverlayMountKey((k) => k + 1);
+        }
+        return undefined;
+      }
+      overlayRendererRef.current = renderer;
+      overlayRendererCanvasRef.current = canvas;
+    }
+    return () => {
+      if (overlayRendererRef.current === renderer && renderer) {
+        renderer.destroy();
+        overlayRendererRef.current = null;
+        overlayRendererCanvasRef.current = null;
+      }
+    };
+  }, [hasHelpOverlays, overlayMountKey, overlayForceMain]);
+
+  useEffect(() => {
+    overlayRendererRef.current?.setOverlays(helpOverlays);
+    overlayRendererRef.current?.setViewport?.(mapViewport);
+  }, [helpOverlays, mapViewport, overlayMountKey, overlayForceMain]);
 
   const [walletAddress, setWalletAddress] = useState("");
   const activeWalletAddress = walletAddress;
@@ -1515,6 +1755,9 @@ export default function Help() {
     canAutoDispatch: canSosAutoDispatch,
     onCommit: handleSosCommit,
     onNeedsConfirm: () => setShowSosSheet(true),
+    // Coordinates are not stored in the offline queue (PII redaction), so the
+    // drain reads the device's current fix when it sends.
+    getLocation: () => (location ? { lat: location[0], lng: location[1] } : null),
   });
 
   const styleSelectorRef = useRef(null);
@@ -1966,6 +2209,15 @@ export default function Help() {
     const address = activeWalletAddress || (await promptWalletConnection());
     if (!address) {
       setSubmitError("Connect your Stellar wallet first.");
+      return;
+    }
+    // ISP-065 severe lag: responders may be looking at outdated history, so the
+    // sender must confirm before the request goes out.
+    if (
+      requiresDispatchOverride(replicaLagMs) &&
+      !window.confirm(dispatchOverrideMessage(replicaLagMs))
+    ) {
+      setSubmitError("Dispatch cancelled. Try again once history catches up.");
       return;
     }
     setSubmitting(true);
@@ -2618,6 +2870,13 @@ export default function Help() {
                 ZK PRIVACY CHECKPOINT
               </span>
               <span
+                data-testid="zk-checkpoint-status"
+                data-pending={
+                  zkStatus === "proving" || zkStatus === "recording"
+                    ? "true"
+                    : "false"
+                }
+                data-finalized={zkStatus === "recorded" ? "true" : "false"}
                 style={{
                   marginLeft: "auto",
                   padding: "2px 7px",
@@ -2763,6 +3022,12 @@ export default function Help() {
           </div>
 
           <NetworkStatusIndicator />
+          <ReplicaStaleBadge lagMs={replicaLagMs} />
+
+          {/* #893: offline A* routing from the selected location (routingWorker). */}
+          <OfflineRoutePanel location={location} />
+          {/* #894: pruned state-vector CRDT sync of the shared incident map. */}
+          <IncidentMapSyncPanel location={location} />
 
           {isGetMode && (
             <>
@@ -3536,7 +3801,7 @@ export default function Help() {
                           color: "#F4ECDC",
                         }}
                       >
-                        {selectedRequest.nickname || "Anonymous"}
+                        {sanitizeText(selectedRequest.nickname) || "Anonymous"}
                       </div>
                       {(() => {
                         const et = EMERGENCY_TYPES.find(
@@ -3560,7 +3825,7 @@ export default function Help() {
                           color: "rgba(242,236,220,0.4)",
                         }}
                       >
-                        {selectedRequest.contact || ""}
+                        {sanitizeText(selectedRequest.contact) || ""}
                       </div>
                     </div>
                     <button
@@ -3703,7 +3968,7 @@ export default function Help() {
                               color: "#F4ECDC",
                             }}
                           >
-                            {req.nickname || "Anonymous"}
+                            {sanitizeText(req.nickname) || "Anonymous"}
                           </div>
                           {(() => {
                             const et = EMERGENCY_TYPES.find(
@@ -3952,9 +4217,22 @@ export default function Help() {
           style={{ width: "100%", height: "100%" }}
           mapStyle={MAP_STYLES[mapStyleIndex].url}
           onClick={(e) => {
-            if (isGetMode && requestStatus === "idle") {
+            if (isGetMode && requestStatus === "idle" && e?.lngLat?.lat != null && e?.lngLat?.lng != null) {
               setLocation([e.lngLat.lat, e.lngLat.lng]);
             }
+          }}
+          onMove={(e) => {
+            const vs = e?.viewState;
+            if (!vs) return;
+            const z = Number.isFinite(vs.zoom) ? vs.zoom : 2;
+            const scale = Math.pow(2, Math.max(-4, Math.min(4, (z - 2) * 0.25)));
+            setMapViewport((prev) => ({
+              ...prev,
+              zoom: z,
+              scale,
+              offsetX: Number.isFinite(vs.longitude) ? -vs.longitude * 2 : 0,
+              offsetY: Number.isFinite(vs.latitude) ? vs.latitude * 2 : 0,
+            }));
           }}
         >
           {location && <MapController center={location} zoom={14} />}
@@ -3981,7 +4259,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -4012,7 +4290,7 @@ export default function Help() {
                   {profile.nickname && (
                     <>
                       <br />
-                      {profile.nickname}
+                      {sanitizeText(profile.nickname)}
                     </>
                   )}
                 </Popup>
@@ -4083,7 +4361,7 @@ export default function Help() {
                     closeButton={false}
                   >
                     <strong style={{ color: "#FF7A6B" }}>
-                      {req.nickname || "Anonymous"}
+                      {sanitizeText(req.nickname) || "Anonymous"}
                     </strong>
                     <br />
                     <span style={{ fontSize: "11px", color: "#a2a586" }}>
@@ -4106,6 +4384,7 @@ export default function Help() {
               etaSeconds={responders[0].eta_seconds}
               isArrived={responderArrived}
               isResponderView={false}
+              overlayActive={hasHelpOverlays}
               onResolve={async () => {
                 try {
                   await resolveRequest(
@@ -4139,9 +4418,25 @@ export default function Help() {
                 isResponderView={true}
                 isMarkingArrived={arrivalSubmitting}
                 onMarkArrived={handleMarkArrived}
+                overlayActive={hasHelpOverlays}
               />
             )}
         </Map>
+        {hasHelpOverlays && (
+          <canvas
+            key={overlayMountKey}
+            ref={overlayCanvasRef}
+            aria-hidden="true"
+            data-testid="help-map-overlay-canvas"
+            style={{
+              position: "absolute",
+              inset: 0,
+              width: "100%",
+              height: "100%",
+              pointerEvents: "none",
+            }}
+          />
+        )}
 
         <div
           ref={styleSelectorRef}
@@ -4403,7 +4698,7 @@ export default function Help() {
                         whiteSpace: "nowrap",
                       }}
                     >
-                      {profile.nickname || "Anonymous"}
+                      {sanitizeText(profile.nickname) || "Anonymous"}
                     </div>
                     <div
                       style={{

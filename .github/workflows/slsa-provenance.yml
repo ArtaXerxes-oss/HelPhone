@@ -35,9 +35,15 @@ jobs:
           if [ "${{ vars.REQUIRE_SIGNED_RELEASES }}" = "true" ]; then ARGS="$ARGS --strict"; fi
           node scripts/security/verify_maintainer_keys.js $ARGS
 
-      # #586 — production build + licenses.json attribution manifest, so the
-      # manifest is covered by the signed digests below.
+      # #586 / #950 — production build + licenses.json + mandatory SBOM & SRI artifacts,
+      # so every manifest is covered by the signed digests below.
       - run: npm run build:release
+
+      - name: Verify mandatory SBOM and SRI release artifacts
+        run: |
+          test -s dist/sbom.json || (echo "ERROR: dist/sbom.json missing or empty" >&2; exit 1)
+          node -e 'const b=JSON.parse(require("fs").readFileSync("dist/sbom.json","utf8")); if(!b.components||b.components.length===0) process.exit(1)'
+          npm run security:sri:verify
 
       # Digest manifest of every shipped file. This exact file is what gets
       # signed and logged in Rekor; the browser re-hashes it and its own entry
@@ -58,12 +64,17 @@ jobs:
       # isolated GitHub-hosted runner (SLSA Build L3 requirements).
       - uses: actions/attest-build-provenance@v2
         with:
-          subject-path: 'dist/digests.txt'
+          subject-path: |
+            dist/digests.txt
+            dist/sbom.json
+            dist/sri-hashes.json
 
       - name: Write provenance.json
         run: |
           node -e '
             const fs = require("fs");
+            const crypto = require("crypto");
+            const sha = (p) => crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
             const b = JSON.parse(fs.readFileSync("dist/digests.sigstore.json", "utf8"));
             // new (protobuf) bundle format, falling back to cosign v2 legacy bundle
             const tlog = b.verificationMaterial?.tlogEntries?.[0] ?? b.rekorBundle?.Payload ?? {};
@@ -73,6 +84,10 @@ jobs:
               workflow: process.env.GITHUB_WORKFLOW_REF,
               runId: process.env.GITHUB_RUN_ID,
               rekorLogIndex: Number(tlog.logIndex),
+              artifacts: {
+                sbom: { path: "sbom.json", sha256: sha("dist/sbom.json") },
+                sri: { path: "sri-hashes.json", sha256: sha("dist/sri-hashes.json") },
+              },
             }, null, 2));
           '
 

@@ -3,6 +3,8 @@
 //   stored_lat = floor(real_lat * 1e7) +   900_000_000   range [0, 1_800_000_000]
 // Both fit in u64.
 
+global MIN_BOX_DIM: u64 = 30_000;
+
 fn main(
     // Private witnesses -- never leave the client
     user_x: u64,      // encoded longitude
@@ -25,6 +27,10 @@ fn main(
     assert(user_y >= box_y_min, "Latitude below zone minimum");
     assert(user_y <= box_y_max, "Latitude above zone maximum");
 
+    // Fixed noise-threshold floor: public box cannot be finer than MIN_BOX_DIM
+    assert(box_x_max - box_x_min >= MIN_BOX_DIM, "Zone too narrow (longitude)");
+    assert(box_y_max - box_y_min >= MIN_BOX_DIM, "Zone too narrow (latitude)");
+
     // 2. Nullifier = Poseidon2(secret_id, campaign_id)
     //    One valid claim per user per campaign. Unique without revealing identity.
     //    The smart contract stores this and rejects duplicates.
@@ -40,7 +46,7 @@ fn main(
     nullifier
 }
 
-// ── Tests ────────────────────────────────────────────────────────────────────
+// -- Tests --------------------------------------------------------------------
 
 #[test]
 fn valid_inputs_satisfy_constraints() {
@@ -61,7 +67,7 @@ fn valid_inputs_satisfy_constraints() {
     assert(result != 0);
 }
 
-#[test(should_panic)]
+#[test(should_fail_with = "Longitude below zone minimum")]
 fn user_outside_zone_fails() {
     let user_x: u64 = 0; // outside any valid zone
     let user_y: u64 = 0;
@@ -78,7 +84,39 @@ fn user_outside_zone_fails() {
     let _ = main(user_x, user_y, secret_id, box_x_min, box_x_max, box_y_min, box_y_max, campaign_id, recipient_address);
 }
 
-#[test(should_panic)]
+#[test(should_fail_with = "Zone too narrow (longitude)")]
+fn box_too_narrow_longitude_fails() {
+    let user_x: u64 = 1216364000;
+    let user_y: u64 = 553656000;
+    let secret_id: Field = 1;
+
+    let box_x_min: u64 = 1216364000;
+    let box_x_max: u64 = 1216364000 + 1000; // < MIN_BOX_DIM (30_000)
+    let box_y_min: u64 = 553156000;
+    let box_y_max: u64 = 554156000;
+    let campaign_id: Field = 1;
+    let recipient_address: Field = 0xCAFE;
+
+    let _ = main(user_x, user_y, secret_id, box_x_min, box_x_max, box_y_min, box_y_max, campaign_id, recipient_address);
+}
+
+#[test(should_fail_with = "Zone too narrow (latitude)")]
+fn box_too_narrow_latitude_fails() {
+    let user_x: u64 = 1216364000;
+    let user_y: u64 = 553656000;
+    let secret_id: Field = 1;
+
+    let box_x_min: u64 = 1215864000;
+    let box_x_max: u64 = 1216864000;
+    let box_y_min: u64 = 553656000;
+    let box_y_max: u64 = 553656000 + 1000; // < MIN_BOX_DIM (30_000)
+    let campaign_id: Field = 1;
+    let recipient_address: Field = 0xCAFE;
+
+    let _ = main(user_x, user_y, secret_id, box_x_min, box_x_max, box_y_min, box_y_max, campaign_id, recipient_address);
+}
+
+#[test(should_fail)]
 fn zero_recipient_address_fails() {
     let user_x: u64 = 1216364000;
     let user_y: u64 = 553656000;

@@ -7,7 +7,7 @@
 // Full strict typing is tracked in a follow-up refactor.
 import { StrKey } from "@stellar/stellar-sdk";
 import type { LocationProof, ProofZone } from "../types/index";
-import { getWasmMemoryPool } from "./wasmMemory.js";
+import { getWasmMemoryPool } from "./wasmMemory";
 
 let _noir: {
   execute(

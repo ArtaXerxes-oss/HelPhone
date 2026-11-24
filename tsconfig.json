@@ -22,7 +22,8 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src", "server", "scripts", "test"],
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "server"],
   "references": [],
 
   /* Type-surface extraction options for scripts/detect-api-drift.js.

@@ -3,10 +3,15 @@
  *
  * REST API endpoints for querying indexed event history and merged
  * cross-border timelines across federated deployments (ISP-144).
+ *
+ * Paging (ISP-065 §2): every list endpoint pages with a keyset cursor over the
+ * total order (server_seq, id). No endpoint uses LIMIT/OFFSET-style page
+ * numbers, so a replica catching up between two requests cannot make rows be
+ * skipped or repeated.
  */
 import { Router, Request, Response } from 'express';
 import type { ParsedEvent, CustodyMarker } from '../indexer/parser.js';
-import { getHistoryConn, getReplicationLagMs, getAsOfLsn } from '../db/connection.js';
+import { getHistoryConn, getReplicationLagMs, getAsOfLsn, REPLICA_LAG_BUDGET_MS } from '../db/connection.js';
 
 const router = Router();
 
@@ -59,6 +64,58 @@ export function decodeCursor(cursorStr: string): { seq: number; id: string } | n
   return null;
 }
 
+type HistoryKeyed = { server_seq?: number; id?: string | number };
+
+/** Code-unit comparison. Sort and cursor filter must use the same order, so this is used everywhere. */
+function compareText(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Total order for keyset paging: (server_seq, id). */
+export function compareHistoryKey(a: HistoryKeyed, b: HistoryKeyed): number {
+  const seqDiff = (a.server_seq || 0) - (b.server_seq || 0);
+  if (seqDiff !== 0) return seqDiff;
+  return compareText(String(a.id || ''), String(b.id || ''));
+}
+
+/** True when the row sorts strictly after the cursor position. */
+export function isAfterCursor(row: HistoryKeyed, cursor: { seq: number; id: string }): boolean {
+  const s = row.server_seq || 0;
+  const id = String(row.id || '');
+  return s > cursor.seq || (s === cursor.seq && compareText(id, cursor.id) > 0);
+}
+
+/**
+ * Reads the `cursor` query parameter. An absent or empty value means the first
+ * page. A present but undecodable value is rejected instead of being treated
+ * as the first page, which would make a client loop forever.
+ */
+function parseCursorParam(raw: unknown): { ok: true; cursor: { seq: number; id: string } | null } | { ok: false } {
+  if (raw === undefined || raw === '') return { ok: true, cursor: null };
+  if (typeof raw !== 'string') return { ok: false };
+  const cursor = decodeCursor(raw);
+  return cursor ? { ok: true, cursor } : { ok: false };
+}
+
+/**
+ * Every history response carries X-Next-Cursor. An empty value means there is
+ * no next page, so clients can rely on the header always being present.
+ */
+function setNextCursor(res: Response, nextCursor: string | null): void {
+  res.setHeader('X-Next-Cursor', nextCursor ?? '');
+}
+
+function staleResponse(res: Response, conn: { lagMs: number; asOfLsn: string; tier: string }) {
+  res.setHeader('Retry-After', '5');
+  return res.status(209).json({
+    stale: true,
+    tier: conn.tier,
+    lagMs: conn.lagMs,
+    asOfLsn: conn.asOfLsn,
+    error: `Replica replication lag exceeds ${REPLICA_LAG_BUDGET_MS / 1000}s budget and primary reserve is unavailable`,
+  });
+}
+
 // Attach lag and LSN headers to every history response
 router.use(async (_req: Request, res: Response, next) => {
   try {
@@ -75,23 +132,17 @@ router.use(async (_req: Request, res: Response, next) => {
  * Keyset cursor pagination over timeline / dispatch log.
  */
 router.get('/', async (req: Request, res: Response) => {
-  const conn = await getHistoryConn(10000);
+  const parsed = parseCursorParam(req.query.cursor);
+  if (!parsed.ok) return res.status(400).json({ error: 'Malformed cursor' });
+  const cursor = parsed.cursor;
+  const limit = Math.min(500, Math.max(1, parseInt(req.query.limit as string, 10) || 50));
+
+  const conn = await getHistoryConn(REPLICA_LAG_BUDGET_MS);
   try {
     res.setHeader('X-Replica-Lag-Ms', String(Math.round(conn.lagMs)));
     res.setHeader('X-As-Of-LSN', conn.asOfLsn);
 
-    if (conn.isStale) {
-      res.setHeader('Retry-After', '5');
-      return res.status(209).json({
-        stale: true,
-        lagMs: conn.lagMs,
-        asOfLsn: conn.asOfLsn,
-        error: 'Replica replication lag exceeds 10s budget and primary reserve is unavailable',
-      });
-    }
-
-    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit as string, 10) || 50));
-    const cursor = typeof req.query.cursor === 'string' ? decodeCursor(req.query.cursor) : null;
+    if (conn.isStale) return staleResponse(res, conn);
 
     if (conn.client && typeof conn.client.query === 'function') {
       try {
@@ -109,7 +160,7 @@ router.get('/', async (req: Request, res: Response) => {
           const rows = result.rows as any[];
           const last = rows[rows.length - 1];
           const nextCursor = rows.length === limit ? encodeCursor(Number(last.server_seq || 0), last.id) : null;
-          if (nextCursor) res.setHeader('X-Next-Cursor', nextCursor);
+          setNextCursor(res, nextCursor);
           return res.json(rows);
         }
       } catch {
@@ -117,26 +168,13 @@ router.get('/', async (req: Request, res: Response) => {
       }
     }
 
-    let items = [...eventHistoryStore];
-    items.sort((a: any, b: any) => {
-      const seqA = a.server_seq || 0;
-      const seqB = b.server_seq || 0;
-      if (seqA !== seqB) return seqA - seqB;
-      return String(a.id || '').localeCompare(String(b.id || ''));
-    });
-
-    if (cursor) {
-      items = items.filter((e: any) => {
-        const s = e.server_seq || 0;
-        const id = String(e.id || '');
-        return s > cursor.seq || (s === cursor.seq && id > cursor.id);
-      });
-    }
+    let items = [...eventHistoryStore].sort(compareHistoryKey);
+    if (cursor) items = items.filter((e) => isAfterCursor(e, cursor));
 
     const paged = items.slice(0, limit);
     const lastItem: any = paged[paged.length - 1];
     const nextCursor = lastItem && paged.length === limit ? encodeCursor(lastItem.server_seq || 0, lastItem.id || '') : null;
-    if (nextCursor) res.setHeader('X-Next-Cursor', nextCursor);
+    setNextCursor(res, nextCursor);
 
     return res.json(paged);
   } finally {
@@ -147,37 +185,29 @@ router.get('/', async (req: Request, res: Response) => {
 /**
  * GET /api/history/events
  *
- * Query events with pagination, origin filtering, and custody demarcation.
+ * Query events with keyset cursor pagination, origin filtering, and custody
+ * demarcation. Pages are ordered by (server_seq, id). The legacy `page` offset
+ * parameter is no longer honoured; pass the `X-Next-Cursor` value as `cursor`.
  */
 router.get('/events', async (req: Request, res: Response) => {
-  const conn = await getHistoryConn(10000);
+  const parsed = parseCursorParam(req.query.cursor);
+  if (!parsed.ok) return res.status(400).json({ error: 'Malformed cursor' });
+  const cursor = parsed.cursor;
+  const limitNum = Math.min(500, Math.max(1, parseInt(req.query.limit as string, 10) || 50));
+
+  const conn = await getHistoryConn(REPLICA_LAG_BUDGET_MS);
   try {
     res.setHeader('X-Replica-Lag-Ms', String(Math.round(conn.lagMs)));
     res.setHeader('X-As-Of-LSN', conn.asOfLsn);
 
-    if (conn.isStale) {
-      res.setHeader('Retry-After', '5');
-      return res.status(209).json({
-        stale: true,
-        lagMs: conn.lagMs,
-        asOfLsn: conn.asOfLsn,
-        error: 'Replica replication lag exceeds 10s budget and primary reserve is unavailable',
-      });
-    }
+    if (conn.isStale) return staleResponse(res, conn);
 
     const {
       type,
       origin_instance,
       custody_marker,
       include_foreign = 'true',
-      page = '0',
-      limit = '50',
-      cursor: cursorParam,
     } = req.query;
-
-    const pageNum = Math.max(0, parseInt(page as string, 10) || 0);
-    const limitNum = Math.min(500, Math.max(1, parseInt(limit as string, 10) || 50));
-    const cursor = typeof cursorParam === 'string' ? decodeCursor(cursorParam) : null;
 
     let filtered = [...eventHistoryStore];
 
@@ -199,30 +229,22 @@ router.get('/events', async (req: Request, res: Response) => {
       filtered = filtered.filter((e) => e.custodyMarker === custody_marker);
     }
 
-    if (cursor) {
-      filtered.sort((a: any, b: any) => (a.server_seq || 0) - (b.server_seq || 0));
-      filtered = filtered.filter((e: any) => {
-        const s = e.server_seq || 0;
-        const id = String(e.id || '');
-        return s > cursor.seq || (s === cursor.seq && id > cursor.id);
-      });
-    } else {
-      filtered.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-    }
+    const total = filtered.length;
+    filtered.sort(compareHistoryKey);
+    if (cursor) filtered = filtered.filter((e) => isAfterCursor(e, cursor));
 
-    const offset = cursor ? 0 : pageNum * limitNum;
-    const paged = filtered.slice(offset, offset + limitNum);
+    const paged = filtered.slice(0, limitNum);
+    const hasMore = filtered.length > paged.length;
     const lastItem: any = paged[paged.length - 1];
-    const nextCursor = lastItem && paged.length === limitNum ? encodeCursor(lastItem.server_seq || 0, lastItem.id || '') : null;
-    if (nextCursor) res.setHeader('X-Next-Cursor', nextCursor);
+    const nextCursor = hasMore && lastItem ? encodeCursor(lastItem.server_seq || 0, lastItem.id || '') : null;
+    setNextCursor(res, nextCursor);
 
     res.json({
       events: paged,
       pagination: {
-        page: pageNum,
         limit: limitNum,
-        total: filtered.length,
-        hasMore: offset + limitNum < filtered.length,
+        total,
+        hasMore,
         nextCursor,
       },
       lagMs: conn.lagMs,

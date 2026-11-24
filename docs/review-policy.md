@@ -191,3 +191,4 @@ October). The refresh owner is `@helphone-maintainers`. Refresh actions:
 3. Update bus-factor counts in `docs/bus-factor-ledger.md`.
 4. Graduate any backup who met criteria to co-primary status.
 5. Recruit for any subsystem still at bus-factor 1.
+6. Run `node scripts/security/verify_maintainer_keys.js --ceremony --offline` and `node scripts/security/codeowners_refresh.js --write` to record the quarterly sign-off in `config/maintainer-keys.json` and `docs/codeowners-refresh-checklist.md`.

@@ -10,6 +10,7 @@ import {
 } from "../server/db/maintenance.ts";
 import { getMaintenanceConfig } from "../server/env.ts";
 import { shutdownPool } from "../server/db/connection.ts";
+import { runMaintenance as runMaintenanceJs } from "../server/db/maintenance.js";
 
 const cfg = (over = {}) => ({
   enabled: true,
@@ -34,6 +35,7 @@ function fakeDb(rows, { failOn } = {}) {
   const statements = [];
   const query = vi.fn(async (sql) => {
     if (/pg_stat_user_tables/.test(sql)) return { rows };
+    if (/pg_stat_user_indexes|FROM pg_indexes/.test(sql)) return { rows: [] };
     statements.push(sql);
     if (failOn && failOn.test(sql)) throw new Error("lock timeout");
     return { rows: [] };
@@ -129,6 +131,28 @@ describe("getMaintenanceConfig", () => {
 });
 
 describe("runMaintenance", () => {
+  it("the JavaScript server path emits the same index report", async () => {
+    const log = vi.fn();
+    await runMaintenanceJs({ query: fakeDb([]).query, log, config: cfg(), now: at(3) });
+    expect(log).toHaveBeenCalledWith('[db-maintenance] index usage report', { unused: [], duplicate: [] });
+  });
+
+  it("logs index candidates without dropping them", async () => {
+    const statements = [];
+    const log = vi.fn();
+    const query = vi.fn(async (sql) => {
+      statements.push(sql);
+      if (/pg_stat_user_indexes/.test(sql)) return { rows: [{ indexName: "unused_idx" }] };
+      if (/FROM pg_indexes/.test(sql)) return { rows: [] };
+      return { rows: [] };
+    });
+    await runMaintenance({ query, log, config: cfg(), now: at(3) });
+    expect(log).toHaveBeenCalledWith('[db-maintenance] index usage report', {
+      unused: [{ indexName: "unused_idx" }], duplicate: [],
+    });
+    expect(statements.every((sql) => /^SELECT/.test(sql.trim()))).toBe(true);
+  });
+
   it("skips when disabled or outside the window, touching nothing", async () => {
     const { query } = fakeDb([stat("a", 1, 99)]);
     expect(
@@ -312,11 +336,11 @@ describe("startMaintenanceScheduler", () => {
     });
 
     await vi.advanceTimersByTimeAsync(3100);
-    expect(db.query).toHaveBeenCalledTimes(3);
+    expect(db.query).toHaveBeenCalledTimes(9);
 
     s.stop();
     await vi.advanceTimersByTimeAsync(5000);
-    expect(db.query).toHaveBeenCalledTimes(3);
+    expect(db.query).toHaveBeenCalledTimes(9);
   });
 
   it("logs and survives a failing pass instead of an unhandled rejection", async () => {

@@ -11,6 +11,11 @@
  *   { type: "loadGeoJSON", geojson: object|string }      → builds + packs
  *   { type: "buildCH" }                                   → { ch: ArrayBuffer }
  *   { type: "route", from, to, algorithm: "astar"|"dijkstra"|"ch" }
+ *   { type: "routeLatLng", from: [lat, lng], to: [lat, lng], algorithm? }
+ *       → snaps both points to the nearest graph node, then routes (#893)
+ * Route replies carry `weighting` ("distance" → `distance` is metres,
+ * "time" → `distance` is seconds and `durationS` is set) and
+ * `pathLengthM`, the length of the node-to-node polyline.
  * Replies: { id, type: "<type>:ok", ... } or { id, type: "error", message }.
  *
  * Usage from the app:
@@ -27,6 +32,8 @@ import {
   chShortestPath,
   createChQueryContext,
   createSearchContext,
+  haversineMeters,
+  nearestNode,
   packContractionHierarchy,
   packGraph,
   shortestPath,
@@ -62,6 +69,7 @@ export function handleRoutingMessage(state, msg) {
         return reply(id, "load:ok", {
           nodeCount: state.graph.nodeCount,
           edgeCount: state.graph.edgeCount,
+          weighting: state.graph.weighting,
           hasCH: Boolean(state.ch),
         });
       }
@@ -115,6 +123,23 @@ export function handleRoutingMessage(state, msg) {
         state.actionableComplete = Boolean(msg.complete ?? msg.actionableComplete);
         return reply(id, "setActionableComplete:ok", { actionableComplete: state.actionableComplete });
       }
+      case "routeLatLng": {
+        requireGraph(state);
+        const [fromLat, fromLng] = latLng(msg.from, "from");
+        const [toLat, toLng] = latLng(msg.to, "to");
+        const from = nearestNode(state.graph, fromLat, fromLng);
+        const to = nearestNode(state.graph, toLat, toLng);
+        const routed = handleRoutingMessage(state, { ...msg, type: "route", from, to });
+        if (routed.reply.type !== "route:ok") return routed;
+        routed.reply.type = "routeLatLng:ok";
+        routed.reply.snapped = {
+          from,
+          to,
+          fromOffsetM: haversineMeters(fromLat, fromLng, state.graph.lat[from], state.graph.lng[from]),
+          toOffsetM: haversineMeters(toLat, toLng, state.graph.lat[to], state.graph.lng[to]),
+        };
+        return routed;
+      }
       case "route": {
         requireGraph(state);
         if (state.actionableComplete === false || msg.actionableComplete === false) {
@@ -142,12 +167,16 @@ export function handleRoutingMessage(state, msg) {
         }
         const elapsedMs = now() - t0;
         const coords = result.path ? pathToCoordinates(state.graph, result.path) : null;
+        const weighting = state.graph.weighting || "distance";
         return {
           reply: {
             id,
             type: "route:ok",
             algorithm,
+            weighting,
             distance: result.distance,
+            durationS: weighting === "time" ? result.distance : null,
+            pathLengthM: result.path ? pathLengthMeters(state.graph, result.path) : null,
             expanded: result.expanded,
             relaxed: result.relaxed,
             elapsedMs,
@@ -176,6 +205,26 @@ export function pathToCoordinates(graph, path) {
     out[2 * i + 1] = graph.lat[path[i]];
   }
   return out;
+}
+
+/** Length of the node-to-node polyline in local metres (shape points excluded). */
+export function pathLengthMeters(graph, path) {
+  let total = 0;
+  for (let i = 1; i < path.length; i++)
+    total += Math.hypot(graph.x[path[i]] - graph.x[path[i - 1]], graph.y[path[i]] - graph.y[path[i - 1]]);
+  return total;
+}
+
+function latLng(point, label) {
+  const ok =
+    Array.isArray(point) &&
+    point.length === 2 &&
+    Number.isFinite(point[0]) &&
+    Number.isFinite(point[1]) &&
+    Math.abs(point[0]) <= 90 &&
+    Math.abs(point[1]) <= 180;
+  if (!ok) throw new RangeError(`${label} must be [lat, lng]`);
+  return point;
 }
 
 function requireGraph(state) {

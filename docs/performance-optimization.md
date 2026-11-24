@@ -45,9 +45,11 @@ React StrictMode replays effect setup and cleanup in development. Because a tran
 
 Usage: pass `overlays` (an array of `{ id, x, y, kind }` in map viewBox units, `1140 x 540`) and optionally `onRenderStats`. With no `overlays` prop, no canvas is rendered and behaviour is unchanged.
 
-### Frame rate
+### Frame rate & viewport transform coordination (#958)
 
-The loop is driven by `requestAnimationFrame`, so it runs at the display refresh rate (60 Hz on most screens). The rate is measured, not assumed: `FpsMeter` reports `{ fps, frames, windowMs }` once per second through `onRenderStats`. A device that cannot hold 60 FPS shows a lower number instead of a false claim. The unit tests verify the scheduling, the drawing and the message protocol with a fake clock. They do not measure real frame rates, which need a browser and a profile of the actual overlay count.
+The loop is driven by `requestAnimationFrame`, so it runs at the display refresh rate (60 Hz on most screens). The rate is measured, not assumed: `FpsMeter` reports `{ fps, frames, windowMs }` once per second through `onRenderStats`. A device that cannot hold 60 FPS shows a lower number instead of a false claim.
+
+On `/help` (`src/pages/Help.jsx`), active markers and the HP-037 spatial cluster layer (`src/hooks/useClusterer.js` / `src/workers/cluster-worker.js`) share a single `ViewportTransform` (`{ scale, offsetX, offsetY, zoom, bounds }`) via `buildViewportOverlays()` and `renderer.setViewport(transform)`. During pan and zoom, the worker receives `{ type: 'viewport', transform }` updates without reallocating the canvas backing store (`canvas.width` / `canvas.height` are only written when pixel dimensions actually change), preventing canvas memory growth while replacing main-thread CSS marker animations. `runOverlayBenchmark()` verifies that pan/zoom + cluster overlay rendering holds `TARGET_FPS` (60 FPS) with zero jank frames and a single backing-store allocation.
 
 ## Resource hints & module preloading (#542)
 

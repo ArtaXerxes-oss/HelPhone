@@ -40,9 +40,128 @@ export interface IntegrityOptions {
   communityWeight?: number
   /** Hard weight for proof-backed completions. */
   provenWeight?: number
+  /** Override whether proven-tier labels are permitted (defaults to pin alignment state). */
+  allowProven?: boolean
 }
 
-const DEFAULTS: Required<IntegrityOptions> = {
+export interface ReputationPinSpec {
+  circuitCompilerVersion: string
+  bbJs: string
+  noirJs: string
+  rankingGeneration: number
+}
+
+export interface ProverAlignmentResult {
+  aligned: boolean
+  reason?: string
+  mismatches: string[]
+  expected: ReputationPinSpec
+  observed: Partial<ReputationPinSpec>
+}
+
+export const EXPECTED_REPUTATION_PINS: ReputationPinSpec = Object.freeze({
+  circuitCompilerVersion: '>=0.36.0',
+  bbJs: '0.87.9',
+  noirJs: '1.0.0-beta.9',
+  rankingGeneration: 1,
+})
+
+let activeAlignment: ProverAlignmentResult = {
+  aligned: true,
+  mismatches: [],
+  expected: EXPECTED_REPUTATION_PINS,
+  observed: { ...EXPECTED_REPUTATION_PINS },
+}
+
+function normalizeSemverPin(version: string | undefined): string {
+  return typeof version === 'string' ? version.trim().replace(/^[\^~]/, '') : ''
+}
+
+/**
+ * Verify that the reputation circuit compiler version, prover pins (@aztec/bb.js,
+ * @noir-lang/noir_js), and ranking flag generation agree. Updates the module-level
+ * alignment state so mismatches degrade proven-tier ranking to probationary.
+ */
+export function verifyReputationPinAlignment(
+  observed: Partial<ReputationPinSpec>,
+  expected: ReputationPinSpec = EXPECTED_REPUTATION_PINS,
+): ProverAlignmentResult {
+  const mismatches: string[] = []
+
+  if (observed.circuitCompilerVersion !== expected.circuitCompilerVersion) {
+    mismatches.push(
+      `circuitCompilerVersion: expected ${expected.circuitCompilerVersion}, got ${observed.circuitCompilerVersion ?? 'missing'}`,
+    )
+  }
+  if (normalizeSemverPin(observed.bbJs) !== normalizeSemverPin(expected.bbJs)) {
+    mismatches.push(`@aztec/bb.js: expected ${expected.bbJs}, got ${observed.bbJs ?? 'missing'}`)
+  }
+  if (normalizeSemverPin(observed.noirJs) !== normalizeSemverPin(expected.noirJs)) {
+    mismatches.push(`@noir-lang/noir_js: expected ${expected.noirJs}, got ${observed.noirJs ?? 'missing'}`)
+  }
+  if (observed.rankingGeneration !== expected.rankingGeneration) {
+    mismatches.push(
+      `rankingGeneration: expected ${expected.rankingGeneration}, got ${observed.rankingGeneration ?? 'missing'}`,
+    )
+  }
+
+  const aligned = mismatches.length === 0
+  activeAlignment = {
+    aligned,
+    reason: aligned ? undefined : `Reputation prover pin mismatch (${mismatches.join('; ')})`,
+    mismatches,
+    expected,
+    observed: { ...observed },
+  }
+  return activeAlignment
+}
+
+export function getReputationPinAlignment(): ProverAlignmentResult {
+  return activeAlignment
+}
+
+export function isProvenTierAllowed(): boolean {
+  return activeAlignment.aligned
+}
+
+export function resetReputationPinAlignment(): void {
+  activeAlignment = {
+    aligned: true,
+    mismatches: [],
+    expected: EXPECTED_REPUTATION_PINS,
+    observed: { ...EXPECTED_REPUTATION_PINS },
+  }
+}
+
+/**
+ * Boot-time alignment check. Reads optional overrides (or Vite env pins when
+ * present) and degrades proven-tier ranking to probationary on mismatch.
+ */
+export function bootReputationPinCheck(
+  observed?: Partial<ReputationPinSpec>,
+): ProverAlignmentResult {
+  const metaEnv = (import.meta as { env?: Record<string, string | undefined> }).env ?? {}
+  const resolved: Partial<ReputationPinSpec> = {
+    circuitCompilerVersion:
+      observed?.circuitCompilerVersion ??
+      metaEnv.VITE_REPUTATION_CIRCUIT_VERSION ??
+      EXPECTED_REPUTATION_PINS.circuitCompilerVersion,
+    bbJs: observed?.bbJs ?? metaEnv.VITE_PIN_BB_JS ?? EXPECTED_REPUTATION_PINS.bbJs,
+    noirJs: observed?.noirJs ?? metaEnv.VITE_PIN_NOIR_JS ?? EXPECTED_REPUTATION_PINS.noirJs,
+    rankingGeneration:
+      observed?.rankingGeneration ??
+      (metaEnv.VITE_RANKING_GENERATION != null
+        ? Number(metaEnv.VITE_RANKING_GENERATION)
+        : EXPECTED_REPUTATION_PINS.rankingGeneration),
+  }
+  const result = verifyReputationPinAlignment(resolved)
+  if (!result.aligned) {
+    console.warn(`[rankingIntegrity] ${result.reason}; degrading proven tier to probationary`)
+  }
+  return result
+}
+
+const DEFAULTS: Required<Omit<IntegrityOptions, 'allowProven'>> = {
   upvoteCapPerPairPerDay: 3,
   minCompletionGapMs: 5 * 60 * 1000,
   communityWeight: 0.25,
@@ -151,8 +270,9 @@ export function reduceRanking(
       0.5 * row.arrivals -
       0.05 * avgResponseMinutes
 
+    const allowProven = options.allowProven ?? activeAlignment.aligned
     let tier: ReputationTier = 'probationary'
-    if (row.provenCompletions >= 1) tier = 'proven'
+    if (row.provenCompletions >= 1 && allowProven) tier = 'proven'
     if (row.devices.size === 1 && row.ips.size === 1 && row.arrivals >= 8 && row.provenCompletions === 0) {
       tier = 'quarantined'
     }
@@ -180,8 +300,9 @@ export function reduceRanking(
 export function annotateLeaderboard(
   chainRows: Array<{ responder: string; total_arrivals: number }>,
   localEvents: RankingEvent[] = [],
+  options: IntegrityOptions = {},
 ): Array<{ responder: string; total_arrivals: number; tier: ReputationTier; score: number }> {
-  const reduced = reduceRanking(localEvents)
+  const reduced = reduceRanking(localEvents, options)
   const byId = new Map(reduced.map((r) => [r.responderId, r]))
   return chainRows
     .map((row) => {

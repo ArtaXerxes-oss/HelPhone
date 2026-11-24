@@ -48,7 +48,7 @@ See `docs/onboarding-ladder.md` for the curriculum.
   <!-- first-spike | difficulty: intermediate | mentor: @helphone-dispatch-owner | demo-slot: 2027-Q1 | subsystem: api | ladder: 2 -->
   Add to `server/routes/health.ts`, document in `swagger.json`, test in `test/server-api.test.js`.
 
-- [ ] Label all routes in `server/routes/docs.ts` with their ADR-020 priority tier
+- [x] Label all routes in `server/routes/docs.ts` with their ADR-020 priority tier
   <!-- first-spike | difficulty: intermediate | mentor: @helphone-dispatch-owner | demo-slot: 2027-Q1 | subsystem: api | ladder: 2 -->
   Use the P0/P1/P2/P3 vocabulary from ADR-020. Add JSDoc comments to each route handler.
 
@@ -91,7 +91,7 @@ See `docs/onboarding-ladder.md` for the curriculum.
 ## Production readiness
 
 - [ ] Deploy `aegis_vault` to testnet/mainnet and set `VITE_AEGIS_VAULT_ID`
-- [ ] Decide whether `helphone-contract` should be deployed separately or bundled per environment
+- [x] Decide whether `helphone-contract` should be deployed separately or bundled per environment — see ADR-023
 - [ ] Add a real indexer for Soroban events if long-term audit/search is needed
 - [ ] Replace the localStorage fallback once on-chain reads are fully stable
 

@@ -74,3 +74,132 @@ export function decideRace(flagOn: boolean, ctx: RaceContext): RaceDecision {
 
   return { race: true }
 }
+
+export interface NavigatorConnectionLike {
+  metered?: boolean
+  isMetered?: boolean
+  saveData?: boolean
+  type?: string
+  effectiveType?: string
+}
+
+export interface NavigatorBatteryLike {
+  level?: number
+  charging?: boolean
+  addEventListener?: (type: string, listener: () => void) => void
+}
+
+export interface NavigatorWithSignals {
+  getConnection?: () => NavigatorConnectionLike | null | undefined
+  connection?: NavigatorConnectionLike | null
+  mozConnection?: NavigatorConnectionLike | null
+  webkitConnection?: NavigatorConnectionLike | null
+  getBattery?: () => Promise<NavigatorBatteryLike | null | undefined>
+  battery?: NavigatorBatteryLike | null
+}
+
+/**
+ * Reads the active NetworkInformation object via `navigator.getConnection()`
+ * or `navigator.connection` (and vendor-prefixed fallbacks).
+ */
+export function readConnection(
+  nav: NavigatorWithSignals | null | undefined = typeof navigator !== 'undefined'
+    ? (navigator as unknown as NavigatorWithSignals)
+    : null,
+): NavigatorConnectionLike | null {
+  if (!nav) return null
+  try {
+    if (typeof nav.getConnection === 'function') {
+      return nav.getConnection() ?? null
+    }
+    return nav.connection ?? nav.mozConnection ?? nav.webkitConnection ?? null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Extracts the metered-bearer veto signal from `navigator.getConnection()` /
+ * `navigator.connection`.
+ */
+export function readMeteredSignal(
+  nav: NavigatorWithSignals | null | undefined = typeof navigator !== 'undefined'
+    ? (navigator as unknown as NavigatorWithSignals)
+    : null,
+): boolean {
+  const conn = readConnection(nav)
+  if (!conn) return false
+  return Boolean(conn.metered || conn.isMetered || conn.saveData)
+}
+
+/**
+ * Reads synchronous battery level if already attached or cached.
+ */
+export function readSyncBatteryLevel(
+  nav: NavigatorWithSignals | null | undefined,
+  cachedLevel: number | null = null,
+): number | null {
+  try {
+    const syncLevel = nav?.battery?.level
+    if (typeof syncLevel === 'number' && Number.isFinite(syncLevel)) {
+      return syncLevel
+    }
+  } catch {
+    // ignore
+  }
+  return cachedLevel
+}
+
+/**
+ * Asynchronously reads battery level (0..1) from `navigator.getBattery()`.
+ * Returns null when the Battery API is unavailable or rejects.
+ */
+export async function readBatteryLevel(
+  nav: NavigatorWithSignals | null | undefined = typeof navigator !== 'undefined'
+    ? (navigator as unknown as NavigatorWithSignals)
+    : null,
+): Promise<number | null> {
+  if (!nav) return null
+  const sync = readSyncBatteryLevel(nav, null)
+  if (sync !== null) return sync
+  if (typeof nav.getBattery !== 'function') return null
+  try {
+    const battery = await nav.getBattery()
+    const level = battery?.level
+    return typeof level === 'number' && Number.isFinite(level) ? level : null
+  } catch {
+    return null
+  }
+}
+
+export interface RaceHourTracker {
+  count(at?: number): number
+  record(at?: number): void
+  reset(): void
+}
+
+/** Rolling 1-hour race counter used to enforce RACE_MAX_PER_HOUR. */
+export function createRaceTracker(
+  now: () => number = () => Date.now(),
+  windowMs = 3_600_000,
+): RaceHourTracker {
+  const timestamps: number[] = []
+  const prune = (at: number) => {
+    while (timestamps.length > 0 && at - timestamps[0] >= windowMs) {
+      timestamps.shift()
+    }
+  }
+  return {
+    count(at = now()): number {
+      prune(at)
+      return timestamps.length
+    },
+    record(at = now()): void {
+      prune(at)
+      timestamps.push(at)
+    },
+    reset(): void {
+      timestamps.length = 0
+    },
+  }
+}

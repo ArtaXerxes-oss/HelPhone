@@ -74,9 +74,24 @@ export async function deriveKey(
   );
 }
 
-/** Derive the storage key for this device (salt loaded or created in IndexedDB). */
-export async function deriveStorageKey(passphrase: string): Promise<CryptoKey> {
-  return deriveKey(passphrase, await getOrCreateSalt());
+/**
+ * Derive the storage key for this device (salt loaded or created in IndexedDB).
+ *
+ * A non-empty `scope` (an operator namespace, #925) is mixed into the salt, so
+ * the same passphrase derives a different key for each operator and cannot open
+ * another operator's namespace. An empty scope is the original device-wide key.
+ */
+export async function deriveStorageKey(passphrase: string, scope = ''): Promise<CryptoKey> {
+  const salt = await getOrCreateSalt();
+  return deriveKey(passphrase, scope ? withScope(salt, scope) : salt);
+}
+
+function withScope(salt: Uint8Array, scope: string): Uint8Array {
+  const tag = new TextEncoder().encode(`hp-scope:${scope}`);
+  const out = new Uint8Array(salt.length + tag.length);
+  out.set(salt, 0);
+  out.set(tag, salt.length);
+  return out;
 }
 
 /**

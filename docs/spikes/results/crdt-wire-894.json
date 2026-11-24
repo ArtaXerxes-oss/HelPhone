@@ -1,0 +1,188 @@
+{
+  "spike": "#604",
+  "generatedAt": "2026-11-23T17:00:46.917Z",
+  "environment": {
+    "node": "v22.19.0",
+    "cpu": "Intel(R) Core(TM) i7-10610U CPU @ 1.80GHz",
+    "cores": 8,
+    "exposeGc": true
+  },
+  "params": {
+    "MUTATIONS": 50000,
+    "REPLICAS": 20,
+    "RESPONDERS": 300,
+    "INCIDENTS": 150,
+    "GOSSIP_EVERY": 250,
+    "PRUNE_EVERY": 2500,
+    "OFFLINE_SHARE": 0.3
+  },
+  "workload": {
+    "offlineReplicas": 4,
+    "offlineWindows": {
+      "1": [
+        12602,
+        16687
+      ],
+      "2": [
+        29382,
+        36496
+      ],
+      "3": [
+        9645,
+        13455
+      ],
+      "16": [
+        33262,
+        35832
+      ]
+    },
+    "mix": {
+      "patch": 7509,
+      "set": 41270,
+      "del": 1221
+    }
+  },
+  "singleDoc": {
+    "stateVector_gcContent": {
+      "writeMs": 34,
+      "heapMB": 6.94,
+      "entries": 300,
+      "deleteTombstones": 0,
+      "logOps": 50000,
+      "tombstones": 49700,
+      "fullStateKB": 26.8
+    },
+    "stateVector_keepContent": {
+      "writeMs": 38,
+      "heapMB": 10.7,
+      "entries": 300,
+      "deleteTombstones": 0,
+      "logOps": 50000,
+      "tombstones": 49700,
+      "fullStateKB": 26.8
+    },
+    "yjs_gc_true": {
+      "writeMs": 352,
+      "heapMB": 11.44,
+      "updateKB": 481.4
+    },
+    "yjs_gc_false": {
+      "writeMs": 332,
+      "heapMB": 16.84,
+      "updateKB": 2123.5
+    },
+    "stateVector_pruned": {
+      "heapBeforePruneMB": 6.94,
+      "heapAfterPruneMB": 0.13,
+      "pruneMs": 0.6,
+      "entries": 300,
+      "deleteTombstones": 0,
+      "logOps": 0,
+      "tombstones": 0
+    }
+  },
+  "mesh": [
+    {
+      "engine": "crdt-prune-live",
+      "mutateMs": 1626,
+      "heapMeshMB": 4.08,
+      "heapMeshAfterConvergeMB": 4.01,
+      "heapPerReplicaAvgMB": 0.2,
+      "heapSingleReplicaMB": 0.43,
+      "replica0Stats": {
+        "entries": 492,
+        "deleteTombstones": 996,
+        "logOps": 0,
+        "tombstones": 0
+      },
+      "replica0StatsBeforeConverge": {
+        "entries": 495,
+        "deleteTombstones": 985,
+        "logOps": 51,
+        "tombstones": 8
+      },
+      "gossipMB": 45.33,
+      "reconnectPayload": {
+        "n": 4,
+        "avgKB": 24.3,
+        "maxKB": 42.2
+      },
+      "fullStateKB": 63.3,
+      "convergence": {
+        "converged": true,
+        "rounds": 3,
+        "ms": 84.9,
+        "MB": 0.27
+      },
+      "pruneEvents": {
+        "count": 20,
+        "avgMs": 3.47,
+        "maxGcPauseMs": 2.29
+      },
+      "finalPrune": {
+        "ms": 3.1,
+        "gc": {
+          "count": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      },
+      "gcTotal": {
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0
+      }
+    },
+    {
+      "engine": "crdt-prune-live-binary",
+      "mutateMs": 5364,
+      "heapMeshMB": 6.17,
+      "heapMeshAfterConvergeMB": 6.08,
+      "heapPerReplicaAvgMB": 0.3,
+      "heapSingleReplicaMB": 0.59,
+      "replica0Stats": {
+        "entries": 492,
+        "deleteTombstones": 996,
+        "logOps": 0,
+        "tombstones": 0
+      },
+      "replica0StatsBeforeConverge": {
+        "entries": 495,
+        "deleteTombstones": 985,
+        "logOps": 51,
+        "tombstones": 8
+      },
+      "gossipMB": 22.65,
+      "reconnectPayload": {
+        "n": 4,
+        "avgKB": 11.7,
+        "maxKB": 20.1
+      },
+      "fullStateKB": 63.3,
+      "convergence": {
+        "converged": true,
+        "rounds": 3,
+        "ms": 115.5,
+        "MB": 0.13
+      },
+      "pruneEvents": {
+        "count": 20,
+        "avgMs": 3.93,
+        "maxGcPauseMs": 7.31
+      },
+      "finalPrune": {
+        "ms": 4.2,
+        "gc": {
+          "count": 0,
+          "totalMs": 0,
+          "maxMs": 0
+        }
+      },
+      "gcTotal": {
+        "count": 0,
+        "totalMs": 0,
+        "maxMs": 0
+      }
+    }
+  ]
+}

@@ -8,13 +8,17 @@
  *  - Round-robin fairness with configurable weight ratios
  */
 
+export type DispatchPriority = 'critical' | 'high' | 'normal' | 'low'
+export type Adr020Tier = 'P0' | 'P1' | 'P2' | 'P3'
+
 export interface DispatchItem {
   id: string
-  priority: 'critical' | 'high' | 'normal' | 'low'
+  priority: DispatchPriority
   payload: unknown
   timestamp: number
   attempts: number
   maxRetries: number
+  isUpdate?: boolean
 }
 
 export interface QueueMetrics {
@@ -25,12 +29,29 @@ export interface QueueMetrics {
   low: number
   avgWaitTime: number
   maxWaitTime: number
+  stalePrevented: number
 }
 
-const PRIORITY_WEIGHTS = { critical: 100, high: 10, normal: 5, low: 1 }
+const PRIORITY_WEIGHTS: Record<DispatchPriority, number> = { critical: 100, high: 10, normal: 5, low: 1 }
 const AGING_FACTOR = 0.95
 const MAX_WAIT_TIME = 30_000
 const STALE_UPDATE_THRESHOLD = 5_000
+const TIERS: DispatchPriority[] = ['critical', 'high', 'normal', 'low']
+
+export function toQueuePriority(input?: string | null): DispatchPriority {
+  const normalized = input?.toString().trim().toLowerCase()
+  if (normalized === 'critical' || normalized === 'p0') return 'critical'
+  if (normalized === 'high' || normalized === 'p1') return 'high'
+  if (normalized === 'low' || normalized === 'p3') return 'low'
+  return 'normal'
+}
+
+export function toAdr020Tier(priority: DispatchPriority): Adr020Tier {
+  if (priority === 'critical') return 'P0'
+  if (priority === 'high') return 'P1'
+  if (priority === 'low') return 'P3'
+  return 'P2'
+}
 
 export class DispatchQueue {
   private queues = {
@@ -43,14 +64,32 @@ export class DispatchQueue {
   private handlers: ((item: DispatchItem) => Promise<void>)[] = []
   private processedIds = new Set<string>()
   private metrics = { totalWaitTime: 0, processedCount: 0, stalePrevented: 0 }
+  private roundRobinCredits: Record<DispatchPriority, number> = { critical: 0, high: 0, normal: 0, low: 0 }
+  private tickTimer: ReturnType<typeof setInterval> | null = null
 
-  enqueue(item: Omit<DispatchItem, 'attempts'>): void {
-    const fullItem: DispatchItem = { ...item, attempts: 0 }
-    this.queues[item.priority].push(fullItem)
+  enqueue(item: Omit<DispatchItem, 'attempts' | 'priority'> & { priority: DispatchPriority | Adr020Tier }): void {
+    const priority = toQueuePriority(item.priority)
+    const fullItem: DispatchItem = { ...item, priority, attempts: 0 }
+    this.queues[priority].push(fullItem)
   }
 
   onProcess(handler: (item: DispatchItem) => Promise<void>): void {
     this.handlers.push(handler)
+  }
+
+  startTick(intervalMs: number = 100): void {
+    this.stopTick()
+    this.tickTimer = setInterval(() => {
+      void this.process()
+    }, intervalMs)
+    ;(this.tickTimer as { unref?: () => void }).unref?.()
+  }
+
+  stopTick(): void {
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer)
+      this.tickTimer = null
+    }
   }
 
   async process(): Promise<void> {
@@ -98,25 +137,49 @@ export class DispatchQueue {
   }
 
   private selectNext(): DispatchItem | undefined {
-    const tiers: (keyof typeof this.queues)[] = ['critical', 'high', 'normal', 'low']
-    const weights = [PRIORITY_WEIGHTS.critical, PRIORITY_WEIGHTS.high, PRIORITY_WEIGHTS.normal, PRIORITY_WEIGHTS.low]
-
-    const totalWeight = weights.reduce((a, b) => a + b, 0)
-    const rand = Math.random() * totalWeight
-
-    let accumulated = 0
-    for (let i = 0; i < tiers.length; i++) {
-      accumulated += weights[i]
-      if (rand < accumulated && this.queues[tiers[i]].length > 0) {
-        const item = this.queues[tiers[i]].shift()
+    const now = Date.now()
+    // P0 (critical) always runs first when available.
+    if (this.queues.critical.length > 0) {
+      while (this.queues.critical.length > 0) {
+        const item = this.queues.critical.shift()
         if (item && !this.processedIds.has(item.id)) {
           return item
         }
       }
     }
 
-    for (const tier of tiers) {
-      if (this.queues[tier].length > 0) {
+    // Weighted round-robin with aging for high/normal/low tiers.
+    let bestTier: DispatchPriority | null = null
+    let bestScore = -1
+
+    for (const tier of TIERS) {
+      const queue = this.queues[tier]
+      if (queue.length === 0) continue
+
+      const head = queue[0]
+      const age = Math.max(0, now - head.timestamp)
+      // Aging accelerates wait weight over time so non-stale items never exceed MAX_WAIT_TIME.
+      const agingBoost = head.isUpdate && age > STALE_UPDATE_THRESHOLD ? 0 : age / (AGING_FACTOR * 1000)
+      this.roundRobinCredits[tier] += PRIORITY_WEIGHTS[tier] + agingBoost
+
+      if (this.roundRobinCredits[tier] > bestScore) {
+        bestScore = this.roundRobinCredits[tier]
+        bestTier = tier
+      }
+    }
+
+    if (bestTier) {
+      this.roundRobinCredits[bestTier] = Math.max(0, this.roundRobinCredits[bestTier] - bestScore)
+      while (this.queues[bestTier].length > 0) {
+        const item = this.queues[bestTier].shift()
+        if (item && !this.processedIds.has(item.id)) {
+          return item
+        }
+      }
+    }
+
+    for (const tier of TIERS) {
+      while (this.queues[tier].length > 0) {
         const item = this.queues[tier].shift()
         if (item && !this.processedIds.has(item.id)) {
           return item
@@ -135,25 +198,30 @@ export class DispatchQueue {
   }
 
   getMetrics(): QueueMetrics {
+    const now = Date.now()
+    const allItems = Object.values(this.queues).flat()
     const avgWait = this.metrics.processedCount > 0 ? this.metrics.totalWaitTime / this.metrics.processedCount : 0
+    const maxWaitTime =
+      allItems.length === 0 ? 0 : Math.max(0, ...allItems.map((item) => Math.max(0, now - item.timestamp)))
     return {
-      queued: Object.values(this.queues).reduce((sum, q) => sum + q.length, 0),
+      queued: allItems.length,
       critical: this.queues.critical.length,
       high: this.queues.high.length,
       normal: this.queues.normal.length,
       low: this.queues.low.length,
       avgWaitTime: avgWait,
-      maxWaitTime: Math.max(
-        ...Object.values(this.queues).flat().map((item) => Date.now() - item.timestamp)
-      ),
+      maxWaitTime,
+      stalePrevented: this.metrics.stalePrevented,
     }
   }
 
   clear(): void {
+    this.stopTick()
     this.queues.critical = []
     this.queues.high = []
     this.queues.normal = []
     this.queues.low = []
+    this.roundRobinCredits = { critical: 0, high: 0, normal: 0, low: 0 }
     this.processedIds.clear()
     this.metrics = { totalWaitTime: 0, processedCount: 0, stalePrevented: 0 }
   }

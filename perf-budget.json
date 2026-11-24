@@ -28,6 +28,7 @@
     "mainThreadRender": { "p75Ms": 400, "owner": "frontend" },
     "workerFlush": { "p75Ms": 300, "owner": "frontend" },
     "wsRoundTrip": { "p75Ms": 600, "owner": "backend" },
+    "openTodaySlice": { "p95Ms": 20000, "maxPayloadBytes": 1000000, "owner": "backend" },
     "serverDispatch": { "p99Ms": 250, "owner": "backend" },
     "indexerLag": { "p95Seconds": 30, "owner": "indexer" },
     "telemetrySelfOverhead": { "maxShareOfScripting": 0.05, "owner": "frontend" },

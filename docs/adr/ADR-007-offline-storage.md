@@ -3,6 +3,7 @@
 - **Status:** Proposed (spike #607 complete; quota/eviction measurement outstanding, see below)
 - **Date:** 2026-09-23
 - **Evidence:** [Spike report](../spikes/607-storage-lock-contention-report.md) · [raw results](../spikes/results/storage-contention.json) · `scripts/spikes/storage_contention_benchmark.js`
+**Evidence check:** `storage-contention.json#/scenarios/0/throughputPerSec = 497`
 - **Prototype:** `src/services/storageEngine.js`, `src/workers/telemetryWorker.js`
 
 ## Context
@@ -64,3 +65,37 @@ No configuration dropped main-thread frames. Storage work stays off the UI threa
   Until both are measured, the recommendation to batch is also the safe default for low-end phones.
 - **Follow-up:** `navigator.storage.persist()` on first incident join; a retention policy that deletes the oldest telemetry (tested: `deleteOldest` then write probes); and the two outstanding measurements above.
 
+
+## Follow-up: quota, CPU starvation and the storage policy (#895)
+
+- **Evidence:** [quota run](../spikes/results/storage-quota-895.json), [8 busy loops](../spikes/results/storage-cpu-stress-895.json), [16 busy loops](../spikes/results/storage-cpu-stress16-895.json), from `node scripts/spikes/storage_contention_benchmark.js` in Chrome 157 on an 8-core i7-10610U.
+- **Evidence check:** `storage-quota-895.json#/scenarios/0/totalCommitted = 18944`
+- **Evidence check:** `storage-cpu-stress-895.json#/scenarios/0/throughputPerSec = 486`
+- **Evidence check:** `storage-cpu-stress16-895.json#/scenarios/0/throughputPerSec = 481`
+- **Code:** `src/services/storagePolicy.js`, the lossless lane in `createStorageEngine` (`src/services/storageEngine.js`), and the persistence request in `hydratePaged` (`src/services/crdtSync.js`).
+
+### Quota, re-measured with random payloads
+
+| Scenario (40 MB origin quota, 2 KB random records) | Result |
+|---|---|
+| IndexedDB, batched | `QuotaExceededError` after **18,944** committed records (about 38.8 MB), at 4.7 s |
+| Recovery: delete the oldest 10 %, then write | **Failed.** The delete transaction itself threw `QuotaExceededError` |
+| SQLite on OPFS (`opfs-sahpool`, owner) | Writes failed with "No space available" from the sync access handle; 14,230 committed in 120 s, 118/s |
+
+The earlier run was invalid because its payload compressed; with random payloads the quota is reached at the expected size. The new finding is that **Chromium refuses even a delete once the origin is at quota**, so "delete the oldest after a quota error" cannot be the recovery path. Eviction has to happen before the limit. The retention policy therefore deletes the oldest telemetry when usage passes 80 % of quota and stops at 60 %, and it applies per-store record caps.
+
+### CPU starvation (`--cpu-stress`)
+
+| 4 workers, 500 writes/s | No stress (above) | 8 busy loops | 16 busy loops |
+|---|---|---|---|
+| IndexedDB, per-write | 497/s, write p95 4.1 ms | **486/s**, p95 14.1 ms | **481/s**, p95 36 ms |
+| IndexedDB, batched | 498/s, write p95 60 ms | **492/s**, p95 60.2 ms | **487/s**, p95 60.7 ms |
+
+Neither configuration collapsed on this 8-core machine. Per-write latency grew with load (4 → 14 → 36 ms), while batched latency stayed at the 50 ms flush window. The early uncontrolled run's drop to 264–287/s did not reproduce. It was probably a heavier load on a different machine, and these numbers do not rule it out on a 4-core budget phone. The recommendation to batch telemetry stands.
+
+### Policy now in code
+
+- **Lossless lane.** Messages and dispatches are written through their own buffer: zero-delay flush, `overflow: "reject"`. Before this change one shared buffer served every store, and its `drop-oldest` overflow could shed a broadcast message to make room for GPS fixes. Telemetry and frames keep the batched, drop-oldest buffer.
+- **Retention keeps the newest data.** Only `frames` and `telemetry` are evictable, oldest first. `messages` and `dispatches` are never evicted, and asking the retention manager to evict them throws.
+- **Quota errors.** `appendWithQuotaRecovery` frees telemetry and retries once. If that fails (including the case above, where the delete itself is refused), the error is surfaced, never swallowed.
+- **Persistence.** `requestPersistentStorage()` runs once per origin on the first incident join (`hydratePaged`). It skips the prompt when storage is already persistent and records `granted`, `denied`, `already-persisted` or `unsupported` in `localStorage`. Later joins and reloads reuse the recorded state, and `onPersistenceChange` lets the UI observe it.
