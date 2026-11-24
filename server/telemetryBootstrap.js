@@ -10,11 +10,16 @@ import {
   createOtlpExporter,
   normalizeSpans,
   initializeTelemetry,
+  registerSamplingEngine,
   shutdownTelemetry as shutdownOtelSdk,
 } from './telemetry.js';
+import { OtelSamplingEngine } from './lib/otelSamplingEngine.js';
 
-// Auto-initialize OpenTelemetry SDK
-initializeTelemetry();
+// #759: configure quota sampling from the documented OTEL_* settings before
+// the SDK starts, so instrumented HTTP/Express spans go through the engine.
+const samplingEngine = OtelSamplingEngine.fromEnvironment();
+registerSamplingEngine(samplingEngine);
+initializeTelemetry({ samplingEngine });
 
 let receiver = null;
 let installed = false;

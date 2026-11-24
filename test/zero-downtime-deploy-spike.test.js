@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach } from "@jest/globals";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   ZeroDowntimeDeployManager,
   DeployState,
+  DeployStage,
+  createStagedDeploy,
 } from "../server/lib/zeroDowntimeDeploy.js";
 
 describe("ISP-088: Zero-Downtime Deploy & Stateful Choreography Engine", () => {
@@ -182,6 +184,57 @@ describe("ISP-088: Zero-Downtime Deploy & Stateful Choreography Engine", () => {
       expect(closed1).toBe(true);
       expect(closed2).toBe(true);
       expect(deployManager.state).toBe(DeployState.TERMINATED);
+    });
+  });
+
+  describe("Staged release workflow (#758)", () => {
+    const stages = (healthOk = true) => ({
+      migrate: async () => ({ ok: true }),
+      indexerCatchup: async () => ({ ok: true }),
+      health: async () => ({ ok: healthOk }),
+      drain: async (ctx) => ({ ok: true, ...(await ctx.manager.initiateGracefulDrain()) }),
+      deploy: async () => ({ ok: true }),
+      cutover: async () => ({ ok: true }),
+      rollback: async () => ({ ok: true }),
+    });
+
+    it("completes all stages with zero failed WS handoffs", async () => {
+      const manager = new ZeroDowntimeDeployManager();
+      const sockets = [1, 2].map((seq) => ({
+        lastSeenSeq: seq,
+        sent: [],
+        send(msg) { this.sent.push(JSON.parse(msg)); },
+        close() {},
+      }));
+      sockets.forEach((s) => manager.registerWsConnection(s));
+
+      const result = await createStagedDeploy({ manager, stages: stages() }).run({ manager });
+      expect(result.status).toBe("COMPLETE");
+      expect(sockets.every((s) => s.sent[0]?.type === "DEPLOY_DRAIN")).toBe(true);
+      expect(sockets.every((s) => s.sent[0]?.resumeSeq === s.lastSeenSeq)).toBe(true);
+      expect(result.history.map((e) => e.stage)).toContain(DeployStage.CUTOVER);
+    });
+
+    it("rolls back automatically when the health gate fails", async () => {
+      const manager = new ZeroDowntimeDeployManager();
+      const result = await createStagedDeploy({ manager, stages: stages(false) }).run({ manager });
+      expect(result.status).toBe("ROLLED_BACK");
+      expect(result.failedStage).toBe(DeployStage.HEALTH);
+      expect(result.history.some((e) => e.stage === DeployStage.ROLLBACK)).toBe(true);
+      expect(result.history.some((e) => e.stage === DeployStage.CUTOVER)).toBe(false);
+    });
+
+    it("honours the manual abort gate before cutover", async () => {
+      const manager = new ZeroDowntimeDeployManager();
+      const deploy = createStagedDeploy({
+        manager,
+        stages: stages(),
+        abortGate: ({ stage }) => stage === DeployStage.CUTOVER,
+      });
+      const result = await deploy.run({ manager });
+      expect(result.status).toBe("ROLLED_BACK");
+      expect(result.failedStage).toBe(DeployStage.CUTOVER);
+      expect(result.history.some((e) => e.stage === DeployStage.ROLLBACK)).toBe(true);
     });
   });
 });

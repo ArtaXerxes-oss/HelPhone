@@ -1,4 +1,4 @@
-import { extractTrace, hopAttributes, parseTraceparent } from "../lib/traceContext.js";
+import { extractTrace, hopAttributes, hopContext, parseTraceparent } from "../lib/traceContext.js";
 import { attributionFor } from "./auditAttribution.js";
 
 // Raw identifiers that must not survive into an attributed audit row (#926).
@@ -9,6 +9,11 @@ export function normalizeContractEvent(
   { source = "soroban", observedAt = new Date().toISOString(), attributionSecret = null } = {},
 ) {
   const id = event.id || event.pagingToken || `${event.ledger || "unknown"}:${event.txHash || event.transactionHash || "unknown"}:${event.topic || "event"}`;
+  const traceparent = traceparentOf(event);
+  // The indexer is a fan-out receiver: it keeps the submit/publish span as a
+  // link and gives the audit row its own child span id. Without a carrier
+  // neither is created, so an untraced ledger poll never starts a trace.
+  const hop = hopContext(traceparent, event.trace?.links);
   // With an attribution secret, raw user identity is replaced by a daily hash.
   // Without one, the legacy `actor` field is kept as before.
   const attributed = attributionSecret !== null && attributionSecret !== undefined;
@@ -28,7 +33,9 @@ export function normalizeContractEvent(
     // `trace` envelope, or from a `traceparent` recorded off-chain at submit
     // time (Soroban itself carries no trace context). Absent → null, never a
     // fresh poll-time trace.
-    traceparent: traceparentOf(event),
+    traceparent,
+    spanId: hop?.spanId ?? null,
+    links: hop?.links ?? [],
     attributes: hopAttributes({
       dispatchId: event.dispatchId ?? event.requestId,
       txHash: event.txHash || event.transactionHash,

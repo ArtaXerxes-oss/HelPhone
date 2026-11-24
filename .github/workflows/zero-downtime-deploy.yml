@@ -1,0 +1,94 @@
+name: Zero-downtime deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment (protected by GitHub environment reviewers)'
+        type: choice
+        required: true
+        default: staging
+        options:
+          - staging
+          - production
+      abort_before_cutover:
+        description: 'Manual abort gate — rehearse only, roll back before cutover'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zero-downtime-deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  rehearse:
+    name: Rehearse staged choreography
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+      - run: npm ci --ignore-scripts
+      - name: drain → deploy → health → cutover → rollback (mocked)
+        run: node scripts/deploy-rehearsal.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zero-downtime-rehearsal
+          path: artifacts/zero-downtime-rehearsal.md
+          if-no-files-found: warn
+
+  cutover:
+    name: Drain, deploy, health gate, cutover
+    needs: rehearse
+    if: ${{ inputs.abort_before_cutover == false }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - name: Manual abort gate
+        if: ${{ vars.DEPLOY_ABORT_GATE == 'true' }}
+        run: |
+          echo "DEPLOY_ABORT_GATE is set — aborting before cutover."
+          exit 1
+
+      - name: Drain → deploy → health → cutover with automatic rollback
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+          DEPLOY_URL: ${{ vars.DEPLOY_URL }}
+        run: |
+          set -euo pipefail
+          : "$RENDER_API_KEY" "$RENDER_SERVICE_ID" "$DEPLOY_URL"
+
+          echo "1/4 drain: /readyz goes 503, SIGTERM sends DEPLOY_DRAIN + resumeSeq"
+          curl -fsS "$DEPLOY_URL/healthz"
+
+          echo "2/4 deploy: trigger Render build"
+          DEPLOY_ID=$(curl -fsS -X POST \
+            -H "Authorization: Bearer $RENDER_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"clearCache":"no"}' \
+            "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys" \
+            | node -pe 'JSON.parse(require("fs").readFileSync(0, "utf8")).id')
+          echo "deploy id: $DEPLOY_ID"
+
+          echo "3/4 health: wait for /readyz (200 only when migrations + indexer lag are ready)"
+          healthy=false
+          for _ in $(seq 1 60); do
+            if curl -fsS "$DEPLOY_URL/readyz" >/dev/null 2>&1; then healthy=true; break; fi
+            sleep 5
+          done
+
+          if [ "$healthy" != true ]; then
+            echo "4/4 health gate FAILED — automatic rollback"
+            curl -fsS -X POST -H "Authorization: Bearer $RENDER_API_KEY" \
+              "https://api.render.com/v1/services/$RENDER_SERVICE_ID/deploys/$DEPLOY_ID/rollback" || true
+            exit 1
+          fi
+
+          echo "4/4 cutover: traffic shifted to the drained release"

@@ -58,6 +58,36 @@ export function extractTrace(message) {
     ...ctx,
     traceparent: formatTraceparent(ctx),
     tracestate: typeof trace.tracestate === "string" ? trace.tracestate : undefined,
+    // Fan-out links recorded by upstream receivers are part of the envelope.
+    links: Array.isArray(trace.links) ? trace.links : undefined,
+  };
+}
+
+/** A fan-out receiver links to the publisher span; it never reparents it. */
+export function linkFromContext(ctx) {
+  return ctx ? { traceId: ctx.traceId, spanId: ctx.spanId } : null;
+}
+
+/**
+ * Context for an indexer/subscriber hop: same traceId, a fresh span id for the
+ * receiver, and a link back to the publishing span. Messages without a valid
+ * trace produce null — polling must never start a fresh trace.
+ */
+export function hopContext(traceparent, priorLinks = []) {
+  const parent = parseTraceparent(traceparent);
+  if (!parent) return null;
+  const child = parseTraceparent(childTraceparent(traceparent));
+  const ownLink = linkFromContext(parent);
+  const links = [...(Array.isArray(priorLinks) ? priorLinks : []), ownLink]
+    .filter(Boolean)
+    .filter((link, i, all) => all.findIndex((l) => l.traceId === link.traceId && l.spanId === link.spanId) === i)
+    .slice(-16);
+  return {
+    traceId: parent.traceId,
+    spanId: child.spanId,
+    parentSpanId: parent.spanId,
+    traceparent: formatTraceparent(child),
+    links,
   };
 }
 

@@ -1,10 +1,15 @@
-import { describe, it, expect, beforeEach } from "@jest/globals";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   ChaosEngine,
   ScenarioType,
   PoolLane,
   AdmissionPriority,
+  CHAOS_BREAK_GLASS_VALUE,
+  armStartupChaos,
+  assertChaosAllowed,
+  chaosStartupConfig,
 } from "../server/lib/chaosEngine.js";
+import { createChaosAdmissionMiddleware, inferRequestType } from "../server/middleware/chaos.js";
 
 describe("ISP-099: Correlated Multi-Fault Chaos Engineering Spike & Bulkhead Design", () => {
   let chaosEngine;
@@ -152,6 +157,66 @@ describe("ISP-099: Correlated Multi-Fault Chaos Engineering Spike & Bulkhead Des
       const leakGuard = chaosEngine.verifyLeakGuard({ liveSmsSent: 0, mainnetTxCount: 0 });
       expect(leakGuard.safe).toBe(true);
       expect(leakGuard.passed).toBe(true);
+    });
+  });
+
+  describe("Opt-in startup gating and break glass (#769)", () => {
+    it("is disabled by default and arms only when explicitly enabled", () => {
+      const engine = new ChaosEngine();
+      expect(armStartupChaos(engine, { CHAOS_ENABLED: undefined }).armed).toBe(false);
+      const armed = armStartupChaos(engine, { CHAOS_ENABLED: "true", CHAOS_SCENARIO: ScenarioType.REDIS_ONLY });
+      expect(armed.armed).toBe(true);
+      expect(engine.activeScenario).toBe(ScenarioType.REDIS_ONLY);
+    });
+
+    it("refuses production without the explicit break-glass value", () => {
+      const env = { NODE_ENV: "production", CHAOS_ENABLED: "true" };
+      expect(chaosStartupConfig(env).reason).toBe("production_requires_break_glass");
+      expect(() => assertChaosAllowed(chaosStartupConfig(env))).toThrow(/CHAOS_BREAK_GLASS/);
+      expect(() => armStartupChaos(new ChaosEngine(), { ...env, CHAOS_BREAK_GLASS: "wrong" })).toThrow();
+
+      const allowed = armStartupChaos(new ChaosEngine(), {
+        ...env,
+        CHAOS_BREAK_GLASS: CHAOS_BREAK_GLASS_VALUE,
+      });
+      expect(allowed.config.reason).toBe("break_glass");
+      expect(allowed.armed).toBe(true);
+    });
+
+    it("keeps P0 paths alive through the admission middleware under three fault sets", () => {
+      const middleware = createChaosAdmissionMiddleware(chaosEngine);
+      for (const scenario of [ScenarioType.RED_WEDDING, ScenarioType.REDIS_ONLY, ScenarioType.POSTGRES_ONLY]) {
+        chaosEngine.startScenario(scenario);
+        let nextCalled = false;
+        middleware({ url: "/api/dispatch/emergency", get: () => undefined }, {}, () => { nextCalled = true; });
+        expect(nextCalled).toBe(true);
+
+        let status;
+        let body;
+        middleware(
+          { url: "/api/tiles/1/2", get: () => undefined },
+          { set: () => {}, status: (s) => { status = s; return { json: (b) => { body = b; } }; } },
+          () => { throw new Error("map tiles should be shed"); },
+        );
+        expect(status).toBe(503);
+        expect(body.error).toBe("shed_under_chaos");
+        chaosEngine.abort();
+      }
+      expect(inferRequestType({ url: "/api/dispatch" })).toBe("EMERGENCY_DISPATCH");
+    });
+
+    it("stacks fault domains from a combined scenario while keeping P0 intact", () => {
+      const engine = new ChaosEngine();
+      const run = engine.startScenario([
+        ScenarioType.REDIS_ONLY,
+        ScenarioType.POSTGRES_ONLY,
+        ScenarioType.CPU_ONLY,
+      ]);
+      expect(run.faults).toHaveLength(3);
+      expect(engine.cpuQuotaPercent).toBe(25);
+      expect(engine.evaluateAdmission("EMERGENCY_DISPATCH").admitted).toBe(true);
+      expect(engine.evaluateAdmission("MAP_TILES").admitted).toBe(false);
+      expect(engine.abort().rolledBack).toBe(true);
     });
   });
 });
