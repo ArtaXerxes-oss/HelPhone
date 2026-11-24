@@ -46,6 +46,13 @@ import { createDocsRouter } from "./routes/docs.js";
 import { attachWebSocketRelay } from "./routes/wsCluster.js";
 import { closeEventBus, connectEventBus, publishContractEvent } from "./lib/redisPubSub.js";
 import { getRedis, isRedisConfigured } from "./lib/redis.js";
+import {
+  runtimeConfig,
+  runtimeAudit,
+  reloadRuntimeConfig,
+  startRuntimeConfigReload,
+} from "./lib/runtimeConfig.js";
+import { timingSafeEqual } from "node:crypto";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -404,7 +411,7 @@ function health(_req, res) {
   try {
     poolStats = getPool().getStats();
   } catch {
-    // Pool stats are best-effort on the liveness endpoint.
+    // Pool metrics are best-effort; health must still respond.
   }
   res.json({
     status: _ready ? "ready" : "warming",
@@ -691,7 +698,42 @@ app.post("/api/soroban/footprint/inspect", enforceKillSwitch("soroban.submit"), 
   }
 });
 
+// ── Runtime secret rotation (#760) ──────────────────────────────────────────
+// Credentials are read through the rotation manager on every access, so a
+// reload is visible immediately and a rejected (partial) reload changes
+// nothing. Responses deliberately expose fingerprints/status only — never
+// secret values.
+function requireAdmin(req, res, next) {
+  const configured = process.env.ADMIN_API_TOKEN;
+  if (!configured || typeof configured !== "string") {
+    return res.status(404).json({ error: "Not found" });
+  }
+  const presented = String(req.get("x-admin-token") || "");
+  const a = Buffer.from(configured);
+  const b = Buffer.from(presented);
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return next();
+}
+
+app.get("/api/admin/rotation-status", requireAdmin, (_req, res) => {
+  res.json({ success: true, ...runtimeConfig.status(), audit: runtimeAudit.history().length });
+});
+
+app.post("/api/admin/reload-secrets", requireAdmin, async (_req, res) => {
+  try {
+    const result = await reloadRuntimeConfig();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    // Fail closed: the active snapshot is untouched. Error messages from the
+    // manager list target names, never values.
+    res.status(409).json({ success: false, code: err.code ?? "ROTATION_FAILED", error: err.message });
+  }
+});
+
 export function startServer() {
+  const stopReload = startRuntimeConfigReload();
   // Apply schema migrations automatically at boot so the database schema
   // stays in sync on every deploy (non-fatal; server serves even on failure).
   import("./db/migrator.js")
@@ -708,13 +750,11 @@ export function startServer() {
     ensureProver().catch((err) => console.error("[prover] Init failed:", err));
   });
   applyKeepAliveTuning(server);
-  const shutdown = async () => {
-    chaosEngine.abort();
-    await deployManager.initiateGracefulDrain().catch((err) =>
-      console.error("[deploy] WS drain failed:", err.message));
-    await relay.close().catch((err) => console.error("[events] WebSocket shutdown failed:", err.message));
-    await closeEventBus().catch((err) => console.error("[events] Redis shutdown failed:", err.message));
-    await shutdownTelemetry().catch((err) => console.error("[telemetry] shutdown failed:", err.message));
+  const shutdown = () => {
+    stopReload();
+    relay.close().catch((err) => console.error("[events] WebSocket shutdown failed:", err.message));
+    closeEventBus().catch((err) => console.error("[events] Redis shutdown failed:", err.message));
+    shutdownTelemetry().catch((err) => console.error("[telemetry] shutdown failed:", err.message));
     server.close();
   };
   const onSignal = () => shutdown().catch((err) => console.error("[shutdown] failed:", err.message));

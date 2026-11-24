@@ -24,7 +24,7 @@ The spike had three questions to answer:
 1. **Algorithm: grid-DBSCAN instead of a tree index.** Points are bucketed into a uniform grid (24 px cells at the current map scale). Each cell accumulates a count, a fixed-point centroid sum and a max distance to its centroid. Dense cells are merged over their 8 neighbours with union-find on the CPU. Bucketing is O(n) and trivially parallel, and the merge is O(occupied cells). At 50k points that means 1,104 cells instead of 50,000 points to merge.
 2. **Core-cell threshold: `max(minPts, 2 × mean count of occupied cells)`.** A fixed `minPts` merges the whole map into one cluster at 50k points, because the uniform background already exceeds it (report, finding 1).
 3. **Default backend chain: WebGPU → Worker → main thread.** Selection is automatic and every fallback reason is recorded (`createClusterer()` in `src/lib/spatialCluster/index.js`).
-4. **WebGL2 is opt-in only.** The render-to-float-texture prototype is correct but reads back with a synchronous `readPixels` call. That blocks the main thread for 3.6–9.8 ms on hardware and 51 ms on software GPUs, which is worse than a Worker. It stays available as `preferred: "webgl2"` for further measurement and should not be enabled by default until readback is asynchronous (PBO + `fenceSync`).
+4. **WebGL2 is opt-in only — keep the path, with asynchronous readback.** The original prototype's synchronous `readPixels` blocked the main thread for 3.6–9.8 ms on hardware and 51 ms on software GPUs. It now reads through two pixel-pack buffers guarded by `fenceSync` (`createAsyncReadback()` in `webgl2Clusterer.js`); `clientWaitSync(..., 0)` polls without blocking and yields between checks. **Decision: keep WebGL2 as an opt-in third backend (`preferred: "webgl2"`), not in the default chain.** The blocking readback is gone, but context setup and the two rasterisation passes are still slower than the Worker path, so promoting it would be a regression. Revisit only if a device shows it beating the Worker.
 5. **One CPU reference.** `binPoints()` defines the expected output. The WGSL shader and GLSL path mirror its bucketing and fixed-point quantisation, and the benchmark checks each backend against it before measuring.
 
 ## Rationale (measured on Intel HD 4400 / Chrome 147; full tables in the report)
@@ -85,8 +85,24 @@ WebGPU availability changes with each browser release. The code detects support 
 
 ## Follow-up work (not in this spike)
 
-1. Run the benchmark harness on a mid-range Android phone and on Safari with WebGPU, and attach the results to this ADR.
-2. Use double-buffered staging buffers so WebGPU produces one update per frame at ≥ 250k points.
-3. Re-measure host→GPU upload at 250k with the render loop paused (the 48.7 ms p50 was taken under queue contention).
-4. Wire `createClusterer()` into the production map (`CommunityMap` / `/help`), mapping lat/lng to the viewport's pixel grid at each zoom level.
-5. Decide whether to delete the WebGL2 path or finish its asynchronous readback.
+1. **OPEN.** Run the benchmark harness on a mid-range Android phone and on Safari with WebGPU, and attach the results to this ADR. See [`docs/benchmarks/data/608/README.md`](../benchmarks/data/608/README.md); no device results are fabricated here.
+2. **DONE.** Double-buffered (ping-pong) staging buffers in `webgpuClusterer.js` (`STAGING_BUFFER_COUNT = 2`); a frame can be submitted while the previous result is being mapped/read. `clusterUpdatesPerSec` is recorded by the harness.
+3. **DONE (harness).** `WebGPUMap.runBenchmark()` now pauses both clustering and drawing while it collects 30 `measureUpload()` samples at 250k, and records them as `uploadMeasurement` / `hostToGpuUploadMs`. Re-run on target hardware to replace the earlier contended 48.7 ms figure.
+4. **DONE.** `useClusteredMap()` + `ClusteredMapLayer` project lat/lng to the viewport pixel grid at each zoom (`viewportGrid.js`) and render clusters only. Wired into `CommunityMap` and `/help` behind the `canary_map_clustering` flag. Backend and fallback reasons are recorded in `clusterTelemetry`. Single-marker hit-testing uses CPU point data.
+5. **DONE — keep.** Asynchronous PBO + `fenceSync` readback implemented; decision recorded in Decision 4 above. WGSL, GLSL and the JS reference are pinned to shared fixtures (`fixtures.js`, `conformance.js`).
+
+## Production wiring (2026-11-24)
+
+- `src/lib/spatialCluster/viewportGrid.js` is the single projection boundary:
+  Web Mercator at tile size 512, grid origin = centre world pixel minus half
+  the viewport. Pan/zoom mutates the params origin in place so the WebGPU
+  device and Worker survive camera moves.
+- `src/hooks/useClusteredMap.js` owns backend selection, one-in-flight update
+  queueing and merge; `src/components/ClusteredMapLayer.jsx` draws only
+  clusters. A click resolves via `hitTestSingleMarker()` against raw CPU data.
+- `src/lib/clusterTelemetry.js` records `cluster.backend.selected` with the
+  full fallback-reason list. It is exposed as `window.__helphoneClusterTelemetry`
+  and as a `helphone:cluster-telemetry` DOM event, so a fallback reason is
+  observable without a debugger.
+- Shared fixtures define the tolerance: at most 2 count-mismatch cells (f32 vs
+  f64 boundary `floor()`), ≤ 0.05 px centroid error and ≤ 0.05 px radius error.
