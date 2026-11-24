@@ -12,9 +12,10 @@
 // See docs/adr/ADR-008-webgpu-spatial-clustering.md.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BACKEND_ORDER, binPoints, createClusterer, createGridParams, mergeCells } from "../lib/spatialCluster/index.js";
+import { BACKEND_ORDER, createClusterer, createGridParams, mergeCells } from "../lib/spatialCluster/index.js";
 import { generateIncidents, stepIncidents } from "../lib/spatialCluster/syntheticIncidents.js";
-import { compareGrids, summariseField, summariseFrames } from "../lib/spatialCluster/benchStats.js";
+import { summariseField, summariseFrames } from "../lib/spatialCluster/benchStats.js";
+import { runConformance } from "../lib/spatialCluster/conformance.js";
 
 const WIDTH = 1140;
 const HEIGHT = 540;
@@ -23,7 +24,7 @@ const MIN_PTS = 8;
 // Core cells must be >= 2x the mean occupied-cell density (see mergeCells.js).
 const RELATIVE_DENSITY = 2;
 const BENCH_DURATION_MS = 10_000;
-const POINT_OPTIONS = [5_000, 10_000, 50_000, 100_000];
+const POINT_OPTIONS = [5_000, 10_000, 50_000, 100_000, 250_000];
 
 const COLORS = {
   bg: "#E7DAC2",
@@ -128,6 +129,9 @@ export default function WebGPUMap() {
   const benchRef = useRef(null);
   const inFlightRef = useRef(false);
   const pauseClusteringRef = useRef(false);
+  // Host→GPU upload is re-measured with the render loop paused (ADR-008
+  // follow-up 3) so queue contention from drawing cannot inflate the number.
+  const pauseRenderRef = useRef(false);
   const statsRef = useRef({ frames: [], timings: [], drawMs: [] });
 
   useEffect(() => {
@@ -176,6 +180,11 @@ export default function WebGPUMap() {
     let lastHud = last;
 
     const frame = (now) => {
+      if (pauseRenderRef.current) {
+        last = now;
+        raf = requestAnimationFrame(frame);
+        return;
+      }
       const stats = statsRef.current;
       stats.frames.push(now - last);
       last = now;
@@ -241,28 +250,38 @@ export default function WebGPUMap() {
     setBenchRunning(true);
     setBenchResult(null);
 
-    // Correctness first: same snapshot through this backend and the CPU oracle.
-    // The render loop's clustering is paused so it cannot own the in-flight slot.
+    // Correctness first: same snapshot through this backend and the CPU
+    // oracle. Both the clustering and the drawing loops are paused here so
+    // the upload measurement is not inflated by queue contention (ADR-008
+    // follow-ups 2 and 3: ping-pong staging + paused-render re-measurement).
     let verification = null;
-    if (simRef.current) {
-      pauseClusteringRef.current = true;
-      while (inFlightRef.current) await new Promise((resolve) => setTimeout(resolve, 5));
-      const snapshot = simRef.current.points.slice();
-      try {
-        const { grid } = await clusterer.cluster(snapshot);
-        verification = compareGrids(grid, binPoints(snapshot, paramsRef.current), paramsRef.current.fixedScale);
-      } catch (err) {
-        verification = { error: err.message };
-      } finally {
-        pauseClusteringRef.current = false;
-      }
-    }
-
+    let conformance = null;
     let uploadMs = null;
-    if (clusterer.measureUpload && simRef.current) {
-      const samples = [];
-      for (let i = 0; i < 30; i++) samples.push(await clusterer.measureUpload(simRef.current.points));
-      uploadMs = summariseField(samples.map((ms) => ({ ms })), "ms");
+    pauseRenderRef.current = true;
+    pauseClusteringRef.current = true;
+    try {
+      while (inFlightRef.current) await new Promise((resolve) => setTimeout(resolve, 5));
+      if (simRef.current) {
+        const snapshot = simRef.current.points.slice();
+        try {
+          conformance = await runConformance({
+            backends: [clusterer],
+            params: paramsRef.current,
+            points: snapshot,
+          });
+          verification = conformance.results[0]?.metrics ?? { error: "no metrics" };
+        } catch (err) {
+          verification = { error: err.message };
+        }
+      }
+      if (clusterer.measureUpload && simRef.current) {
+        const samples = [];
+        for (let i = 0; i < 30; i++) samples.push(await clusterer.measureUpload(simRef.current.points));
+        uploadMs = summariseField(samples.map((ms) => ({ ms })), "ms");
+      }
+    } finally {
+      pauseClusteringRef.current = false;
+      pauseRenderRef.current = false;
     }
 
     statsRef.current = { frames: [], timings: [], drawMs: [] };
@@ -292,11 +311,19 @@ export default function WebGPUMap() {
       gpuPassMs: summariseField(timings, "gpuPassMs"),
       computeMs: summariseField(timings, "computeMs"),
       readbackMs: summariseField(timings, "readbackMs"),
+      // WebGL2 PBO+fenceSync path: main-thread time must stay below 1 ms.
+      blockingReadbackMs: summariseField(timings, "blockingReadbackMs"),
+      gpuWaitMs: summariseField(timings, "gpuWaitMs"),
+      asyncReadback: clusterer.asyncReadback ?? null,
       mergeMs: summariseField(timings, "mergeMs"),
       hostToGpuUploadMs: uploadMs,
+      uploadMeasurement: { points: pointCount, renderPaused: true, hostToGpuMs: uploadMs },
+      stagingBuffers: clusterer.stagingBuffers ?? null,
+      inFlightAfterRun: clusterer.inFlight ?? null,
       canvasDrawMs: summariseField(drawMs.map((ms) => ({ ms })), "ms"),
       clusterUpdatesPerSec: (timings.length * 1000) / BENCH_DURATION_MS,
       verification,
+      conformance,
       gpuMemoryBytes: clusterer.memoryBytes,
       jsHeapBytes: performance.memory?.usedJSHeapSize ?? null,
     };
